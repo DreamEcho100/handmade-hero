@@ -1,6 +1,8 @@
-#include <stdio.h>
+#include "stdio.h"
+#include <string.h>
 
 int main() {
-  printf("lol");
+  char *test_1 = "lol";
+  printf("%s", test_1);
   return 0;
 }
