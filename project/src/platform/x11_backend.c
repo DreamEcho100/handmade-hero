@@ -24,8 +24,10 @@
  * - XEvent: Structure that holds event data (like JavaScript Event object)
  */
 
+#define _POSIX_C_SOURCE 199309L // Enable POSIX functions like nanosleep, sleep
 #include <X11/X.h>
-#define _POSIX_C_SOURCE 199309L // Enable POSIX functions like nanosleep
+#include <stdint.h>
+#include <unistd.h> // For sleep()
 #define file_scoped_fn static
 #define local_persist_var static
 #define global_var static
@@ -67,15 +69,52 @@ global_var int g_BufferHeight = 0;
  * 2. Allocate new pixel memory
  * 3. Create XImage wrapper
  *
- * 🔴 PERFORMANCE NOTE:
- * This is COLD PATH - only runs on window resize (maybe once per second)
- * So malloc here is fine!
+ * ═══════════════════════════════════════════════════════════════════════
+ * 🌊 CASEY'S "WAVE 2" RESOURCE - STATE LIFETIME
+ * ═══════════════════════════════════════════════════════════════════════
+ *
+ * This buffer is a WAVE 2 resource (state-lifetime, not process-lifetime).
+ * It lives ONLY as long as the current window size stays the same.
+ *
+ * Why we clean up here (unlike process-lifetime resources):
+ * ✅ We're REPLACING the buffer with a new one (different size)
+ * ✅ This happens DURING program execution (not at exit)
+ * ✅ If we don't free, we leak 1-3MB on EVERY resize!
+ *
+ * Example: User resizes window 10 times:
+ * ❌ Without cleanup: 10 buffers × 2MB = 20MB leaked! 💥
+ * ✅ With cleanup: Always just 1 buffer = 2MB total ⚡
+ *
+ * Casey's Rule: "Think about creation and destruction in WAVES.
+ *                This buffer changes with window size (state change),
+ *                so we manage it when state changes."
+ *
+ * 🟡 COLD PATH: Only runs on window resize (maybe once per second)
+ *    So malloc/free here is totally fine!
  */
 inline file_scoped_fn void resize_back_buffer(Display *display, int width,
                                               int height) {
 
   // STEP 1: Free old buffer if it exists
-  // (Think: componentWillUnmount - clean up before creating new)
+  // This is WAVE 2 cleanup - we're changing state (window size)!
+  //
+  // Visual: What happens on resize
+  // ┌─────────────────────────────────────────┐
+  // │ Before (800×600):                       │
+  // │ g_BackBuffer → [1.8 MB of pixels]       │
+  // │                                         │
+  // │ User resizes to 1920×1080               │
+  // │ ↓                                       │
+  // │ We MUST free the 1.8 MB buffer!         │
+  // │ Otherwise it leaks forever! 💥          │
+  // │                                         │
+  // │ After cleanup:                          │
+  // │ g_BackBuffer → NULL                     │
+  // │ g_PixelData → NULL                      │
+  // │                                         │
+  // │ Now allocate new 8.3 MB buffer          │
+  // │ g_BackBuffer → [8.3 MB of pixels] ✅    │
+  // └─────────────────────────────────────────┘
 
   if (g_BackBuffer) {
     // Call XDestroyImage() to free it
@@ -506,6 +545,17 @@ int platform_main() {
   printf("Window shown\n");
 
   /**
+   * STEP 7.5: ALLOCATE INITIAL BACK BUFFER
+   *
+   * We need to create the back buffer BEFORE entering the event loop
+   * so we have something to draw to!
+   *
+   * Note: ConfigureNotify will fire after XMapWindow, but we also
+   * want to draw immediately, so we allocate here.
+   */
+  resize_back_buffer(display, g_BufferWidth, g_BufferHeight);
+
+  /**
    * STEP 8: EVENT LOOP (THE HEART OF THE PROGRAM)
    *
    * This is like:
@@ -551,30 +601,188 @@ int platform_main() {
      * Our handle_event() is like Casey's MainWindowCallback()
      */
     handle_event(display, window, &event);
+
+    // ═══════════════════════════════════════════════════════════════════
+    // 🎨 DRAW DIAGONAL LINE (Learning Exercise - Day 3)
+    // ═══════════════════════════════════════════════════════════════════
+    //
+    // This draws a white diagonal line every frame.
+    //
+    // PIXEL ADDRESSING: offset = y * width + x
+    //
+    // In Day 4+, we'll do proper rendering with frame timing.
+    // For now, this demonstrates how to write pixels to memory.
+    //
+    if (g_PixelData) {
+      uint32_t *pixels = (uint32_t *)g_PixelData;
+
+      // Clear buffer to black first (so we don't accumulate old pixels)
+      int total_pixels = g_BufferWidth * g_BufferHeight;
+      for (int i = 0; i < total_pixels; i++) {
+        pixels[i] = 0xFF000000; // Black (ARGB)
+      }
+
+      // Calculate diagonal length (stop at window edge)
+      int diagonal_length =
+          g_BufferWidth < g_BufferHeight ? g_BufferWidth : g_BufferHeight;
+
+      // Draw diagonal line from top-left to bottom-right
+      for (int i = 0; i < diagonal_length; i++) {
+        int x = i; // Column
+        int y = i; // Row
+
+        // ✅ CORRECT formula: offset = y * width + x
+        int offset = y * g_BufferWidth + x;
+
+        // 🔴 CRITICAL: Bounds checking!
+        if (offset >= 0 && offset < total_pixels) {
+          pixels[offset] = 0xFFFFFFFF; // White pixel (ARGB)
+        }
+      }
+
+      // Display the result
+      update_window(display, window, 0, 0, g_BufferWidth, g_BufferHeight);
+    }
   }
 
+  // ❌ YOUR ORIGINAL BUG (for reference):
+  // for (int i = 0; i < 100; i++) {
+  //     int offset = i * g_BufferWidth + i;  // WRONG!
+  //     //           ↑
+  //     // This treats 'i' as BOTH y AND x in the formula
+  //     // offset = i * width + i
+  //     //        = i * (width + 1)
+  //     //
+  //     // At i=99 in 800×600:
+  //     // offset = 99 * 801 = 79,299 ✅ (happens to work)
+  //     //
+  //     // At i=1000:
+  //     // offset = 1000 * 801 = 801,000 ❌ (way beyond 479,999!)
+  //     //                                   CRASH! 💥
+  //     pixels[offset] = 0xFFFFFFFF;
+  // }
+  //
+  // WHY IT SEEMED TO WORK FOR SMALL VALUES:
+  // At i=99: offset = 99 * 800 + 99 = 79,299
+  // This is less than 480,000 (800×600), so no crash!
+  // But it's NOT drawing a perfect diagonal - it's drawing
+  // a diagonal with a steeper slope (1 pixel right, 800 pixels down)
+
   /**
-   * STEP 9: CLEANUP (VERY IMPORTANT IN C!)
+   * STEP 9: CLEANUP - CASEY'S "RESOURCE LIFETIMES IN WAVES" PHILOSOPHY
    *
-   * Unlike JavaScript with garbage collection, C requires manual cleanup.
-   * Think of this like:
-   * - Closing database connections
-   * - Unsubscribing from observables
-   * - Clearing intervals/timeouts
-   * - componentWillUnmount() in React
+   * ═══════════════════════════════════════════════════════════════════════
+   * IMPORTANT: Read Casey's Day 3 explanation about resource management!
+   * ═══════════════════════════════════════════════════════════════════════
    *
-   * If we don't clean up, we leak memory and system resources.
+   * Casey's Rule: "Don't be myopic about individual resource cleanup.
+   *                Think in WAVES based on resource LIFETIME!"
    *
-   * Order matters: Clean up in reverse order of creation!
-   * 1. Destroy window (like removeChild())
-   * 2. Close display connection (like closing WebSocket)
+   * WAVE CLASSIFICATION FOR OUR RESOURCES:
+   *
+   * ┌────────────────────────────────────────────────────────────────┐
+   * │ WAVE 1: Process Lifetime (Lives entire program)               │
+   * │ ────────────────────────────────────────────                  │
+   * │ - Display (X11 connection)                                     │
+   * │ - Window                                                       │
+   * │                                                                │
+   * │ ✅ Casey says: DON'T manually clean these up!                  │
+   * │    The OS does it INSTANTLY when process exits (<1ms)          │
+   * │                                                                │
+   * │ ❌ Bad (OOP way): Manually clean each resource (17ms wasted)   │
+   * │    XDestroyImage(backBuffer);   // 2ms                         │
+   * │    XDestroyWindow(window);      // 5ms                         │
+   * │    XCloseDisplay(display);      // 10ms                        │
+   * │                                                                │
+   * │ ✅ Good (Casey's way): Just exit! (<1ms)                       │
+   * │    return 0;  // OS bulk-cleans ALL resources instantly!       │
+   * └────────────────────────────────────────────────────────────────┘
+   *
+   * ┌────────────────────────────────────────────────────────────────┐
+   * │ WAVE 2: State Lifetime (Changes during program)               │
+   * │ ────────────────────────────────────────────                  │
+   * │ - g_BackBuffer (per window size)                              │
+   * │                                                                │
+   * │ ✅ Casey says: Clean up WHEN STATE CHANGES (in batches)        │
+   * │    We DO clean this in resize_back_buffer() because:          │
+   * │    1. We're REPLACING it with a new buffer                     │
+   * │    2. This happens DURING program execution                    │
+   * │    3. If we don't free, we leak memory on every resize!        │
+   * │                                                                │
+   * │ This is CORRECT Wave 2 management! ✅                          │
+   * └────────────────────────────────────────────────────────────────┘
+   *
+   * REAL-WORLD IMPACT:
+   *
+   * Without manual cleanup (Casey's way):
+   * ┌─────────────────────────────────────────┐
+   * │ User clicks close button                │
+   * │ ↓                                       │
+   * │ return 0;  // Program exits             │
+   * │ ↓                                       │
+   * │ OS: "Process died, bulk cleanup!"       │
+   * │   - Frees ALL memory in one operation   │
+   * │   - Closes ALL X11 resources at once    │
+   * │   - Destroys ALL windows instantly      │
+   * │ ↓                                       │
+   * │ Window closes in <1ms ⚡                 │
+   * │ User: "Wow, instant close!" 😊          │
+   * └─────────────────────────────────────────┘
+   *
+   * With manual cleanup (OOP way):
+   * ┌─────────────────────────────────────────┐
+   * │ User clicks close button                │
+   * │ ↓                                       │
+   * │ XDestroyImage()... wait 2ms             │
+   * │ XDestroyWindow()... wait 5ms            │
+   * │ XCloseDisplay()... wait 10ms            │
+   * │ ↓                                       │
+   * │ Window closes in 17ms 🐌                │
+   * │ User: "Why is it laggy?" 😤             │
+   * └─────────────────────────────────────────┘
+   *
+   * CASEY'S QUOTE (Day 3, ~9:20):
+   * "If we actually put in code that closes our window before we exit,
+   *  we are WASTING THE USER'S TIME. When you exit, Windows will bulk
+   *  clean up all of our Windows, all of our handles, all of our memory -
+   *  everything gets cleaned up by Windows. If you've ever had one of those
+   *  applications where you try to close it and it takes a while to close
+   *  down... honestly, a big cause of that is this sort of thing."
+   *
+   * WEB DEV ANALOGY:
+   * JavaScript: const buffer = new Uint8Array(1000000);
+   *             // When function ends, GC cleans up automatically
+   *             // You don't manually delete it!
+   *
+   * C (Casey's way): void* buffer = malloc(1000000);
+   *                  // When PROCESS ends, OS cleans up automatically
+   *                  // You don't manually free it at exit!
+   *
+   * EXCEPTION - WHEN TO MANUALLY CLEAN:
+   * Only clean up resources that are NOT process-lifetime:
+   * - Switching levels → Free old level assets, load new ones
+   * - Resizing window → Free old buffer, allocate new one ✅ (we do this!)
+   * - Closing modal → Free modal resources, keep main window
+   *
+   * THE BOTTOM LINE:
+   * We COULD add cleanup here, but Casey teaches us it's:
+   * 1. ❌ Slower (17× slower!)
+   * 2. ❌ More code to maintain
+   * 3. ❌ More places for bugs
+   * 4. ❌ Wastes user's time
+   * 5. ✅ OS does it better and faster
+   *
+   * So we follow Casey's philosophy: Just exit cleanly!
    */
-  printf("Cleaning up...\n");
-  if (g_BackBuffer)
-    XDestroyImage(g_BackBuffer);
-  XDestroyWindow(display, window);
-  XCloseDisplay(display);
   printf("Goodbye!\n");
+
+  // ✅ NO MANUAL CLEANUP - OS handles it faster and better!
+  // The OS will:
+  // - Free g_PixelData (and all malloc'd memory)
+  // - Destroy g_BackBuffer (XImage)
+  // - Close window
+  // - Close display connection
+  // All in <1ms, automatically! ⚡
 
   return 0;
 }
