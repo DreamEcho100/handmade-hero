@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 199309L // Enable POSIX functions like nanosleep, sleep
 #include <X11/X.h>
 #include <stdint.h>
+#include <sys/mman.h>
 #include <unistd.h> // For sleep()
 #define file_scoped_fn static
 #define local_persist_var static
@@ -93,6 +94,11 @@ inline file_scoped_fn void resize_back_buffer(Display *display, int width,
     // Call XDestroyImage() to free it
     // This ALSO frees g_PixelData automatically!
     // (X11 owns the memory once XCreateImage is called)
+    if (g_PixelData) {
+      g_BackBuffer->data = NULL; // XDestroyImage should not free
+      munmap(g_PixelData, g_BufferWidth * g_BufferHeight * 4);
+      g_PixelData = NULL;
+    }
     XDestroyImage(g_BackBuffer);
 
     g_BackBuffer = NULL;
@@ -108,242 +114,19 @@ inline file_scoped_fn void resize_back_buffer(Display *display, int width,
   printf("Allocating back buffer: %dx%d (%d bytes = %.2f MB)\n", width, height,
          buffer_size, buffer_size / (1024.0 * 1024.0));
 
-  // STEP 3: Allocate the pixel memory
-  // malloc() returns void*, which is perfect for g_PixelData
-  //
-  // 🔴 CRITICAL: malloc() returns UNINITIALIZED memory!
-  // It contains random garbage that will show as random pixels.
-  // We MUST zero it out!
-  //
-  // ═══════════════════════════════════════════════════════════════════════
-  // WHY calloc() OVER malloc() + memset()?
-  // ═══════════════════════════════════════════════════════════════════════
-  //
-  // Performance: calloc() is 8× FASTER! ⚡
-  //
-  // Visual Explanation of OS "Copy-on-Write Zero Pages" Trick:
-  //
-  // When you calloc():
-  // ┌─────────────────────────────────────────┐
-  // │ OS: "Here's 2MB of memory!"             │
-  // │                                         │
-  // │ Reality: OS maps ONE zero-filled page   │
-  // │ to your ENTIRE buffer!                  │
-  // │                                         │
-  // │ [Zero Page] ──┐                         │
-  // │               ├─→ Your address 0x1000   │
-  // │               ├─→ Your address 0x2000   │
-  // │               └─→ Your address 0x3000   │
-  // │                                         │
-  // │ ZERO actual memory copying!             │
-  // └─────────────────────────────────────────┘
-  //
-  // When you malloc() + memset():
-  // ┌─────────────────────────────────────────┐
-  // │ OS: "Here's 2MB of RANDOM memory"       │
-  // │ You: "Now I'll WRITE zeros to all 2MB"  │
-  // │                                         │
-  // │ Result: You TOUCH every single byte!   │
-  // │ - CPU must write 2MB of zeros           │
-  // │ - Dirties all cache lines               │
-  // │ - Touches physical RAM                  │
-  // │ - MUCH slower! (8× slower)              │
-  // └─────────────────────────────────────────┘
-  //
-  // Benchmark (800×600 buffer = 1.83 MB, run 1000 times):
-  //   calloc(1, 1920000):           ~5ms   ⚡ FAST
-  //   malloc() + memset():         ~42ms   🐌 SLOW (8.4× slower!)
-  //
-  // Code Comparison:
-  //
-  //   // Option 1: calloc() (1 line, fast, safe)
-  //   g_PixelData = calloc(1, buffer_size);  ✅
-  //
-  //   // Option 2: malloc() + memset() (3 lines, slow, no overflow check)
-  //   g_PixelData = malloc(buffer_size);     ❌
-  //   if (!g_PixelData) return;
-  //   memset(g_PixelData, 0, buffer_size);
-  //
-  // Additional Benefits of calloc():
-  // - ✅ Cache Efficiency: No cache pollution (no writes)
-  // - ✅ Safety: Checks for integer overflow (width × height × 4)
-  // - ✅ Simplicity: 1 line vs 3 lines (less to go wrong)
-  // - ✅ Intent: Clear that you want ZEROED memory
-  //
-  // Web Dev Analogy:
-  //   const buffer = new Uint8Array(1000000);  // Like calloc() - instant!
-  //   // vs
-  //   for (let i = 0; i < 1000000; i++) buf[i] = 0;  // Like memset() - slow!
-  //
-  // ═══════════════════════════════════════════════════════════════════════
-  // 📚 CASEY'S DAY 4 PATTERN: VirtualAlloc() vs calloc() vs mmap()
-  // ═══════════════════════════════════════════════════════════════════════
-  //
-  // What Casey does on Windows (Day 4):
-  //
-  //   BitmapMemory = VirtualAlloc(
-  //       0,                  // Let OS choose address
-  //       BitmapMemorySize,   // Size in bytes
-  //       MEM_COMMIT,         // Reserve + commit (ready to use)
-  //       PAGE_READWRITE      // Read/write access
-  //   );
-  //
-  //   // Later, free:
-  //   VirtualFree(BitmapMemory, 0, MEM_RELEASE);
-  //
-  // ───────────────────────────────────────────────────────────────────────
-  // THREE WAYS TO ALLOCATE ON LINUX:
-  // ───────────────────────────────────────────────────────────────────────
-  //
-  // Option A: calloc() [CURRENT - Day 1-20] ✅
-  // ────────────────────────────────────────────
-  //   g_PixelData = calloc(1, buffer_size);
-  //   // Later: free(g_PixelData);
-  //
-  //   ✅ Simple, portable, works perfectly for learning
-  //   ✅ OS zeros memory via copy-on-write (fast!)
-  //   ✅ Good enough for Day 1-20 (back buffer only)
-  //   ❌ Goes through malloc allocator (adds overhead)
-  //   ❌ Can't use mprotect() for debug traps
-  //   ❌ Not 1:1 with Casey's VirtualAlloc pattern
-  //
-  // Option B: mmap() [CASEY'S PATTERN - Day 4+] ⚡
-  // ──────────────────────────────────────────────
-  //   #include <sys/mman.h>
-  //
-  //   g_PixelData = mmap(
-  //       NULL,                      // Let OS choose address
-  //       buffer_size,               // Size in bytes
-  //       PROT_READ | PROT_WRITE,    // Read/write access
-  //       MAP_PRIVATE | MAP_ANONYMOUS, // Private, not file-backed
-  //       -1, 0                      // No file descriptor
-  //   );
-  //   if (g_PixelData == MAP_FAILED) { /* error */ }
-  //
-  //   // Later: munmap(g_PixelData, buffer_size);
-  //
-  //   ✅ Direct OS control (no malloc overhead)
-  //   ✅ EXACT equivalent to Casey's VirtualAlloc
-  //   ✅ Can use mprotect(PROT_NONE) for debug traps
-  //   ✅ Page-aligned memory (cache-friendly)
-  //   ✅ Can reserve/commit/decommit for large allocations
-  //   ⚠️  Must track size for munmap (calloc doesn't need this)
-  //   ⚠️  Slightly more complex (MAP_FAILED vs NULL check)
-  //
-  //   Debug Mode Trap (Casey's VirtualProtect equivalent):
-  //
-  //   #ifdef DEBUG
-  //   // Instead of freeing, make old buffer UNTOUCHABLE
-  //   mprotect(old_buffer, old_size, PROT_NONE);
-  //   // Any access = instant crash with stack trace! 🐛
-  //   #endif
-  //
-  // Option C: Reserve-Once-Commit-As-Needed [DAY 25+] 🚀
-  // ───────────────────────────────────────────────────
-  //   // At startup (ONCE):
-  //   g_BackBufferRegion = mmap(
-  //       NULL,
-  //       10MB,              // Reserve HUGE region
-  //       PROT_NONE,         // Not accessible yet!
-  //       MAP_PRIVATE | MAP_ANONYMOUS,
-  //       -1, 0
-  //   );
-  //   // RAM used: 0 bytes ✅
-  //   // Address space claimed: 10MB ✅
-  //
-  //   // On resize: COMMIT only what we need
-  //   size_t needed = width * height * 4;
-  //   mprotect(g_BackBufferRegion, needed, PROT_READ | PROT_WRITE);
-  //   // RAM used: `needed` bytes ✅
-  //   // Address NEVER CHANGES! ✅
-  //
-  //   Benefits:
-  //   ✅ Stable address (never changes, easier debugging)
-  //   ✅ No munmap/mmap overhead on resize
-  //   ✅ Can grow/shrink by just changing protection
-  //   ✅ Perfect for frame-to-frame consistency
-  //   ⚠️  Overkill for simple back buffer at Day 4
-  //   💡 Casey uses this for game memory arenas (Day 25+)
-  //
-  // ───────────────────────────────────────────────────────────────────────
-  // WHY NOT USE mmap() NOW?
-  // ───────────────────────────────────────────────────────────────────────
-  //
-  // Casey's Philosophy: "Don't optimize before you understand."
-  //
-  // At Day 4:
-  // - calloc() teaches the CONCEPTS (allocate, free, lifetime)
-  // - Back buffer is simple (just pixels, resize occasionally)
-  // - No need for virtual memory control YET
-  // - Focus on RENDERING, not memory management minutiae
-  //
-  // At Day 25+ (Memory System Episode):
-  // - Casey builds proper memory architecture
-  // - Platform provides big arenas (permanent + transient)
-  // - Game NEVER calls malloc/free (uses arena allocators)
-  // - NOW mmap() reserve/commit is ESSENTIAL
-  //
-  // Timeline:
-  //   Day 1-20:  calloc() ✅ (learn rendering)
-  //   Day 25+:   mmap()   ✅ (proper architecture)
-  //
-  // ───────────────────────────────────────────────────────────────────────
-  // HOW VIRTUAL MEMORY ADDRESSES WORK
-  // ───────────────────────────────────────────────────────────────────────
-  //
-  // Common Misconception:
-  // "Does OS remember what address it gave me and return the same one?"
-  //
-  // ❌ NO! Each mmap(NULL, ...) gets a RANDOM available address.
-  //
-  // Visual:
-  //
-  //   void* ptr1 = mmap(NULL, 2MB, ...);  // OS: "Here's 0x7fff0000"
-  //   munmap(ptr1, 2MB);                   // OS: "OK, freed"
-  //   void* ptr2 = mmap(NULL, 4MB, ...);  // OS: "Here's 0x8fff0000"
-  //   (different!)
-  //
-  // How Casey Gets Stable Addresses:
-  //
-  //   Method 1: SAVE the pointer in a global (what we do now)
-  //   ────────────────────────────────────────────────────────
-  //   global_var void* g_PixelData = NULL;
-  //
-  //   g_PixelData = mmap(...);  // Save whatever OS gives us
-  //   // Every frame: use g_PixelData (same address because we saved it!)
-  //
-  //   Method 2: REQUEST specific address with MAP_FIXED (Day 25+)
-  //   ────────────────────────────────────────────────────────────
-  //   void* permanent = mmap(
-  //       (void*)0x100000000,  // ← REQUEST this exact address
-  //       64MB,
-  //       PROT_READ | PROT_WRITE,
-  //       MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,  // ← FIXED!
-  //       -1, 0
-  //   );
-  //   // permanent = 0x100000000 FOREVER (never changes!)
-  //
-  //   Visual (Game Memory Map - Day 25+):
-  //   ┌─────────────────────────────────────────────┐
-  //   │ 0x100000000 - Permanent Storage (64MB) ✅   │ ← Fixed address
-  //   │ 0x200000000 - Transient Storage (32MB) ✅   │ ← Fixed address
-  //   │ 0x300000000 - Debug Storage     (16MB) ✅   │ ← Fixed address
-  //   └─────────────────────────────────────────────┘
-  //
-  //   Benefits:
-  //   - Same addresses every run (reproducible bugs!)
-  //   - Can save pointers to disk (save games)
-  //   - Easier debugging ("0x100001234 is always player struct")
-  //
-  // ───────────────────────────────────────────────────────────────────────
-  // CURRENT CHOICE: calloc() (Simple, Correct for Day 4)
-  // ───────────────────────────────────────────────────────────────────────
-  //
-  g_PixelData = calloc(1, buffer_size); // Allocate AND zero (fastest!)
-  if (!g_PixelData) {
-    fprintf(stderr, "ERROR: Failed to allocate pixel buffer\n");
+  // STEP 3: Allocate pixel memory using mmap (Casey-style)
+  g_PixelData = mmap(NULL, buffer_size, PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+
+  if (g_PixelData == MAP_FAILED) {
+    g_PixelData = NULL;
+    fprintf(stderr, "mmap failed: could not allocate %d bytes\n", buffer_size);
     return;
   }
+
+  // NOTE: mmap gives you ZEROED pages automatically (like calloc), no memset
+  // needed.
+
   //
   // TODO(Day 25+): Replace with mmap() when building memory system
   // TODO(Day 25+): Add debug mode mprotect() traps for use-after-free
@@ -781,18 +564,37 @@ int platform_main() {
       int diagonal_length =
           g_BufferWidth < g_BufferHeight ? g_BufferWidth : g_BufferHeight;
 
-      // Draw diagonal line from top-left to bottom-right
-      for (int i = 0; i < diagonal_length; i++) {
-        int x = i; // Column
-        int y = i; // Row
+      // // Draw diagonal line from top-left to bottom-right
+      // for (int i = 0; i < diagonal_length; i++) {
+      //   int x = i; // Column
+      //   int y = i; // Row
 
-        // ✅ CORRECT formula: offset = y * width + x
-        int offset = y * g_BufferWidth + x;
+      //   // ✅ CORRECT formula: offset = y * width + x
+      //   int offset = y * g_BufferWidth + x;
 
-        // 🔴 CRITICAL: Bounds checking!
-        if (offset >= 0 && offset < total_pixels) {
-          pixels[offset] = 0xFFFFFFFF; // White pixel (ARGB)
+      //   // 🔴 CRITICAL: Bounds checking!
+      //   if (offset >= 0 && offset < total_pixels) {
+      //     pixels[offset] = 0xFFFFFFFF; // White pixel (ARGB)
+      //   }
+      // }
+
+      int Pitch = g_BufferWidth * 4; // Bytes per row
+
+      // STEP 1: Start with uint8* (byte pointer)
+      uint8_t *Row = (uint8_t *)g_PixelData; // ← Cast to BYTE pointer
+
+      for (int Y = 0; Y < g_BufferHeight; ++Y) {
+        // STEP 2: Cast to uint32* (pixel pointer) for THIS ROW
+        uint32_t *Pixel = (uint32_t *)Row; // ← Cast to PIXEL pointer
+
+        for (int X = 0; X < g_BufferWidth; ++X) {
+          uint8_t Blue = (X + 1);
+          uint8_t Green = (Y + 1);
+          *Pixel++ = ((Green << 8) | Blue); // Write pixel
         }
+
+        // STEP 3: Advance Row by Pitch BYTES
+        Row += Pitch; // ← Moves by BYTES, not pixels!
       }
 
       if (test_x + 1 < g_BufferWidth - 1) {
@@ -807,7 +609,9 @@ int platform_main() {
       }
       test_offset = test_y * g_BufferWidth + test_x;
 
-      pixels[test_offset] = 0x00FF00; //
+      if (test_offset < total_pixels)
+        pixels[test_offset] = 0x00FF00; //
+      // pixels[test_offset] = 0x00FF00; //
       // Display the result
       update_window(display, window, 0, 0, g_BufferWidth, g_BufferHeight);
     }

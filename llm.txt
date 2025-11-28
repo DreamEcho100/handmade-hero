@@ -333,6 +333,7 @@ Think about resources in terms of **lifetime waves**, not individual acquire/rel
 
 **Casey's Quote (Day 3, ~9:20):**
 > "If we actually put in code that closes our window before we exit, we are 
+> "You never write to memory unless you provably know the pointer is valid."
 > WASTING THE USER'S TIME. When you exit, Windows will bulk clean up all of 
 > our Windows, all of our handles, all of our memory - everything gets cleaned 
 > up by Windows. If you've ever had one of those applications where you try to 
