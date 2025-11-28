@@ -11,7 +11,6 @@
 #include <X11/Xutil.h>
 #include <stdbool.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <time.h>
 
 /**
@@ -30,6 +29,23 @@ global_var XImage *g_BackBuffer = NULL; // X11 image wrapper
 global_var void *g_PixelData = NULL;    // Raw pixel memory (our canvas!)
 global_var int g_BufferWidth = 0;       // Current buffer dimensions
 global_var int g_BufferHeight = 0;
+global_var int g_BytesPerPixel = 4;
+
+file_scoped_fn void RenderWeirdGradient(int blue_offset, int green_offset) {
+  int pitch = g_BufferWidth * g_BytesPerPixel;
+  uint8_t *row = (uint8_t *)g_PixelData;
+
+  for (int y = 0; y < g_BufferHeight; ++y) {
+    uint32_t *pixels = (uint32_t *)row;
+    for (int x = 0; x < g_BufferWidth; ++x) {
+      uint8_t blue = (x + blue_offset);
+      uint8_t green = (y + green_offset);
+
+      *pixels++ = ((green << 8) | blue);
+    }
+    row += pitch;
+  }
+}
 
 /**
  * RESIZE BACK BUFFER
@@ -515,6 +531,8 @@ int platform_main() {
    * (when user closes the window)
    */
   printf("Entering event loop...\n");
+  int x_offset = 0;
+  int y_offset = 0;
   while (g_Running) {
     XEvent event;
 
@@ -553,49 +571,8 @@ int platform_main() {
     //
     if (g_PixelData) {
       uint32_t *pixels = (uint32_t *)g_PixelData;
-
-      // Clear buffer to black first (so we don't accumulate old pixels)
       int total_pixels = g_BufferWidth * g_BufferHeight;
-      for (int i = 0; i < total_pixels; i++) {
-        pixels[i] = 0xFF000000; // Black (ARGB)
-      }
-
-      // Calculate diagonal length (stop at window edge)
-      int diagonal_length =
-          g_BufferWidth < g_BufferHeight ? g_BufferWidth : g_BufferHeight;
-
-      // // Draw diagonal line from top-left to bottom-right
-      // for (int i = 0; i < diagonal_length; i++) {
-      //   int x = i; // Column
-      //   int y = i; // Row
-
-      //   // ✅ CORRECT formula: offset = y * width + x
-      //   int offset = y * g_BufferWidth + x;
-
-      //   // 🔴 CRITICAL: Bounds checking!
-      //   if (offset >= 0 && offset < total_pixels) {
-      //     pixels[offset] = 0xFFFFFFFF; // White pixel (ARGB)
-      //   }
-      // }
-
-      int Pitch = g_BufferWidth * 4; // Bytes per row
-
-      // STEP 1: Start with uint8* (byte pointer)
-      uint8_t *Row = (uint8_t *)g_PixelData; // ← Cast to BYTE pointer
-
-      for (int Y = 0; Y < g_BufferHeight; ++Y) {
-        // STEP 2: Cast to uint32* (pixel pointer) for THIS ROW
-        uint32_t *Pixel = (uint32_t *)Row; // ← Cast to PIXEL pointer
-
-        for (int X = 0; X < g_BufferWidth; ++X) {
-          uint8_t Blue = (X + 1);
-          uint8_t Green = (Y + 1);
-          *Pixel++ = ((Green << 8) | Blue); // Write pixel
-        }
-
-        // STEP 3: Advance Row by Pitch BYTES
-        Row += Pitch; // ← Moves by BYTES, not pixels!
-      }
+      RenderWeirdGradient(x_offset, y_offset);
 
       if (test_x + 1 < g_BufferWidth - 1) {
         test_x += 1;
@@ -614,6 +591,8 @@ int platform_main() {
       // pixels[test_offset] = 0x00FF00; //
       // Display the result
       update_window(display, window, 0, 0, g_BufferWidth, g_BufferHeight);
+
+      x_offset++;
     }
   }
 
