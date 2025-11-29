@@ -1,6 +1,118 @@
 #include <raylib.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
+#include <string.h>
+#include <sys/mman.h>
+
+#define file_scoped_fn static
+#define local_persist_var static
+#define global_var static
+
+global_var void *g_PixelData = NULL;
+global_var int g_BufferWidth = 0;
+global_var int g_BufferHeight = 0;
+global_var int g_BytesPerPixel = 4;
+global_var Texture2D g_BackBufferTexture = {0};
+global_var bool g_HasTexture = false;
+
+inline file_scoped_fn void RenderWeirdGradient(int blue_offset,
+                                               int green_offset) {
+  int pitch = g_BufferWidth * g_BytesPerPixel;
+  uint8_t *row = (uint8_t *)g_PixelData;
+
+  for (int y = 0; y < g_BufferHeight; ++y) {
+    uint32_t *pixels = (uint32_t *)row;
+    for (int x = 0; x < g_BufferWidth; ++x) {
+      uint8_t blue = (x + blue_offset);
+      uint8_t green = (y + green_offset);
+
+      *pixels++ = (0xFF000000 | (green << 8) | (blue << 16));
+    }
+    row += pitch;
+  }
+}
+
+/********************************************************************
+ RESIZE BACKBUFFER
+ - Free old CPU memory
+ - Free old GPU texture
+ - Allocate new CPU pixel memory
+ - Create new Raylib texture (GPU)
+*********************************************************************/
+file_scoped_fn void ResizeBackBuffer(int width, int height) {
+  printf("Resizing back buffer → %dx%d\n", width, height);
+
+  if (width <= 0 || height <= 0) {
+    printf("Rejected resize: invalid size\n");
+    return;
+  }
+
+  int old_width = g_BufferWidth;
+  int old_height = g_BufferHeight;
+
+  // Update first!
+  g_BufferWidth = width;
+  g_BufferHeight = height;
+
+  // ---- 1. FREE OLD PIXEL MEMORY
+  // -------------------------------------------------
+  if (g_PixelData && old_width > 0 && old_height > 0) {
+    munmap(g_PixelData, old_width * old_height * g_BytesPerPixel);
+  }
+  g_PixelData = NULL;
+
+  // ---- 2. FREE OLD TEXTURE
+  // ------------------------------------------------------
+  if (g_HasTexture) {
+    UnloadTexture(g_BackBufferTexture);
+    g_HasTexture = false;
+  }
+  // ---- 3. ALLOCATE NEW BACKBUFFER
+  // ----------------------------------------------
+  int buffer_size = width * height * g_BytesPerPixel;
+  g_PixelData = mmap(NULL, buffer_size, PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+
+  if (g_PixelData == MAP_FAILED) {
+    g_PixelData = NULL;
+    fprintf(stderr, "mmap failed: could not allocate %d bytes\n", buffer_size);
+    return;
+  }
+
+  // memset(g_PixelData, 0, buffer_size); // Raylib does not auto-clear like
+  // mmap
+  memset(g_PixelData, 0, buffer_size);
+
+  g_BufferWidth = width;
+  g_BufferHeight = height;
+
+  // ---- 4. CREATE RAYLIB TEXTURE
+  // -------------------------------------------------
+  Image img = {.data = g_PixelData,
+               .width = g_BufferWidth,
+               .height = g_BufferHeight,
+               .format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8,
+               .mipmaps = 1};
+  g_BackBufferTexture = LoadTextureFromImage(img);
+  g_HasTexture = true;
+  printf("Raylib texture created successfully\n");
+}
+
+/********************************************************************
+ UPDATE WINDOW (BLIT)
+ Equivalent to XPutImage or StretchDIBits
+*********************************************************************/
+file_scoped_fn void UpdateWindowFromBackBuffer(void) {
+  if (!g_HasTexture || !g_PixelData)
+    return;
+
+  // Upload CPU → GPU
+  UpdateTexture(g_BackBufferTexture, g_PixelData);
+
+  // Draw GPU texture → screen
+  DrawTexture(g_BackBufferTexture, 0, 0, WHITE);
+}
 
 /**
  * MAIN FUNCTION
@@ -10,8 +122,6 @@
 int platform_main() {
 
   /**
-   * STEP 1-7: ALL IN ONE LINE!
-   *
    * InitWindow() does ALL of this:
    * - XOpenDisplay() - Connect to display server
    * - XCreateSimpleWindow() - Create the window
@@ -59,9 +169,14 @@ int platform_main() {
    */
   SetTargetFPS(60);
 
-  // Moving pixel test (same as X11 version)
+  g_BufferWidth = 800;
+  g_BufferHeight = 600;
   int test_x = 0;
   int test_y = 0;
+  int blue_offset = 0;
+  int green_offset = 0;
+
+  ResizeBackBuffer(800, 600);
 
   /**
    * EVENT LOOP
@@ -96,20 +211,11 @@ int platform_main() {
      */
     if (IsWindowResized()) {
       printf("Window resized to: %dx%d\n", GetScreenWidth(), GetScreenHeight());
+      ResizeBackBuffer(GetScreenWidth(), GetScreenHeight());
     }
 
-    /**
-     * CHECK FOR WINDOW FOCUS EVENT
-     *
-     * Casey's WM_ACTIVATEAPP equivalent.
-     * In X11, this is FocusIn/FocusOut event.
-     *
-     * RAYLIB LIMITATION:
-     * Raylib doesn't expose focus events directly in the simple API.
-     * For Day 002, this isn't critical - focus events are just logged.
-     *
-     * In a real game, you'd use this to pause when window loses focus.
-     */
+    // Render gradient into CPU pixel buffer
+    RenderWeirdGradient(blue_offset, green_offset);
 
     /**
      * BEGIN DRAWING (PAINT EVENT)
@@ -144,72 +250,26 @@ int platform_main() {
      */
     ClearBackground(BLACK);
 
-    // ═══════════════════════════════════════════════════════════════════
-    // 🎨 DRAW DIAGONAL LINE (Learning Exercise - Day 3)
-    // ═══════════════════════════════════════════════════════════════════
-    //
-    // RAYLIB vs X11 COMPARISON:
-    //
-    // X11 (manual pixel manipulation):
-    //   uint32_t *pixels = (uint32_t *)g_PixelData;
-    //   for (int i = 0; i < min(width, height); i++) {
-    //       int offset = i * width + i;
-    //       pixels[offset] = 0xFFFFFFFF;  // White pixel
-    //   }
-    //   XPutImage(display, window, gc, backBuffer, ...);
-    //
-    // Raylib (high-level drawing API):
-    //   DrawLine(x1, y1, x2, y2, WHITE);  // One line! 🎯
-    //
-    // Both do the SAME thing, but Raylib abstracts away:
-    // - Pixel addressing math (offset = y * width + x)
-    // - Bounds checking
-    // - Back buffer management
-    // - Blitting to screen
-    //
-    // This is like comparing:
-    // - Canvas 2D API: ctx.strokeRect(x, y, w, h)
-    // - WebGL: Setting up buffers, shaders, vertices...
-    //
-    int width = GetScreenWidth();
-    int height = GetScreenHeight();
-    int diagonal_length = width < height ? width : height;
+    UpdateWindowFromBackBuffer(); // CPU → GPU → Screen
 
-    // Draw diagonal line from top-left (0,0) to bottom-right
-    // In X11, we did: pixels[i * width + i] = white
-    // In Raylib, we just call: DrawLine()!
-    DrawLine(0, 0, diagonal_length - 1, diagonal_length - 1, WHITE);
-
-    // ═══════════════════════════════════════════════════════════════════
-    // 🎨 MOVING GREEN PIXEL TEST (Same as X11 version)
-    // ═══════════════════════════════════════════════════════════════════
-    //
-    // X11 version:
-    //   pixels[test_offset] = 0x00FF00;  // Direct pixel manipulation
-    //
-    // Raylib version:
-    //   DrawPixel(test_x, test_y, GREEN);  // High-level API call
-    //
-    // Both do the same thing - draw a green pixel at (test_x, test_y)
-    //
-
-    // Update position (move right, wrap and jump down)
-    if (test_x < width - 1) {
+    int total_pixels = g_BufferWidth * g_BufferHeight;
+    if (test_x + 1 < g_BufferWidth - 1) {
       test_x += 1;
     } else {
       test_x = 0;
-      if (test_y < height - 1 || test_y + 75 < height - 1) {
-        test_y += 75; // Jump down 75 rows (matches X11 version)
+      if (test_y + 75 < g_BufferHeight - 1) {
+        test_y += 75;
       } else {
-        test_y = 0; // Reset to top
+        test_y = 0;
       }
     }
+    int test_offset = test_y * g_BufferWidth + test_x;
 
-    // Draw the green pixel
-    DrawPixel(test_x, test_y, GREEN);
+    if (test_offset < total_pixels) {
 
-    // Alternative: Draw a slightly bigger point (easier to see)
-    // DrawRectangle(test_x, test_y, 2, 2, GREEN);  // 2×2 pixel square
+      // Draw the green pixel
+      DrawPixel(test_x, test_y, RED);
+    }
 
     /**
      * END DRAWING
@@ -225,6 +285,9 @@ int platform_main() {
      * - Logs these events internally
      */
     EndDrawing();
+
+    blue_offset++;
+    // green_offset++;
   }
 
   /**
@@ -238,6 +301,12 @@ int platform_main() {
    * One line vs multiple in X11!
    */
   printf("Cleaning up...\n");
+  // Cleanup
+  if (g_HasTexture)
+    UnloadTexture(g_BackBufferTexture);
+  if (g_PixelData)
+    // free(g_PixelData);
+    munmap(g_PixelData, g_BufferWidth * g_BufferHeight * 4);
   CloseWindow();
   printf("Goodbye!\n");
 
