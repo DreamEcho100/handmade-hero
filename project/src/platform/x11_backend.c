@@ -32,11 +32,6 @@ typedef struct {
   int bytes_per_pixel;
 } OffscreenBuffer;
 
-typedef struct {
-  int Width;
-  int Height;
-} WindowDimension;
-
 global_var bool g_is_running = true;
 global_var OffscreenBuffer g_backbuffer;
 
