@@ -3,4 +3,4 @@
 
 #include <stdint.h>
 
-#endif
+#endif // GAME_H

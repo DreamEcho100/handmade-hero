@@ -1,4 +1,6 @@
 #define _POSIX_C_SOURCE 199309L // Enable POSIX functions like nanosleep, sleep
+#include "../base.h"
+#include "audio.h"
 #include <X11/X.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
@@ -11,10 +13,6 @@
 #include <sys/mman.h>
 #include <unistd.h> // For sleep()
 
-#define file_scoped_fn static
-#define local_persist_var static
-#define global_var static
-
 // ═══════════════════════════════════════════════════════════════
 // 🎮 JOYSTICK DYNAMIC LOADING (Casey's Pattern for Linux)
 // ═══════════════════════════════════════════════════════════════
@@ -26,12 +24,13 @@ typedef LINUX_JOYSTICK_READ(linux_joystick_read);
 
 // STEP 3: Stub implementation (no joystick available)
 LINUX_JOYSTICK_READ(LinuxJoystickReadStub) {
-  // Return 0 = no data available (non-blocking behavior)
-  return 0;
+  // Return -1 = error/no device (like ERROR_DEVICE_NOT_CONNECTED)
+  return -1;
 }
 
 // STEP 4: Global function pointer (initially stub)
-global_var linux_joystick_read *LinuxJoystickRead_ = LinuxJoystickReadStub;
+file_scoped_global_var linux_joystick_read *LinuxJoystickRead_ =
+    LinuxJoystickReadStub;
 
 // STEP 5: Redefine API name
 #define LinuxJoystickRead LinuxJoystickRead_
@@ -97,7 +96,8 @@ typedef struct {
   bool is_running;
 } GameState;
 
-global_var GameState g_game_state = {0}; // ✅ Zero-initialized struct
+file_scoped_global_var GameState g_game_state = {
+    0}; // ✅ Zero-initialized struct
 
 /*
 Will be added when needed
@@ -114,7 +114,7 @@ get_window_dimension(Display *display, Window window) {
 }
 */
 
-global_var OffscreenBuffer g_backbuffer;
+file_scoped_global_var OffscreenBuffer g_backbuffer;
 
 // Real implementation (only used if joystick found)
 file_scoped_fn LINUX_JOYSTICK_READ(linux_joystick_read_impl) {
@@ -892,6 +892,32 @@ int platform_main() {
   // 🎮 Initialize joystick BEFORE main loop (Casey's pattern)
   // ═══════════════════════════════════════════════════════════
   linux_init_joystick(&g_game_state);
+  // ═══════════════════════════════════════════════════════════
+  // 🔊 Load ALSA library (Casey's Win32LoadXInput pattern)
+  // ═══════════════════════════════════════════════════════════
+  // This MUST come before linux_init_sound()!
+  // Just like Casey calls Win32LoadXInput() before using XInput.
+  linux_load_alsa();
+
+  // ═══════════════════════════════════════════════════════════
+  // 🔊 Initialize sound (Casey's Win32InitDSound equivalent)
+  // ═══════════════════════════════════════════════════════════
+  //
+  // Casey's Day 7 call:
+  //   Win32InitDSound(Window, 48000, 48000*sizeof(int16)*2);
+  //
+  // Parameters breakdown:
+  //   48000 = samples per second (CD quality is 44100, we use higher)
+  //   48000 * sizeof(int16_t) * 2 = 1 second of stereo 16-bit audio
+  //                                = 48000 * 2 * 2 = 192,000 bytes
+  //
+  // NOTE: This is a SECONDARY buffer size (where we write audio).
+  //       The PRIMARY buffer just sets the format.
+  // ═══════════════════════════════════════════════════════════
+  int samples_per_second = 48000;
+  int bytes_per_sample = sizeof(int16_t) * 2; // 16-bit stereo
+  int secondary_buffer_size = samples_per_second * bytes_per_sample;
+  linux_init_sound(samples_per_second, secondary_buffer_size);
 
   /**
    * CONNECT TO X SERVER
@@ -1145,10 +1171,19 @@ int platform_main() {
     // For now, this demonstrates how to write pixels to memory.
     //
     if (g_backbuffer.memory) {
-      uint32_t *pixels = (uint32_t *)g_backbuffer.memory;
-      int total_pixels = g_backbuffer.width * g_backbuffer.height;
       render_weird_gradient(&g_backbuffer, &g_game_state.gradient);
 
+      // Test pixel animation
+      uint32_t *pixels = (uint32_t *)g_backbuffer.memory;
+      int total_pixels = g_backbuffer.width * g_backbuffer.height;
+
+      test_offset = g_game_state.pixel.offset_y * g_backbuffer.width +
+                    g_game_state.pixel.offset_x;
+
+      if (test_offset < total_pixels)
+        pixels[test_offset] = 0xFF0000;
+
+      // Move the red dot every frame
       if (g_game_state.pixel.offset_x + 1 < g_backbuffer.width - 1) {
         g_game_state.pixel.offset_x += 1;
       } else {
@@ -1159,11 +1194,6 @@ int platform_main() {
           g_game_state.pixel.offset_y = 0;
         }
       }
-      test_offset = g_game_state.pixel.offset_y * g_backbuffer.width +
-                    g_game_state.pixel.offset_x;
-
-      if (test_offset < total_pixels)
-        pixels[test_offset] = 0xFF0000;
       // Display the result
       update_window(&g_backbuffer, display, window, gc, 0, 0,
                     g_backbuffer.width, g_backbuffer.height);
@@ -1171,29 +1201,6 @@ int platform_main() {
       // offset_x++;
     }
   }
-
-  // ❌ YOUR ORIGINAL BUG (for reference):
-  // for (int i = 0; i < 100; i++) {
-  //     int offset = i * g_BufferWidth + i;  // WRONG!
-  //     //           ↑
-  //     // This treats 'i' as BOTH y AND x in the formula
-  //     // offset = i * width + i
-  //     //        = i * (width + 1)
-  //     //
-  //     // At i=99 in 800×600:
-  //     // offset = 99 * 801 = 79,299 ✅ (happens to work)
-  //     //
-  //     // At i=1000:
-  //     // offset = 1000 * 801 = 801,000 ❌ (way beyond 479,999!)
-  //     //                                   CRASH! 💥
-  //     pixels[offset] = 0xFFFFFFFF;
-  // }
-  //
-  // WHY IT SEEMED TO WORK FOR SMALL VALUES:
-  // At i=99: offset = 99 * 800 + 99 = 79,299
-  // This is less than 480,000 (800×600), so no crash!
-  // But it's NOT drawing a perfect diagonal - it's drawing
-  // a diagonal with a steeper slope (1 pixel right, 800 pixels down)
 
   /**
    * CLEANUP - CASEY'S "RESOURCE LIFETIMES IN WAVES" PHILOSOPHY

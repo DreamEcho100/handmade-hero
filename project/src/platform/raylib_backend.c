@@ -1,13 +1,10 @@
+#include "base.h"
 #include <raylib.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
-
-#define file_scoped_fn static
-#define local_persist_var static
-#define global_var static
 
 typedef struct {
   void *memory;
@@ -64,10 +61,11 @@ typedef struct {
   int gamepad_id; // Which gamepad to use (0-3)
 } GameState;
 
-global_var OffscreenBuffer g_backbuffer;
-global_var GameState g_game_state = {0}; // ✅ Zero-initialized struct
+file_scoped_global_var OffscreenBuffer g_backbuffer;
+file_scoped_global_var GameState g_game_state = {
+    0}; // ✅ Zero-initialized struct
 
-// global_var int g_joystick_fd = -1;
+// file_scoped_global_var int g_joystick_fd = -1;
 
 /*
 Will be added when needed
@@ -84,7 +82,7 @@ get_window_dimension(Display *display, Window window) {
 }
 */
 
-global_var OffscreenBuffer g_backbuffer;
+file_scoped_global_var OffscreenBuffer g_backbuffer;
 
 // ═══════════════════════════════════════════════════════════════
 // 🎮 Initialize gamepad (Raylib cross-platform!)
@@ -342,6 +340,73 @@ file_scoped_fn void update_window_from_backbuffer(OffscreenBuffer *buffer) {
   DrawTexture(buffer->texture, 0, 0, WHITE);
 }
 
+/********************************************************************
+ RESIZE BACKBUFFER
+ - Free old CPU memory
+ - Free old GPU texture
+ - Allocate new CPU pixel memory
+ - Create new Raylib texture (GPU)
+*********************************************************************/
+file_scoped_fn void ResizeBackBuffer(OffscreenBuffer *buffer, int width,
+                                     int height) {
+  printf("Resizing back buffer → %dx%d\n", width, height);
+
+  if (width <= 0 || height <= 0) {
+    printf("Rejected resize: invalid size\n");
+    return;
+  }
+
+  int old_width = buffer->width;
+  int old_height = buffer->height;
+
+  // Update first!
+  buffer->width = width;
+  buffer->height = height;
+
+  // ---- 1. FREE OLD PIXEL MEMORY
+  // -------------------------------------------------
+  if (buffer->memory && old_width > 0 && old_height > 0) {
+    munmap(buffer->memory, old_width * old_height * buffer->bytes_per_pixel);
+  }
+  buffer->memory = NULL;
+
+  // ---- 2. FREE OLD TEXTURE
+  // ------------------------------------------------------
+  if (buffer->has_texture) {
+    UnloadTexture(buffer->texture);
+    buffer->has_texture = false;
+  }
+  // ---- 3. ALLOCATE NEW BACKBUFFER
+  // ----------------------------------------------
+  int buffer_size = width * height * buffer->bytes_per_pixel;
+  buffer->memory = mmap(NULL, buffer_size, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+
+  if (buffer->memory == MAP_FAILED) {
+    buffer->memory = NULL;
+    fprintf(stderr, "mmap failed: could not allocate %d bytes\n", buffer_size);
+    return;
+  }
+
+  // memset(buffer->memory, 0, buffer_size); // Raylib does not auto-clear like
+  // mmap
+  memset(buffer->memory, 0, buffer_size);
+
+  buffer->width = width;
+  buffer->height = height;
+
+  // ---- 4. CREATE RAYLIB TEXTURE
+  // -------------------------------------------------
+  Image img = {.data = buffer->memory,
+               .width = buffer->width,
+               .height = buffer->height,
+               .format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8,
+               .mipmaps = 1};
+  buffer->texture = LoadTextureFromImage(img);
+  buffer->has_texture = true;
+  printf("Raylib texture created successfully\n");
+}
+
 /**
  * MAIN FUNCTION
  *
@@ -435,6 +500,30 @@ int platform_main() {
    */
   while (!WindowShouldClose()) {
 
+    /**
+     * CHECK FOR WINDOW RESIZE EVENT
+     *
+     * Casey's WM_SIZE equivalent.
+     * In X11, this is ConfigureNotify event.
+     *
+     * IsWindowResized() returns true when window size changes.
+     * This is like checking event.type == ConfigureNotify in X11.
+     *
+     * When window is resized, we:
+     * 1. Toggle the color (like Casey does)
+     * 2. Log the new size (like printf in X11 version)
+     *
+     * WEB ANALOGY:
+     * window.addEventListener('resize', () => {
+     *   console.log('Window resized!');
+     *   toggleColor();
+     * });
+     */
+    if (IsWindowResized()) {
+      printf("Window resized to: %dx%d\n", GetScreenWidth(), GetScreenHeight());
+      ResizeBackBuffer(&g_backbuffer, GetScreenWidth(), GetScreenHeight());
+    }
+
     // ═══════════════════════════════════════════════════════
     // ⌨️ KEYBOARD INPUT (cross-platform!)
     // ═══════════════════════════════════════════════════════
@@ -469,6 +558,13 @@ int platform_main() {
       uint32_t *pixels = (uint32_t *)g_backbuffer.memory;
       int total_pixels = g_backbuffer.width * g_backbuffer.height;
 
+      int test_offset = g_game_state.pixel.offset_y * g_backbuffer.width +
+                        g_game_state.pixel.offset_x;
+
+      if (test_offset < total_pixels) {
+        pixels[test_offset] = 0xFF0000FF; // Red pixel
+      }
+
       if (g_game_state.pixel.offset_x + 1 < g_backbuffer.width - 1) {
         g_game_state.pixel.offset_x += 1;
       } else {
@@ -478,13 +574,6 @@ int platform_main() {
         } else {
           g_game_state.pixel.offset_y = 0;
         }
-      }
-
-      int test_offset = g_game_state.pixel.offset_y * g_backbuffer.width +
-                        g_game_state.pixel.offset_x;
-
-      if (test_offset < total_pixels) {
-        pixels[test_offset] = 0xFF0000FF; // Red pixel
       }
 
       BeginDrawing();

@@ -3,4 +3,4 @@
 
 int platform_main();
 
-#endif
+#endif // PLATFORM_H

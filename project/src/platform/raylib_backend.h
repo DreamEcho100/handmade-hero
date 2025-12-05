@@ -6,4 +6,4 @@
 // Raylib backend implementation
 // Implements platform_main() using raylib
 
-#endif
+#endif // RAYLIB_BACKEND_H

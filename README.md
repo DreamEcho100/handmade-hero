@@ -32,7 +32,7 @@
 
 ### 📆 Day 1-2: Platform Setup & Window Creation
 
-**Focus:** Basic window, pixel buffers, platform abstraction
+**Focus:** Basic window, pixel buffers, platform abstraction... I was just missing around the first day 😅
 
 #### 🗓️ Commits
 

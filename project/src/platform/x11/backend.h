@@ -6,4 +6,4 @@
 // X11 MIT-SHM backend implementation
 // Uses shared memory for zero-copy pixel transfer
 
-#endif
+#endif // X11_BACKEND_H
