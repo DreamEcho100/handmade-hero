@@ -29,6 +29,8 @@
 
 typedef struct _snd_pcm snd_pcm_t;
 typedef struct _snd_pcm_hw_params snd_pcm_hw_params_t;
+typedef long
+    snd_pcm_sframes_t; // Signed frame count (can be negative for errors)
 
 // ALSA format enum (we only need S16_LE = signed 16-bit little-endian)
 typedef enum {
@@ -85,6 +87,10 @@ typedef ALSA_SND_PCM_AVAIL(alsa_snd_pcm_avail);
 #define ALSA_SND_PCM_RECOVER(name) int name(snd_pcm_t *pcm, int err, int silent)
 typedef ALSA_SND_PCM_RECOVER(alsa_snd_pcm_recover);
 
+#define ALSA_SND_PCM_DELAY(name)                                               \
+  int name(snd_pcm_t *pcm, snd_pcm_sframes_t *delayp)
+typedef ALSA_SND_PCM_DELAY(alsa_snd_pcm_delay);
+
 // ───────────────────────────────────────────────────────────────
 // Stub Implementations (used when ALSA not available)
 // ───────────────────────────────────────────────────────────────
@@ -104,6 +110,9 @@ ALSA_SND_STRERROR(AlsaSndStrerrorStub);
 ALSA_SND_PCM_AVAIL(AlsaSndPcmAvailStub);
 
 ALSA_SND_PCM_RECOVER(AlsaSndPcmRecoverStub);
+
+// Stub implementation (used when ALSA not loaded)
+ALSA_SND_PCM_DELAY(AlsaSndPcmDelayStub);
 
 /*
  * The keyword 'extern' is used here to declare a variable or function that is
@@ -141,6 +150,8 @@ extern alsa_snd_pcm_close *SndPcmClose_;
 extern alsa_snd_strerror *SndStrerror_;
 extern alsa_snd_pcm_avail *SndPcmAvail_;
 extern alsa_snd_pcm_recover *SndPcmRecover_;
+// Global function pointer (initially points to stub)
+extern alsa_snd_pcm_delay *SndPcmDelay_;
 
 // Redefine names for clean API (Casey's pattern)
 #define SndPcmOpen SndPcmOpen_
@@ -151,6 +162,8 @@ extern alsa_snd_pcm_recover *SndPcmRecover_;
 #define SndStrerror SndStrerror_
 #define SndPcmAvail SndPcmAvail_
 #define SndPcmRecover SndPcmRecover_
+// Clean API name (Casey's pattern)
+#define SndPcmDelay SndPcmDelay_
 
 // ───────────────────────────────────────────────────────────────
 // Sound Output State
@@ -193,5 +206,7 @@ void linux_init_sound(int32_t samples_per_second, int32_t buffer_size_bytes);
 
 // Day 8: Fill buffer with square wave and write to ALSA
 void linux_fill_sound_buffer(void);
+
+void linux_debug_audio_latency(void);
 
 #endif // X11_AUDIO_H

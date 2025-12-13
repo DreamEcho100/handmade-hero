@@ -11,7 +11,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
-#include <unistd.h> // For sleep()
+#include <time.h>
+#include <unistd.h>    // For sleep()
+#include <x86intrin.h> // for __rdtsc() (CPU cycle counter)
 
 // ═══════════════════════════════════════════════════════════════
 // 🎮 JOYSTICK DYNAMIC LOADING (Casey's Pattern for Linux)
@@ -445,6 +447,11 @@ inline file_scoped_fn void handle_increase_volume(int num) {
 // Fun test
 inline file_scoped_fn void handleMusicalkeypress(KeySym keysym) {
   switch (keysym) {
+  case XK_F1: {
+    printf("F1 pressed - showing audio debug\n");
+    linux_debug_audio_latency();
+    break;
+  }
   case XK_z:
     set_tone_frequency((int)261.63f);
     printf("🎵 Note: C4 (261.63 Hz)\n");
@@ -1333,6 +1340,12 @@ int platform_main() {
    */
   printf("Entering event loop...\n");
 
+  struct timespec start, end;
+  uint64_t start_cycles, end_cycles;
+
+  clock_gettime(CLOCK_MONOTONIC, &start);
+  start_cycles = __rdtsc();
+
   while (g_game_state.is_running) {
     XEvent event;
 
@@ -1408,6 +1421,19 @@ int platform_main() {
                     g_backbuffer.width, g_backbuffer.height);
 
       // offset_x++;
+
+      clock_gettime(CLOCK_MONOTONIC, &end);
+      end_cycles = __rdtsc();
+
+      double ms_per_frame = (end.tv_sec - start.tv_sec) * 1000.0 +
+                            (end.tv_nsec - start.tv_nsec) / 1000000.0;
+      double fps = 1000.0 / ms_per_frame;
+      double mcpf = (end_cycles - start_cycles) / 1000000.0;
+
+      printf("%.2fms/f, %.2ff/s, %.2fmc/f\n", ms_per_frame, fps, mcpf);
+
+      start = end;
+      start_cycles = end_cycles;
     }
 
     // ═══════════════════════════════════════════════════════════

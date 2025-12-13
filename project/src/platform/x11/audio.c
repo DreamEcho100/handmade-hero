@@ -132,6 +132,7 @@
 #include "audio.h"
 #include "../base.h"
 #include <dlfcn.h> // For dlopen, dlsym, dlclose (Casey's LoadLibrary equivalent)
+#include <errno.h>
 #include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -225,6 +226,12 @@ ALSA_SND_PCM_RECOVER(AlsaSndPcmRecoverStub) {
   return -1;
 }
 
+ALSA_SND_PCM_DELAY(AlsaSndPcmDelayStub) {
+  (void)pcm;
+  (void)delayp;
+  return -1; // Error: not available
+}
+
 // ───────────────────────────────────────────────────────────────
 // Global Function Pointers (initially point to stubs)
 // ───────────────────────────────────────────────────────────────
@@ -237,6 +244,7 @@ alsa_snd_pcm_close *SndPcmClose_ = AlsaSndPcmCloseStub;
 alsa_snd_strerror *SndStrerror_ = AlsaSndStrerrorStub;
 alsa_snd_pcm_avail *SndPcmAvail_ = AlsaSndPcmAvailStub;
 alsa_snd_pcm_recover *SndPcmRecover_ = AlsaSndPcmRecoverStub;
+alsa_snd_pcm_delay *SndPcmDelay_ = AlsaSndPcmDelayStub;
 
 // ───────────────────────────────────────────────────────────────
 // Sound Output State
@@ -305,10 +313,14 @@ void linux_load_alsa(void) {
   LOAD_ALSA_FN(SndStrerror_, "snd_strerror", alsa_snd_strerror);
   LOAD_ALSA_FN(SndPcmAvail_, "snd_pcm_avail", alsa_snd_pcm_avail);
   LOAD_ALSA_FN(SndPcmRecover_, "snd_pcm_recover", alsa_snd_pcm_recover);
+  LOAD_ALSA_FN(SndPcmDelay_, "snd_pcm_delay", alsa_snd_pcm_delay);
 #undef LOAD_ALSA_FN
 
   // Verify critical functions loaded
-  if (!SndPcmOpen_ || !SndPcmSetParams_ || !SndPcmWritei_) {
+  if (SndPcmOpen_ == AlsaSndPcmOpenStub ||
+      SndPcmSetParams_ == AlsaSndPcmSetParamsStub
+      // || SndPcmWritei_ == AlsaSndPcmWriteiStub
+  ) {
     fprintf(stderr, "❌ ALSA: Missing critical functions, audio disabled\n");
     // Reset to stubs
     SndPcmOpen_ = AlsaSndPcmOpenStub;
@@ -317,6 +329,17 @@ void linux_load_alsa(void) {
     dlclose(alsa_lib);
     g_sound_output.alsa_library = NULL;
   }
+
+  // DAY 10: Check if latency measurement is available
+  if (SndPcmDelay_ == AlsaSndPcmDelayStub) {
+    printf("⚠️  ALSA: snd_pcm_delay not available\n");
+    printf("    Day 10 latency measurement disabled\n");
+    printf("    Falling back to Day 9 behavior\n");
+  } else {
+    printf("✓ ALSA: Day 10 latency measurement available\n");
+  }
+
+  printf("✓ ALSA library loaded successfully\n");
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -466,6 +489,10 @@ void linux_init_sound(int32_t samples_per_second, int32_t buffer_size_bytes) {
   printf("   Latency:      %.1f ms\n", latency_us / 1000.0f);
 }
 
+file_scoped_fn inline bool linux_audio_has_latency_measurement(void) {
+  return SndPcmDelay_ != AlsaSndPcmDelayStub;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // Day 8: Fill Sound Buffer with Square Wave
 // ═══════════════════════════════════════════════════════════════
@@ -478,23 +505,38 @@ void linux_init_sound(int32_t samples_per_second, int32_t buffer_size_bytes) {
 //
 // ALSA is simpler because it manages the ring buffer for us!
 // ═══════════════════════════════════════════════════════════════
+//
+// ═══════════════════════════════════════════════════════════════
+// 🔊 LINUX AUDIO BUFFER FILLING (Day 9 + Day 10)
+// ═══════════════════════════════════════════════════════════════
+//
+// This function has TWO MODES:
+//
+// MODE 1 (Day 10 - Latency-Aware):
+//   - IF snd_pcm_delay is available
+//   - Measure current latency
+//   - Calculate exactly how much to write to maintain target
+//   - Write only what's needed
+//
+// MODE 2 (Day 9 - Availability-Based):
+//   - IF snd_pcm_delay is NOT available
+//   - Fill based on snd_pcm_avail() only
+//   - Write as much as ALSA allows (up to our buffer size)
+//
+// This graceful degradation is Casey's pattern!
 void linux_fill_sound_buffer(void) {
   if (!g_sound_output.is_valid) {
     return;
   }
 
   // ───────────────────────────────────────────────────────────
-  // Step 1: Check how many frames ALSA wants
-  // ───────────────────────────────────────────────────────────
-  // snd_pcm_avail() returns how many frames we CAN write
-  // This is like GetCurrentPosition() in DirectSound
+  // STEP 1: Query available frames (BOTH modes need this)
   // ───────────────────────────────────────────────────────────
 
   long frames_available = SndPcmAvail(g_sound_output.handle);
 
   if (frames_available < 0) {
-    // Error occurred (probably underrun)
-    // Try to recover
+    // Error (probably underrun)
     int err = SndPcmRecover(g_sound_output.handle, (int)frames_available, 1);
     if (err < 0) {
       fprintf(stderr, "❌ Sound: Recovery failed: %s\n", SndStrerror(err));
@@ -506,64 +548,114 @@ void linux_fill_sound_buffer(void) {
     }
   }
 
-  // Don't write more than our buffer can hold
-  if (frames_available > (long)g_sound_output.sample_buffer_size) {
-    frames_available = g_sound_output.sample_buffer_size;
-  }
+  // ───────────────────────────────────────────────────────────
+  // STEP 2: Calculate how many frames to write
+  // ───────────────────────────────────────────────────────────
+  // This is where Day 9 and Day 10 diverge!
+  // ───────────────────────────────────────────────────────────
 
-  if (frames_available <= 0) {
-    return; // Buffer full, nothing to write
+  long frames_to_write = 0;
+
+  if (linux_audio_has_latency_measurement()) {
+    // ═══════════════════════════════════════════════════════
+    // 🆕 MODE 1: DAY 10 - LATENCY-AWARE FILLING
+    // ═══════════════════════════════════════════════════════
+
+    snd_pcm_sframes_t delay_frames = 0;
+    int delay_err = SndPcmDelay(g_sound_output.handle, &delay_frames);
+
+    if (delay_err < 0) {
+      // Delay query failed - device might be in bad state
+      if (delay_err == -EPIPE) {
+        // Underrun - recover and assume empty buffer
+        SndPcmRecover(g_sound_output.handle, delay_err, 1);
+        delay_frames = 0;
+      } else {
+        // Other error - skip this frame
+        return;
+      }
+    }
+
+    // Calculate how much we need to reach target latency
+    long target_queued = g_sound_output.latency_sample_count;
+    long current_queued = delay_frames;
+    long frames_needed = target_queued - current_queued;
+
+// Optional debug logging
+#if 0
+        static int frame_count = 0;
+        if (frame_count++ % 60 == 0) {
+            float actual_ms = (float)delay_frames / 
+                             g_sound_output.samples_per_second * 1000.0f;
+            float target_ms = (float)target_queued / 
+                             g_sound_output.samples_per_second * 1000.0f;
+            printf("🔊 [Day 10] Latency: %.1fms (target: %.1fms), "
+                   "need %ld frames\n",
+                   actual_ms, target_ms, frames_needed);
+        }
+#endif
+
+    // Clamp to available space and buffer size
+    if (frames_needed < 0) {
+      frames_needed = 0; // Already at or above target
+    }
+    if (frames_needed > frames_available) {
+      frames_needed = frames_available;
+    }
+    if (frames_needed > (long)g_sound_output.sample_buffer_size) {
+      frames_needed = g_sound_output.sample_buffer_size;
+    }
+
+    frames_to_write = frames_needed;
+
+  } else {
+    // ═══════════════════════════════════════════════════════
+    // MODE 2: DAY 9 - AVAILABILITY-BASED FILLING
+    // ═══════════════════════════════════════════════════════
+
+    static bool warned_once = false;
+    if (!warned_once) {
+      printf("ℹ️  [Day 9 Mode] Using availability-based filling\n");
+      warned_once = true;
+    }
+
+    // Fill as much as available (up to our buffer size)
+    frames_to_write = frames_available;
+
+    if (frames_to_write > (long)g_sound_output.sample_buffer_size) {
+      frames_to_write = g_sound_output.sample_buffer_size;
+    }
   }
 
   // ───────────────────────────────────────────────────────────
-  // Step 2: Generate square wave samples
+  // STEP 3: Early exit if nothing to write
   // ───────────────────────────────────────────────────────────
-  //
-  // Casey's formula (Day 8):
-  //   SampleValue = ((RunningSampleIndex / HalfPeriod) % 2)
-  //                 ? ToneVolume : -ToneVolume
-  //
-  // This creates a square wave:
-  //   +3000 for first half of period
-  //   -3000 for second half of period
+
+  if (frames_to_write <= 0) {
+    return;
+  }
+
+  // ───────────────────────────────────────────────────────────
+  // STEP 4: Generate samples (SAME for both modes)
   // ───────────────────────────────────────────────────────────
 
   int16_t *sample_out = g_sound_output.sample_buffer;
 
-  for (long i = 0; i < frames_available; ++i) {
-    //// Calculate sample value (Casey's exact formula)
-    // int16_t sample_value = ((g_sound_output.running_sample_index /
-    //                         g_sound_output.half_wave_period) %
-    //                        2)
-    //                           ? g_sound_output.tone_volume
-    //                           : -g_sound_output.tone_volume;
-
-    // ═══════════════════════════════════════════════════════════
-    // Day 9: Generate sine wave sample
-    // ═══════════════════════════════════════════════════════════
-    // Casey's exact formula:
-    //   SineValue = sinf(tSine);
-    //   SampleValue = (int16)(SineValue * ToneVolume);
-    //   tSine += 2π / WavePeriod;
-    // ═══════════════════════════════════════════════════════════
+  for (long i = 0; i < frames_to_write; ++i) {
+    // Sine wave generation
     real32 sine_value = sinf(g_sound_output.t_sine);
     int16_t sample_value = (int16_t)(sine_value * g_sound_output.tone_volume);
 
-    int left_gain = (100 - g_sound_output.pan_position);  // 0 to 200
-    int right_gain = (100 + g_sound_output.pan_position); // 0 to 200
+    // Panning
+    int left_gain = (100 - g_sound_output.pan_position);
+    int right_gain = (100 + g_sound_output.pan_position);
 
-    // Write to BOTH channels (stereo)
-    *sample_out++ = (sample_value * left_gain) / 200;  // Left channel
-    *sample_out++ = (sample_value * right_gain) / 200; // Right channel
-    //  Why divide by 200?
-    // Because gains range from 0-200, and we want 100% = 200/200 = 1.0
+    *sample_out++ = (sample_value * left_gain) / 200;  // Left
+    *sample_out++ = (sample_value * right_gain) / 200; // Right
 
-    // NOTE: maybe try `fixed-point phase` _(Instead of float, use a 32-bit
-    // unsigned accumulator)_ Increment phase accumulator
-    g_sound_output.t_sine +=
-        (M_double_PI * 1.0f) / (float)g_sound_output.wave_period;
+    // Phase increment
+    g_sound_output.t_sine += M_double_PI / (float)g_sound_output.wave_period;
 
-    // Wrap to [0, 2π) range
     if (g_sound_output.t_sine >= M_double_PI) {
       g_sound_output.t_sine -= M_double_PI;
     }
@@ -572,20 +664,13 @@ void linux_fill_sound_buffer(void) {
   }
 
   // ───────────────────────────────────────────────────────────
-  // Step 3: Write samples to ALSA
-  // ───────────────────────────────────────────────────────────
-  //
-  // snd_pcm_writei() copies our samples to ALSA's internal buffer.
-  // ALSA then feeds them to the sound card at the right rate.
-  //
-  // This is simpler than DirectSound's Lock/Unlock pattern!
+  // STEP 5: Write to ALSA (SAME for both modes)
   // ───────────────────────────────────────────────────────────
 
   long frames_written = SndPcmWritei(
-      g_sound_output.handle, g_sound_output.sample_buffer, frames_available);
+      g_sound_output.handle, g_sound_output.sample_buffer, frames_to_write);
 
   if (frames_written < 0) {
-    // Handle errors (underrun, etc.)
     frames_written =
         SndPcmRecover(g_sound_output.handle, (int)frames_written, 1);
     if (frames_written < 0) {
@@ -593,4 +678,104 @@ void linux_fill_sound_buffer(void) {
               SndStrerror((int)frames_written));
     }
   }
+
+// Optional verification
+#if 0
+    if (frames_written > 0 && frames_written != frames_to_write) {
+        printf("⚠️ Partial write: wanted %ld, wrote %ld\n",
+               frames_to_write, frames_written);
+    }
+#endif
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 🔊 DAY 10: Audio Latency Debug Helper
+// ═══════════════════════════════════════════════════════════════
+void linux_debug_audio_latency(void) {
+  if (!g_sound_output.is_valid) {
+    printf("❌ Audio: Not initialized\n");
+    return;
+  }
+
+  printf("┌─────────────────────────────────────────────────────────┐\n");
+  printf("│ 🔊 Audio Debug Info                                     │\n");
+  printf("├─────────────────────────────────────────────────────────┤\n");
+
+  // Check if Day 10 features available
+  if (!linux_audio_has_latency_measurement()) {
+    printf("│ ⚠️  Mode: Day 9 (Availability-Based)                    │\n");
+    printf("│                                                         │\n");
+    printf("│ snd_pcm_delay not available                             │\n");
+    printf("│ Latency measurement disabled                            │\n");
+    printf("│                                                         │\n");
+
+    long frames_available = SndPcmAvail(g_sound_output.handle);
+
+    printf("│ Frames available: %ld                                   │\n",
+           frames_available);
+    printf("│ Sample rate:     %d Hz                                 │\n",
+           g_sound_output.samples_per_second);
+    printf("│ Frequency:       %d Hz                                 │\n",
+           g_sound_output.tone_hz);
+    printf("│ Volume:          %d / 15000                            │\n",
+           g_sound_output.tone_volume);
+    printf("│ Pan:             %+d (L=%d, R=%d)                      │\n",
+           g_sound_output.pan_position, 100 - g_sound_output.pan_position,
+           100 + g_sound_output.pan_position);
+    printf("└─────────────────────────────────────────────────────────┘\n");
+    return;
+  }
+
+  // Day 10 mode - full latency stats
+  printf("│ ✅ Mode: Day 10 (Latency-Aware)                          │\n");
+  printf("│                                                         │\n");
+
+  snd_pcm_sframes_t delay_frames = 0;
+  int err = SndPcmDelay(g_sound_output.handle, &delay_frames);
+
+  if (err < 0) {
+    printf("│ ❌ Can't measure delay: %s                              │\n",
+           SndStrerror(err));
+    printf("└─────────────────────────────────────────────────────────┘\n");
+    return;
+  }
+
+  long frames_available = SndPcmAvail(g_sound_output.handle);
+
+  float actual_latency_ms =
+      (float)delay_frames / g_sound_output.samples_per_second * 1000.0f;
+  float target_latency_ms = (float)g_sound_output.latency_sample_count /
+                            g_sound_output.samples_per_second * 1000.0f;
+
+  printf("│ Target latency:  %.1f ms (%d frames)                 │\n",
+         target_latency_ms, g_sound_output.latency_sample_count);
+  printf("│ Actual latency:  %.1f ms (%ld frames)                │\n",
+         actual_latency_ms, (long)delay_frames);
+
+  // Color-code latency status
+  float latency_diff = actual_latency_ms - target_latency_ms;
+  if (fabs(latency_diff) < 5.0f) {
+    printf("│ Status:          ✅ GOOD (±%.1fms)                       │\n",
+           latency_diff);
+  } else if (fabs(latency_diff) < 10.0f) {
+    printf("│ Status:          ⚠️  OK (±%.1fms)                         │\n",
+           latency_diff);
+  } else {
+    printf("│ Status:          ❌ BAD (±%.1fms)                         │\n",
+           latency_diff);
+  }
+
+  printf("│                                                         │\n");
+  printf("│ Frames available: %ld                                   │\n",
+         frames_available);
+  printf("│ Sample rate:     %d Hz                                 │\n",
+         g_sound_output.samples_per_second);
+  printf("│ Frequency:       %d Hz                                 │\n",
+         g_sound_output.tone_hz);
+  printf("│ Volume:          %d / 15000                            │\n",
+         g_sound_output.tone_volume);
+  printf("│ Pan:             %+d (L=%d, R=%d)                      │\n",
+         g_sound_output.pan_position, 100 - g_sound_output.pan_position,
+         100 + g_sound_output.pan_position);
+  printf("└─────────────────────────────────────────────────────────┘\n");
 }
