@@ -1435,32 +1435,6 @@ void raylib_init_audio(void) {
 
 ---
 
-#### 🔮 Next Steps: Day 10 Preview
-
-**Focus:** Audio Latency Management
-
-Casey will address:
-
-- **Write cursor vs Play cursor** - How far ahead to write audio
-- **Latency measurement** - Actual vs target buffer fill
-- **Debug audio** - Visualizing audio waveforms on screen
-- **Lock/Unlock optimization** - Reducing DirectSound overhead
-
-**Your X11/Raylib equivalents:**
-
-- `snd_pcm_delay()` for latency measurement (X11)
-- Visualizing `t_sine` phase on screen
-- Optimizing buffer sizes for responsiveness vs stability
-- Raylib's automatic latency handling (less work!)
-
-**Prepare by:**
-
-1. Understanding your current `latency_sample_count` (1/15 second)
-2. Measuring actual audio delay with `clock_gettime()`
-3. Thinking about: "How do I know if audio is dropping frames?"
-
----
-
 #### 📊 Implementation Comparison Matrix
 
 | Feature           | Windows (Casey)       | X11/ALSA (Yours)       | Raylib (Yours)             | Complexity                   |
@@ -1541,5 +1515,1188 @@ Casey will address:
 
 - [Raylib Audio Stream Examples](https://github.com/raysan5/raylib/blob/master/examples/audio/)
 - [AudioStream API Reference](https://www.raylib.com/cheatsheet/cheatsheet.html)
+
+---
+
+### 📆 Day 10: Audio Latency Measurement and Performance Timing
+
+**Focus:** Implement precise audio latency control using `snd_pcm_delay()`, add frame timing measurements, and create debugging tools for audio system monitoring.
+
+---
+
+#### 🗓️ Commits
+
+| Date         | Commit    | What Changed                                                     |
+| ------------ | --------- | ---------------------------------------------------------------- |
+| Dec 13, 2025 | `31b5830` | X11: Implement audio latency measurement and debug functionality |
+| Dec 17, 2025 | `73e224c` | Raylib: Add audio debugging and frame timing measurements        |
+
+---
+
+#### 🎯 Core Concepts
+
+| Concept                   | Implementation                                         |
+| ------------------------- | ------------------------------------------------------ |
+| **Latency Measurement**   | `snd_pcm_delay()` queries frames queued in ALSA buffer |
+| **Target Latency**        | Maintain stable ~66.7ms (3200 frames @ 48kHz)          |
+| **Latency-Aware Filling** | Write exactly: `target - current` frames per update    |
+| **Graceful Degradation**  | Fallback to Day 9 if `snd_pcm_delay` unavailable       |
+| **Performance Timing**    | `clock_gettime()` measures frame duration              |
+| **CPU Cycle Counting**    | `__rdtsc()` counts processor cycles per frame          |
+| **Debug Overlay**         | F1 key displays audio stats in ASCII box               |
+
+---
+
+#### 📊 Audio Latency Control Flow
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│              DAY 10: LATENCY-AWARE AUDIO                        │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ┌──────────────────────────────────────────────────┐           │
+│  │ Step 1: Query Current Latency                    │           │
+│  │                                                   │           │
+│  │  snd_pcm_delay(handle, &delay_frames)            │           │
+│  │  Result: delay_frames = 3098                     │           │
+│  │          (64.5ms @ 48kHz)                        │           │
+│  └────────────────┬─────────────────────────────────┘           │
+│                   ↓                                             │
+│  ┌──────────────────────────────────────────────────┐           │
+│  │ Step 2: Calculate Frames Needed                  │           │
+│  │                                                   │           │
+│  │  target = 3200 frames (66.7ms)                   │           │
+│  │  current = 3098 frames (from query)              │           │
+│  │  needed = target - current                       │           │
+│  │         = 3200 - 3098 = 102 frames               │           │
+│  └────────────────┬─────────────────────────────────┘           │
+│                   ↓                                             │
+│  ┌──────────────────────────────────────────────────┐           │
+│  │ Step 3: Generate & Write Samples                 │           │
+│  │                                                   │           │
+│  │  for (i = 0; i < 102; i++) {                     │           │
+│  │      sample = sin(t_sine) * volume;              │           │
+│  │      buffer[i] = apply_pan(sample);              │           │
+│  │  }                                                │           │
+│  │  snd_pcm_writei(handle, buffer, 102);            │           │
+│  └──────────────────────────────────────────────────┘           │
+│                                                                 │
+│  Result: Latency maintained at stable 66.7ms ✅                 │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### 🎭 Day 9 vs Day 10: Comparison
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│         DAY 9 (Availability-Based)                              │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  frames_available = snd_pcm_avail(handle);                      │
+│  // "How much CAN I write?"                                     │
+│                                                                 │
+│  generate_samples(frames_available);                            │
+│  snd_pcm_writei(handle, buffer, frames_available);              │
+│                                                                 │
+│  Problem: Latency fluctuates! 📊                                │
+│    - Sometimes 50ms                                             │
+│    - Sometimes 120ms                                            │
+│    - No control over consistency                                │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│         DAY 10 (Latency-Aware)                                  │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  delay_frames = snd_pcm_delay(handle);                          │
+│  // "How much IS queued?"                                       │
+│                                                                 │
+│  frames_needed = target_latency - delay_frames;                 │
+│  // "How much do I NEED to maintain target?"                    │
+│                                                                 │
+│  generate_samples(frames_needed);                               │
+│  snd_pcm_writei(handle, buffer, frames_needed);                 │
+│                                                                 │
+│  Result: Stable 66.7ms latency! ✅                              │
+│    - Always within ±5ms of target                               │
+│    - Responsive audio feedback                                  │
+│    - Professional game audio quality                            │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### 💻 Code Snippets with Explanations
+
+**1. Dynamic Loading of `snd_pcm_delay` (Graceful Degradation Pattern)**
+
+```c
+// audio.h - Step 1: Define function signature
+#define ALSA_SND_PCM_DELAY(name) \
+    int name(snd_pcm_t *pcm, snd_pcm_sframes_t *delayp)
+
+typedef ALSA_SND_PCM_DELAY(alsa_snd_pcm_delay);
+
+// Step 2: Declare stub (fallback when ALSA unavailable)
+ALSA_SND_PCM_DELAY(AlsaSndPcmDelayStub);
+
+// Step 3: Declare function pointer
+extern alsa_snd_pcm_delay *SndPcmDelay_;
+
+// Step 4: Create clean API alias
+#define SndPcmDelay SndPcmDelay_
+
+// ───────────────────────────────────────────────────────────────
+// audio.c - Implementation
+// ───────────────────────────────────────────────────────────────
+
+// Stub implementation (returns error)
+ALSA_SND_PCM_DELAY(AlsaSndPcmDelayStub) {
+    (void)pcm;     // Suppress unused parameter warning
+    (void)delayp;
+    return -1;     // Error: function not available
+}
+
+// Initialize to stub (safe default)
+alsa_snd_pcm_delay *SndPcmDelay_ = AlsaSndPcmDelayStub;
+
+// Try to load real function
+void linux_load_alsa(void) {
+    // ... open ALSA library with dlopen ...
+
+    // Attempt to load snd_pcm_delay
+    LOAD_ALSA_FN(SndPcmDelay_, "snd_pcm_delay", alsa_snd_pcm_delay);
+
+    // Check result
+    if (SndPcmDelay_ == AlsaSndPcmDelayStub) {
+        printf("⚠️  ALSA: snd_pcm_delay not available\n");
+        printf("    Day 10 latency measurement disabled\n");
+        printf("    Falling back to Day 9 behavior\n");
+    } else {
+        printf("✓ ALSA: Day 10 latency measurement available\n");
+    }
+}
+
+// Helper to check availability
+inline bool linux_audio_has_latency_measurement(void) {
+    return SndPcmDelay_ != AlsaSndPcmDelayStub;
+}
+```
+
+**Why this pattern?**
+
+- **Portability:** Code compiles even if ALSA doesn't have `snd_pcm_delay`
+- **Runtime flexibility:** Detects availability at runtime, not compile-time
+- **Graceful degradation:** Falls back to Day 9 mode automatically
+- **No crashes:** Stub prevents segfaults if function missing
+
+---
+
+**2. Latency-Aware Buffer Filling (The Core Algorithm)**
+
+```c
+void linux_fill_sound_buffer(void) {
+    // Step 1: Query available space (both modes need this)
+    long frames_available = SndPcmAvail(g_sound_output.handle);
+
+    if (frames_available < 0) {
+        // Handle underrun (buffer ran dry)
+        SndPcmRecover(g_sound_output.handle, frames_available, 1);
+        return;
+    }
+
+    // Step 2: Calculate frames to write (MODE-DEPENDENT)
+    long frames_to_write = 0;
+
+    if (linux_audio_has_latency_measurement()) {
+        // ═══════════════════════════════════════════════════════
+        // MODE 1: DAY 10 - LATENCY-AWARE
+        // ═══════════════════════════════════════════════════════
+
+        // Query current latency
+        snd_pcm_sframes_t delay_frames = 0;
+        int err = SndPcmDelay(g_sound_output.handle, &delay_frames);
+
+        if (err < 0) {
+            if (err == -EPIPE) {
+                // Underrun - assume buffer empty
+                SndPcmRecover(g_sound_output.handle, err, 1);
+                delay_frames = 0;
+            } else {
+                return;  // Other error - skip frame
+            }
+        }
+
+        // Calculate: how much to reach target?
+        long target_queued = g_sound_output.latency_sample_count;  // 3200
+        long current_queued = delay_frames;
+        long frames_needed = target_queued - current_queued;
+
+        // Clamp to valid range
+        if (frames_needed < 0) {
+            frames_needed = 0;  // Already at/above target
+        }
+        if (frames_needed > frames_available) {
+            frames_needed = frames_available;  // Can't write more than available
+        }
+        if (frames_needed > g_sound_output.sample_buffer_size) {
+            frames_needed = g_sound_output.sample_buffer_size;  // Buffer limit
+        }
+
+        frames_to_write = frames_needed;
+
+    } else {
+        // ═══════════════════════════════════════════════════════
+        // MODE 2: DAY 9 - AVAILABILITY-BASED (FALLBACK)
+        // ═══════════════════════════════════════════════════════
+
+        // Just fill as much as available
+        frames_to_write = frames_available;
+
+        if (frames_to_write > g_sound_output.sample_buffer_size) {
+            frames_to_write = g_sound_output.sample_buffer_size;
+        }
+    }
+
+    // Step 3: Early exit if nothing to write
+    if (frames_to_write <= 0) {
+        return;
+    }
+
+    // Step 4: Generate samples (SAME for both modes)
+    int16_t *sample_out = g_sound_output.sample_buffer;
+
+    for (long i = 0; i < frames_to_write; ++i) {
+        // Sine wave generation
+        float sine_value = sinf(g_sound_output.t_sine);
+        int16_t sample_value = (int16_t)(sine_value * g_sound_output.tone_volume);
+
+        // Apply stereo panning
+        int left_gain = (100 - g_sound_output.pan_position);
+        int right_gain = (100 + g_sound_output.pan_position);
+
+        *sample_out++ = (sample_value * left_gain) / 200;   // Left channel
+        *sample_out++ = (sample_value * right_gain) / 200;  // Right channel
+
+        // Increment phase
+        g_sound_output.t_sine += M_double_PI / g_sound_output.wave_period;
+
+        if (g_sound_output.t_sine >= M_double_PI) {
+            g_sound_output.t_sine -= M_double_PI;
+        }
+
+        g_sound_output.running_sample_index++;
+    }
+
+    // Step 5: Write to ALSA
+    long frames_written = SndPcmWritei(
+        g_sound_output.handle,
+        g_sound_output.sample_buffer,
+        frames_to_write
+    );
+
+    if (frames_written < 0) {
+        SndPcmRecover(g_sound_output.handle, frames_written, 1);
+    }
+}
+```
+
+**Casey's Philosophy:**
+
+- **Feedback loop:** Measure → Calculate → Adjust → Measure again
+- **Precise control:** Write exactly what's needed, not "as much as possible"
+- **Stable latency:** Keep audio delay consistent for responsive gameplay
+- **Graceful degradation:** Works even if measurement unavailable
+
+---
+
+**3. Performance Timing Measurements**
+
+```c
+// backend.c - Frame timing setup
+
+// High-precision timers
+struct timespec start, end;
+uint64_t start_cycles, end_cycles;
+
+// Before main loop
+clock_gettime(CLOCK_MONOTONIC, &start);
+start_cycles = __rdtsc();
+
+while (game_running) {
+    // ... handle events ...
+    // ... update game ...
+    // ... render frame ...
+
+    // Measure frame time
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    end_cycles = __rdtsc();
+
+    // Calculate metrics
+    double ms_per_frame =
+        (end.tv_sec - start.tv_sec) * 1000.0 +
+        (end.tv_nsec - start.tv_nsec) / 1000000.0;
+
+    double fps = 1000.0 / ms_per_frame;
+
+    double mcpf = (end_cycles - start_cycles) / 1000000.0;
+
+    printf("%.2fms/f, %.2ff/s, %.2fmc/f\n", ms_per_frame, fps, mcpf);
+
+    // Prepare for next frame
+    start = end;
+    start_cycles = end_cycles;
+}
+```
+
+**Why three measurements?**
+
+| Metric   | What It Measures       | Why It Matters                                 |
+| -------- | ---------------------- | ---------------------------------------------- |
+| **ms/f** | Milliseconds per frame | Direct frame time (target: 16.67ms for 60 FPS) |
+| **f/s**  | Frames per second      | User-friendly metric (target: 60+ FPS)         |
+| **mc/f** | Megacycles per frame   | CPU usage independent of clock speed           |
+
+**Linux vs Windows:**
+
+- **Linux:** `clock_gettime(CLOCK_MONOTONIC, ...)` - POSIX standard
+- **Windows:** `QueryPerformanceCounter()` - Win32 API
+- **Both:** High-precision, sub-microsecond accuracy
+
+---
+
+**4. Audio Debug Overlay (F1 Key)**
+
+```c
+void linux_debug_audio_latency(void) {
+    if (!g_sound_output.is_valid) {
+        printf("❌ Audio: Not initialized\n");
+        return;
+    }
+
+    printf("┌─────────────────────────────────────────────────────────┐\n");
+    printf("│ 🔊 Audio Debug Info                                     │\n");
+    printf("├─────────────────────────────────────────────────────────┤\n");
+
+    if (!linux_audio_has_latency_measurement()) {
+        // Day 9 mode
+        printf("│ ⚠️  Mode: Day 9 (Availability-Based)                    │\n");
+        printf("│ snd_pcm_delay not available                             │\n");
+        // ... show basic stats ...
+        return;
+    }
+
+    // Day 10 mode - full stats
+    printf("│ ✅ Mode: Day 10 (Latency-Aware)                          │\n");
+
+    // Query current latency
+    snd_pcm_sframes_t delay_frames = 0;
+    int err = SndPcmDelay(g_sound_output.handle, &delay_frames);
+
+    if (err < 0) {
+        printf("│ ❌ Can't measure delay: %s                              │\n",
+               SndStrerror(err));
+        return;
+    }
+
+    // Calculate milliseconds
+    float actual_latency_ms =
+        (float)delay_frames / g_sound_output.samples_per_second * 1000.0f;
+    float target_latency_ms =
+        (float)g_sound_output.latency_sample_count /
+        g_sound_output.samples_per_second * 1000.0f;
+
+    // Display latency comparison
+    printf("│ Target latency:  %.1f ms (%d frames)                 │\n",
+           target_latency_ms, g_sound_output.latency_sample_count);
+    printf("│ Actual latency:  %.1f ms (%ld frames)                │\n",
+           actual_latency_ms, (long)delay_frames);
+
+    // Color-coded status
+    float diff = actual_latency_ms - target_latency_ms;
+    if (fabs(diff) < 5.0f) {
+        printf("│ Status:          ✅ GOOD (±%.1fms)                       │\n", diff);
+    } else if (fabs(diff) < 10.0f) {
+        printf("│ Status:          ⚠️  OK (±%.1fms)                         │\n", diff);
+    } else {
+        printf("│ Status:          ❌ BAD (±%.1fms)                         │\n", diff);
+    }
+
+    // Additional stats
+    printf("│ Sample rate:     %d Hz                                 │\n",
+           g_sound_output.samples_per_second);
+    printf("│ Frequency:       %d Hz                                 │\n",
+           g_sound_output.tone_hz);
+    printf("│ Volume:          %d / 15000                            │\n",
+           g_sound_output.tone_volume);
+    printf("└─────────────────────────────────────────────────────────┘\n");
+}
+```
+
+**F1 Key Handler:**
+
+```c
+// backend.c - Keyboard handling
+case XK_F1: {
+    printf("F1 pressed - showing audio debug\n");
+    linux_debug_audio_latency();
+    break;
+}
+```
+
+---
+
+**5. Raylib Implementation (Simplified)**
+
+```c
+// Raylib backend doesn't need Day 10 latency control
+// (callback-based system handles it automatically)
+// But we still add timing and debug features!
+
+// backend.c (raylib)
+struct timespec g_frame_start, g_frame_end;
+
+// Main loop
+clock_gettime(CLOCK_MONOTONIC, &g_frame_start);
+
+while (!WindowShouldClose()) {
+    // ... game logic ...
+
+    // Measure frame time
+    clock_gettime(CLOCK_MONOTONIC, &g_frame_end);
+
+    double ms_per_frame =
+        (g_frame_end.tv_sec - g_frame_start.tv_sec) * 1000.0 +
+        (g_frame_end.tv_nsec - g_frame_start.tv_nsec) / 1000000.0;
+
+    double fps = 1000.0 / ms_per_frame;
+
+    printf("%.2fms/f, %.2ff/s\n", ms_per_frame, fps);
+
+    g_frame_start = g_frame_end;
+}
+
+// F1 handler
+if (IsKeyPressed(KEY_F1)) {
+    raylib_debug_audio();
+}
+```
+
+**Why Raylib is simpler:**
+
+- No manual latency control needed (callback handles it)
+- No `snd_pcm_delay` equivalent (miniaudio abstracts it)
+- Still benefits from timing and debug features
+
+---
+
+#### 🐛 Common Pitfalls
+
+| Issue                                                   | Cause                                           | Fix                                                           |
+| ------------------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------- |
+| **Compile error: `undefined reference to SndPcmDelay`** | Forgot to initialize function pointer           | Add `SndPcmDelay_ = AlsaSndPcmDelayStub;` in audio.c          |
+| **Segfault when calling `SndPcmDelay()`**               | Function pointer is NULL                        | Check if `LOAD_ALSA_FN()` succeeded before using              |
+| **Latency measurement returns -EPIPE**                  | Audio underrun occurred                         | Call `SndPcmRecover()` and retry with `delay_frames = 0`      |
+| **Timing shows 0.00ms/f**                               | Division by nanoseconds instead of microseconds | Use `/ 1000000.0` not `/ 1000.0` for ns→ms                    |
+| **FPS fluctuates wildly**                               | Measuring wall clock instead of monotonic       | Use `CLOCK_MONOTONIC` not `CLOCK_REALTIME`                    |
+| **Macro name collision**                                | `#define SndPcmDelay SndPcmDelay`               | Use underscore: `SndPcmDelay_` for variable, macro maps to it |
+| **Day 10 mode never activates**                         | Forgot to load function in `linux_load_alsa()`  | Add `LOAD_ALSA_FN(SndPcmDelay_, ...)`                         |
+| **Raylib: timing shows huge numbers**                   | Wrong conversion factor                         | Use `* 1000.0` for sec→ms, `/ 1000000.0` for ns→ms            |
+
+---
+
+#### ⚙️ Performance Analysis
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│         Understanding Frame Timing Output                       │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Example output: "2.47ms/f, 404.43f/s, 5.22mc/f"                │
+│                                                                 │
+│  2.47ms/f:                                                      │
+│    - This frame took 2.47 milliseconds                          │
+│    - Target: 16.67ms (for 60 FPS)                               │
+│    - Status: ✅ Excellent! Running at 400+ FPS                  │
+│                                                                 │
+│  404.43f/s:                                                     │
+│    - Running at 404 frames per second                           │
+│    - Formula: 1000ms / 2.47ms = 404.43                          │
+│    - Way above 60 FPS target (game is simple right now)         │
+│                                                                 │
+│  5.22mc/f:                                                      │
+│    - Used 5.22 million CPU cycles                               │
+│    - On 3GHz CPU: 5.22M / 3000M = 0.17% CPU usage               │
+│    - Very efficient! (Most time is sleeping/waiting)            │
+│                                                                 │
+│  Why does FPS vary?                                             │
+│    - X11 event processing (0-10 events)                         │
+│    - Audio buffer filling (0-1024 frames)                       │
+│    - OS scheduling (context switches)                           │
+│    - Cache misses                                               │
+│    - This is NORMAL! Don't worry yet.                           │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### 📊 X11 vs Raylib: Day 10 Comparison
+
+| Feature                    | X11 Backend                        | Raylib Backend             |
+| -------------------------- | ---------------------------------- | -------------------------- |
+| **Latency Measurement**    | ✅ `snd_pcm_delay()`               | ❌ Not exposed (automatic) |
+| **Manual Latency Control** | ✅ Calculate `target - current`    | ❌ Callback-based          |
+| **Day 10 Mode Available**  | ✅ Yes (if ALSA supports it)       | ⚠️ Estimated only          |
+| **Frame Timing**           | ✅ `clock_gettime()` + `__rdtsc()` | ✅ `clock_gettime()`       |
+| **CPU Cycle Counting**     | ✅ `__rdtsc()`                     | ✅ Same                    |
+| **F1 Debug Overlay**       | ✅ Full stats with latency         | ✅ Simplified stats        |
+| **Graceful Degradation**   | ✅ Falls back to Day 9             | N/A (always "Day 10-like") |
+| **Buffer Filling Logic**   | ✅ Two modes (Day 9/Day 10)        | ✅ Automatic (one mode)    |
+
+---
+
+#### 🎓 Skills Acquired
+
+- ✅ **Audio Latency Control**
+
+  - Query queued frames with `snd_pcm_delay()`
+  - Calculate precise write amounts to maintain target
+  - Implement feedback loop for stable latency
+
+- ✅ **Graceful Degradation Pattern**
+
+  - Dynamic loading with function pointers
+  - Stub implementations for missing functions
+  - Runtime detection of capabilities
+  - Automatic fallback to simpler mode
+
+- ✅ **Performance Measurement**
+
+  - High-precision timing with `clock_gettime()`
+  - CPU cycle counting with `__rdtsc()`
+  - Calculate ms/frame, FPS, megacycles/frame
+  - Understand frame time variance
+
+- ✅ **Debug Tooling**
+
+  - ASCII art debug overlays
+  - Keyboard shortcuts (F1 for audio stats)
+  - Color-coded status indicators
+  - Real-time metrics display
+
+- ✅ **Cross-Platform Abstraction**
+
+  - Understand Raylib's callback model
+  - Compare manual vs automatic latency control
+  - Adapt concepts across backends
+
+- ✅ **C Programming Patterns**
+  - Function pointer pattern for dynamic loading
+  - Macro hygiene (underscore suffix)
+  - Inline helper functions
+  - Static analysis warning suppression
+
+---
+
+#### 📚 Additional Resources
+
+**ALSA Documentation:**
+
+- `snd_pcm_delay()`: https://www.alsa-project.org/alsa-doc/alsa-lib/group___p_c_m.html#ga
+- Latency tuning guide: https://alsa.opensrc.org/Latency
+
+**Linux Timing:**
+
+- `clock_gettime()` man page: `man 2 clock_gettime`
+- POSIX timers: https://linux.die.net/man/2/clock_gettime
+
+**CPU Cycle Counting:**
+
+- `__rdtsc()` intrinsic: https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=rdtsc
+
+**Casey's Day 10 Stream:**
+
+- Handmade Hero Day 10: https://hero.handmade.network/episode/code/day010/
+
+---
+
+#### 💡 Key Takeaways
+
+1. **Latency control is a feedback loop:** Measure → Calculate → Write → Measure again
+
+2. **Graceful degradation is professional:** Code should work even when ideal conditions aren't met
+
+3. **Performance measurement is essential:** You can't optimize what you don't measure
+
+4. **Platform differences matter:** X11 gives manual control, Raylib abstracts it away - both valid approaches
+
+5. **Debug tools save time:** F1 overlay is faster than printf debugging
+
+---
+
+### 🔊 Audio Fundamentals: Understanding Sound in Computers
+
+> **Before diving into Day 10's audio latency control, let's understand what audio actually IS and how operating systems handle it.**
+
+---
+
+#### What IS Audio? (For Visual Thinkers)
+
+Sound is **vibrating air**. When you speak, your vocal cords vibrate, pushing air molecules:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    SOUND AS PHYSICAL WAVES                      │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Real World (Air Pressure Over Time):                           │
+│                                                                 │
+│      High    ╱╲      ╱╲      ╱╲      ╱╲                         │
+│   Pressure  ╱  ╲    ╱  ╲    ╱  ╲    ╱  ╲                        │
+│           ─╯────╲──╯────╲──╯────╲──╯────╲─── Time →            │
+│                  ╲╱      ╲╱      ╲╱      ╲╱                      │
+│      Low                                                        │
+│   Pressure                                                      │
+│                                                                 │
+│  Properties:                                                    │
+│  - Frequency (Hz): How fast it oscillates (pitch)               │
+│  - Amplitude: How tall the wave is (volume)                     │
+│  - Phase: Where in the cycle we are                             │
+│                                                                 │
+│  Example:                                                       │
+│  - 256 Hz tone = 256 complete waves per second                  │
+│  - Middle C = 261.63 Hz                                         │
+│  - Human hearing: ~20 Hz to 20,000 Hz                           │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### How Computers Represent Sound
+
+Computers can't store waves—they store **numbers**. We **sample** the wave:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    ANALOG → DIGITAL CONVERSION                  │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Step 1: Sample the Wave (Take measurements)                    │
+│                                                                 │
+│      ╱╲         Sampling Points (48,000 times per second)       │
+│     ╱  ╲        ↓    ↓    ↓    ↓    ↓    ↓    ↓                │
+│   ─╯────╲───────●────●────●────●────●────●────●─── Time →      │
+│          ╲╱                                                     │
+│                                                                 │
+│  Step 2: Quantize (Convert to integers)                         │
+│                                                                 │
+│  Sample 1: 0      (silence)                                     │
+│  Sample 2: 3000   (low volume)                                  │
+│  Sample 3: 6000   (medium volume)                               │
+│  Sample 4: 8000   (higher volume)                               │
+│  Sample 5: 6000   (back down)                                   │
+│  Sample 6: 3000   (lower)                                       │
+│  Sample 7: 0      (silence again)                               │
+│                                                                 │
+│  These numbers are stored in memory!                            │
+│                                                                 │
+│  ┌──────────────────────────────────────────┐                  │
+│  │ Memory (array of samples):               │                  │
+│  │ [0, 3000, 6000, 8000, 6000, 3000, 0, ...] │                  │
+│  └──────────────────────────────────────────┘                  │
+│                                                                 │
+│  Sample Rate: How many samples per second                       │
+│  - CD Quality: 44,100 Hz (44,100 samples/sec)                   │
+│  - Game Audio: 48,000 Hz (48,000 samples/sec)                   │
+│  - Phone Calls: 8,000 Hz (lower quality, smaller size)          │
+│                                                                 │
+│  Bit Depth: Range of each sample                                │
+│  - 8-bit: -128 to +127 (old games, lo-fi)                       │
+│  - 16-bit: -32,768 to +32,767 (CD quality) ← WE USE THIS        │
+│  - 24-bit: Professional audio                                   │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Key Insight:**
+Sound in a computer is just an **array of numbers**. To play sound, we feed these numbers to the speakers at a specific rate (sample rate).
+
+---
+
+#### How the OS Plays Sound: The Audio Pipeline
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│              OS AUDIO PIPELINE (Linux/ALSA)                     │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  1. YOUR GAME                                                   │
+│  ┌────────────────────────────────────┐                         │
+│  │ Generate samples:                  │                         │
+│  │ sample[0] = 3000;                  │                         │
+│  │ sample[1] = 6000;                  │                         │
+│  │ sample[2] = 8000;                  │                         │
+│  │ ...                                │                         │
+│  └──────────────┬─────────────────────┘                         │
+│                 │ Write samples                                 │
+│                 ↓                                               │
+│  2. ALSA (Audio Layer)                                          │
+│  ┌────────────────────────────────────┐                         │
+│  │ Ring Buffer (in kernel memory):    │                         │
+│  │                                    │                         │
+│  │  ┌──────────────────────────────┐  │                         │
+│  │  │[▓▓▓▓▓░░░░░░░░░░░░░▓▓▓▓▓▓▓▓▓]│  │                         │
+│  │  └──────────────────────────────┘  │                         │
+│  │   ↑ Play    ↑ Empty  ↑ Queued      │                         │
+│  │   Cursor    Space    Samples       │                         │
+│  │                                    │                         │
+│  │  Automatically feeds to hardware   │                         │
+│  └──────────────┬─────────────────────┘                         │
+│                 │ DMA (Direct Memory Access)                    │
+│                 ↓                                               │
+│  3. SOUND CARD (Hardware)                                       │
+│  ┌────────────────────────────────────┐                         │
+│  │ DAC (Digital-to-Analog Converter)  │                         │
+│  │                                    │                         │
+│  │ Numbers → Electrical signals       │                         │
+│  │ 3000 → Low voltage                 │                         │
+│  │ 6000 → Medium voltage              │                         │
+│  │ 8000 → Higher voltage              │                         │
+│  └──────────────┬─────────────────────┘                         │
+│                 │ Analog signal                                 │
+│                 ↓                                               │
+│  4. SPEAKERS                                                    │
+│  ┌────────────────────────────────────┐                         │
+│  │  Voltage → Magnet movement         │                         │
+│  │  Magnet → Speaker cone vibrates    │                         │
+│  │  Cone → Pushes air                 │                         │
+│  │  Air → SOUND! 🔊                    │                         │
+│  └────────────────────────────────────┘                         │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Critical Point:**
+The hardware is **constantly** consuming samples from the buffer. If you don't refill it fast enough → **silence/crackling**!
+
+---
+
+#### What IS Audio Latency?
+
+Latency = **delay** between when you trigger a sound and when you hear it.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    AUDIO LATENCY EXPLAINED                      │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Timeline of a Sound Effect:                                    │
+│                                                                 │
+│  T=0ms: Player presses fire button 🎮                           │
+│         ↓                                                       │
+│  T=0.1ms: Game generates gunshot samples                        │
+│         ↓                                                       │
+│  T=0.2ms: Samples written to ALSA ring buffer                   │
+│         │                                                       │
+│         │  ┌─────────────────────────────────┐                 │
+│         │  │ Ring Buffer:                    │                 │
+│         │  │ [music...music...GUNSHOT...] │                 │
+│         │  │  ↑ Play cursor (slowly moving) │                 │
+│         │  └─────────────────────────────────┘                 │
+│         │                                                       │
+│         │  Hardware is still playing music!                    │
+│         │  Gunshot is QUEUED but not playing yet               │
+│         │                                                       │
+│  T=66.7ms: Hardware cursor reaches gunshot samples              │
+│         ↓                                                       │
+│  T=66.7ms: BANG! Sound plays through speakers 🔊                │
+│                                                                 │
+│  ╔═══════════════════════════════════════════════════╗          │
+│  ║ LATENCY = 66.7ms (time from button to sound)     ║          │
+│  ╚═══════════════════════════════════════════════════╝          │
+│                                                                 │
+│  Problem: Player feels disconnected!                            │
+│  - Button press at T=0                                          │
+│  - Sound heard at T=66.7ms                                      │
+│  - Feels "laggy" or "mushy"                                     │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Analogy:**
+Imagine texting someone who reads texts really slowly:
+
+- You: "Hello!" (T=0)
+- _66.7ms of waiting..._
+- Them: _Sees "Hello!"_ (T=66.7ms)
+- Frustrating delay!
+
+---
+
+#### The Latency Tradeoff
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│              LATENCY vs UNDERRUN TRADEOFF                       │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Scenario A: LOW LATENCY (10ms buffer)                          │
+│  ───────────────────────────────────────                        │
+│                                                                 │
+│  Ring Buffer (480 samples @ 48kHz = 10ms):                      │
+│  ┌────────────────────────────────────────┐                     │
+│  │[▓▓▓▓▓▓▓▓▓▓░░]                          │                     │
+│  └────────────────────────────────────────┘                     │
+│   ↑ Play    ↑ Empty                                             │
+│                                                                 │
+│  ✅ Pro: Very responsive (10ms delay)                           │
+│  ❌ Con: If game lags for 11ms → UNDERRUN! → Crackling!        │
+│                                                                 │
+│  Game frame took 16ms (60 FPS):                                 │
+│    0ms ──────────────────→ 16ms                                 │
+│    [Game logic + rendering]                                     │
+│                    ↑                                            │
+│               At 10ms, buffer ran dry!                          │
+│               💥 CRACKLE/POP                                    │
+│                                                                 │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  │
+│                                                                 │
+│  Scenario B: HIGH LATENCY (200ms buffer)                        │
+│  ────────────────────────────────────────                       │
+│                                                                 │
+│  Ring Buffer (9600 samples @ 48kHz = 200ms):                    │
+│  ┌────────────────────────────────────────┐                     │
+│  │[▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░]  │                     │
+│  └────────────────────────────────────────┘                     │
+│   ↑ Play                    ↑ Empty                             │
+│                                                                 │
+│  ✅ Pro: Very safe (can skip frames without underrun)          │
+│  ❌ Con: Unresponsive (200ms delay is TERRIBLE for games!)     │
+│                                                                 │
+│  Player presses fire:                                           │
+│    0ms ──────────────────────────────────────→ 200ms            │
+│    [Waiting... waiting... waiting... BANG! 💥]                  │
+│                                                                 │
+│    Too slow! Feels broken!                                      │
+│                                                                 │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  │
+│                                                                 │
+│  Scenario C: OPTIMAL LATENCY (66.7ms buffer) ← Casey's Choice   │
+│  ──────────────────────────────────────────────────────────     │
+│                                                                 │
+│  Ring Buffer (3200 samples @ 48kHz = 66.7ms):                   │
+│  ┌────────────────────────────────────────┐                     │
+│  │[▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░]          │                     │
+│  └────────────────────────────────────────┘                     │
+│   ↑ Play          ↑ Empty                                       │
+│                                                                 │
+│  ✅ Pro: Responsive enough for gameplay (~4 frames @ 60 FPS)    │
+│  ✅ Pro: Safe enough to tolerate frame drops                    │
+│                                                                 │
+│  Goldilocks Zone:                                               │
+│  - Not too low (no crackling)                                   │
+│  - Not too high (still responsive)                              │
+│  - Just right! ✨                                                │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Key Formula:**
+
+```
+Latency (ms) = (Buffer Size in Samples / Sample Rate) × 1000
+
+Example:
+3200 samples / 48000 Hz × 1000 = 66.7ms
+```
+
+---
+
+#### Why Can't We Just Use 0ms Latency?
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│          WHY ZERO LATENCY IS IMPOSSIBLE                         │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Fundamental Problems:                                          │
+│                                                                 │
+│  1. Hardware Needs Time                                         │
+│     ─────────────────────                                       │
+│     DAC (Digital-to-Analog Converter) has physical limits       │
+│     - Electrical circuits need time to settle                   │
+│     - Typical minimum: ~3-5ms                                   │
+│                                                                 │
+│  2. CPU Scheduling Isn't Perfect                                │
+│     ────────────────────────────────                            │
+│     Your game doesn't run alone:                                │
+│                                                                 │
+│     Timeline (Linux scheduler):                                 │
+│     0ms ─────────────────────────────────────→ 20ms             │
+│     [Your game][Browser][OS task][Your game]                    │
+│      ↑ Paused!           ↑ Resumed                              │
+│                                                                 │
+│     If buffer is too small:                                     │
+│     - Paused for 5ms → Buffer runs dry → Crackle!              │
+│                                                                 │
+│  3. Frame Rate Varies                                           │
+│     ─────────────────                                           │
+│     Game frames take different times:                           │
+│                                                                 │
+│     Frame 1: 8ms  (fast)                                        │
+│     Frame 2: 12ms (normal)                                      │
+│     Frame 3: 25ms (spike! GC, loading, etc.)                    │
+│     Frame 4: 10ms (back to normal)                              │
+│                                                                 │
+│     Small buffer can't handle frame 3's spike!                  │
+│                                                                 │
+│  4. USB Audio Adds More Delay                                   │
+│     ──────────────────────────────                              │
+│     USB protocol has its own buffering:                         │
+│     - USB polls every 1ms (USB 2.0)                             │
+│     - Adds 1-10ms minimum latency                               │
+│                                                                 │
+│  ╔═══════════════════════════════════════════════════╗          │
+│  ║ Reality: ~20-70ms is the practical range         ║          │
+│  ║ Casey picks 66.7ms as safe middle ground         ║          │
+│  ╚═══════════════════════════════════════════════════╝          │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### How Day 10 Controls Latency: The Feedback Loop
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│              DAY 9 vs DAY 10: THE KEY DIFFERENCE                │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  DAY 9 APPROACH (Availability-Based):                           │
+│  ───────────────────────────────────────                        │
+│                                                                 │
+│  Every frame:                                                   │
+│    1. Ask: "How much CAN I write?"                              │
+│       frames_available = snd_pcm_avail()  → 1024 frames         │
+│                                                                 │
+│    2. Generate that much:                                       │
+│       for (i = 0; i < 1024; i++) { generate_sample(); }         │
+│                                                                 │
+│    3. Write it all:                                             │
+│       snd_pcm_writei(handle, buffer, 1024);                     │
+│                                                                 │
+│  Problem: Latency fluctuates wildly!                            │
+│                                                                 │
+│  Frame 1: Write 1024 samples → Latency = 70ms                   │
+│  Frame 2: Write 512 samples  → Latency = 60ms                   │
+│  Frame 3: Write 2048 samples → Latency = 90ms                   │
+│  Frame 4: Write 256 samples  → Latency = 55ms                   │
+│                                                                 │
+│  Latency graph:                                                 │
+│   90ms │    ╱╲                                                  │
+│   70ms │ ╱╲╱  ╲                                                 │
+│   55ms │╱      ╲─╱                                              │
+│        └───────────── Time                                      │
+│        Wobbly! ⚠️                                                │
+│                                                                 │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  │
+│                                                                 │
+│  DAY 10 APPROACH (Latency-Aware):                               │
+│  ────────────────────────────────────                           │
+│                                                                 │
+│  Every frame:                                                   │
+│    1. Measure: "How much IS queued?"                            │
+│       current_queued = snd_pcm_delay()  → 3098 frames (64.5ms) │
+│                                                                 │
+│    2. Calculate: "How much do I NEED?"                          │
+│       target = 3200 frames (66.7ms)                             │
+│       needed = target - current_queued                          │
+│              = 3200 - 3098 = 102 frames                         │
+│                                                                 │
+│    3. Generate exactly that:                                    │
+│       for (i = 0; i < 102; i++) { generate_sample(); }          │
+│                                                                 │
+│    4. Write it:                                                 │
+│       snd_pcm_writei(handle, buffer, 102);                      │
+│                                                                 │
+│  Result: Stable latency!                                        │
+│                                                                 │
+│  Frame 1: Need 102 → Latency = 66.7ms                           │
+│  Frame 2: Need 95  → Latency = 66.8ms                           │
+│  Frame 3: Need 108 → Latency = 66.6ms                           │
+│  Frame 4: Need 101 → Latency = 66.7ms                           │
+│                                                                 │
+│  Latency graph:                                                 │
+│   70ms │                                                        │
+│   66.7ms│─────────────────                                     │
+│   60ms │                                                        │
+│        └───────────────── Time                                  │
+│        Stable! ✅                                                │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**This is a FEEDBACK LOOP** (like a thermostat):
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    AUDIO FEEDBACK LOOP                          │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Thermostat Analogy:                                            │
+│  ──────────────────                                             │
+│                                                                 │
+│  Target: 70°F                                                   │
+│  Current: 68°F                                                  │
+│  → Turn heater ON for 2 minutes                                 │
+│                                                                 │
+│  Current: 70°F                                                  │
+│  → Turn heater OFF                                              │
+│                                                                 │
+│  Current: 71°F                                                  │
+│  → Turn AC ON for 1 minute                                      │
+│                                                                 │
+│  Audio Equivalent:                                              │
+│  ─────────────────                                              │
+│                                                                 │
+│  Target: 66.7ms latency                                         │
+│  Current: 64.5ms                                                │
+│  → Write 102 samples (add 2.1ms)                                │
+│                                                                 │
+│  Current: 66.7ms                                                │
+│  → Write 0 samples (perfect!)                                   │
+│                                                                 │
+│  Current: 68.0ms                                                │
+│  → Write 0 samples (let it drain)                               │
+│                                                                 │
+│  This keeps latency STABLE! ✨                                  │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### Why This Matters for Games
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│            AUDIO LATENCY IN GAME SCENARIOS                      │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Scenario 1: Fighting Game 🥊                                   │
+│  ───────────────────────────                                    │
+│                                                                 │
+│  Player presses punch button:                                   │
+│                                                                 │
+│  With 200ms latency:                                            │
+│    T=0ms:   Button pressed 🎮                                   │
+│    T=16ms:  Animation starts (visual feedback)                  │
+│    T=200ms: *WHACK!* sound plays 🔊                             │
+│             ↑ Feels WRONG! Sound too late!                      │
+│                                                                 │
+│  With 66.7ms latency (Day 10):                                  │
+│    T=0ms:   Button pressed 🎮                                   │
+│    T=16ms:  Animation starts (visual feedback)                  │
+│    T=66.7ms: *WHACK!* sound plays 🔊                            │
+│             ↑ Feels RIGHT! Barely noticeable delay              │
+│                                                                 │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  │
+│                                                                 │
+│  Scenario 2: Music/Rhythm Game 🎵                               │
+│  ────────────────────────────────                               │
+│                                                                 │
+│  Visual cue appears on screen:                                  │
+│  [  ↓  ]  ← Player must press button when arrow reaches line    │
+│  [     ]                                                        │
+│  [─────]  ← Target line                                         │
+│                                                                 │
+│  T=0ms:   Arrow reaches line (visual)                           │
+│  T=0ms:   Player presses button 🎮                              │
+│  T=66.7ms: *DING!* sound plays 🔊                               │
+│                                                                 │
+│  Problem: Sound is 66.7ms behind visuals!                       │
+│  Solution: Game compensates by playing sound 66.7ms EARLY       │
+│           (queues sound before arrow reaches line)              │
+│                                                                 │
+│  This is why rhythm games need STABLE latency!                  │
+│  Fluctuating latency = impossible to compensate!                │
+│                                                                 │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  │
+│                                                                 │
+│  Scenario 3: FPS Game 🔫                                        │
+│  ─────────────────────                                          │
+│                                                                 │
+│  Player fires gun:                                              │
+│                                                                 │
+│  T=0ms:    Click! 🖱️                                            │
+│  T=16ms:   Muzzle flash appears 💥 (visual)                     │
+│  T=66.7ms: *BANG!* 🔊 (audio)                                   │
+│                                                                 │
+│  66.7ms = ~4 frames @ 60 FPS                                    │
+│  Acceptable! Brain doesn't notice < 80ms                        │
+│                                                                 │
+│  But if latency varies (50ms, 100ms, 70ms, 120ms):             │
+│  → Feels "mushy" or "inconsistent"                              │
+│  → Players subconsciously notice!                               │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Human Perception:**
+
+- < 20ms: Imperceptible (feels instant)
+- 20-50ms: Noticeable if you're looking for it
+- 50-80ms: Acceptable for games (Day 10's target)
+- 80-150ms: Noticeable lag
+- \> 150ms: Feels broken
+
+---
+
+#### Summary: Audio in 5 Levels
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│              AUDIO UNDERSTANDING LADDER                         │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Level 1 (5 years old): 🎵                                      │
+│  ─────────────────────                                          │
+│  "Sound is vibrating air. Computers turn numbers into sound."   │
+│                                                                 │
+│  Level 2 (Beginner programmer): 💻                              │
+│  ──────────────────────────────                                 │
+│  "Sound is an array of samples. We write samples to a buffer,   │
+│   and hardware plays them at a fixed rate (sample rate)."       │
+│                                                                 │
+│  Level 3 (Game developer): 🎮                                   │
+│  ──────────────────────────                                     │
+│  "The OS maintains a ring buffer. We write samples to it        │
+│   faster than hardware consumes them. The gap between write     │
+│   and play is latency. Too small = crackling. Too big = lag."  │
+│                                                                 │
+│  Level 4 (Handmade Hero Day 10): 🎯                             │
+│  ──────────────────────────────────                             │
+│  "We measure current latency, compare to target, and write      │
+│   exactly the right amount to maintain stable latency. This     │
+│   is a feedback loop. Day 9 blindly fills, Day 10 measures."   │
+│                                                                 │
+│  Level 5 (Audio engineer): 🔬                                   │
+│  ─────────────────────────                                      │
+│  "We consider DMA timing, interrupt coalescing, ALSA period     │
+│   sizes, resampling artifacts, and jitter correction to         │
+│   minimize latency while maximizing reliability."               │
+│                                                                 │
+│  You're at Level 4 now! 🎉                                      │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ---
