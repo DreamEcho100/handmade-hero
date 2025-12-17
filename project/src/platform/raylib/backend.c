@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 199309L
 #include "backend.h"
 #include "../base.h"
 #include "audio.h"
@@ -7,6 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <time.h>
 
 typedef struct {
   void *memory;
@@ -65,6 +67,8 @@ typedef struct {
 
 file_scoped_global_var OffscreenBuffer g_backbuffer;
 file_scoped_global_var GameState g_game_state = {0}; // Zero-initialized struct
+file_scoped_global_var struct timespec g_frame_start;
+file_scoped_global_var struct timespec g_frame_end;
 
 // file_scoped_global_var int g_joystick_fd = -1;
 
@@ -503,6 +507,8 @@ int platform_main() {
 
   printf("Entering main loop...\n");
 
+  clock_gettime(CLOCK_MONOTONIC, &g_frame_start);
+
   /**
    * EVENT LOOP
    *
@@ -601,6 +607,11 @@ int platform_main() {
       g_game_state.is_running = false;
     }
 
+    if (IsKeyPressed(KEY_F1)) {
+      printf("F1 pressed - showing audio debug\n");
+      raylib_debug_audio();
+    }
+
     // ═══════════════════════════════════════════════════════
     // 🎮 GAMEPAD INPUT (cross-platform!)
     // ═══════════════════════════════════════════════════════
@@ -645,6 +656,17 @@ int platform_main() {
       update_window_from_backbuffer(&g_backbuffer);
       EndDrawing();
     }
+
+    clock_gettime(CLOCK_MONOTONIC, &g_frame_end);
+
+    real64 ms_per_frame =
+        (g_frame_end.tv_sec - g_frame_start.tv_sec) * 1000.0 +
+        (g_frame_end.tv_nsec - g_frame_start.tv_nsec) * 1000000.0;
+    real64 fps = 1000.0 / ms_per_frame;
+
+    printf("%.2fms/f, %.2ff/s\n", ms_per_frame, fps);
+
+    g_frame_start = g_frame_end;
   }
 
   /**

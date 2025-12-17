@@ -46,6 +46,7 @@ void handle_update_tone_frequency(int hz_to_add);
 void handle_increase_volume(int num);
 void handle_musical_keypress(int key);
 void handle_increase_pan(int num);
+void raylib_debug_audio(void);
 
 #endif // RAYLIB_AUDIO_H
 #define RAYLIB_AUDIO_H

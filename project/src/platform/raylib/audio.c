@@ -282,3 +282,26 @@ inline void handle_increase_pan(int num) {
   printf("🎧 Pan: %s %+d\n", indicator, g_sound_output.pan_position);
   printf("    L ◀%s▶ R\n", indicator);
 }
+
+void raylib_debug_audio(void) {
+  if (!g_sound_output.is_initialized) {
+    printf("❌ Audio: Not initialized\n");
+    return;
+  }
+
+  printf("┌─────────────────────────────────────────────────────────┐\n");
+  printf("│ 🔊 Raylib Audio Debug Info                              │\n");
+  printf("├─────────────────────────────────────────────────────────┤\n");
+  printf("│ Mode: Callback-based (automatic latency control)       │\n");
+  printf("│                                                         │\n");
+  printf("│ Sample rate:       %d Hz                                 │\n",
+         g_sound_output.samples_per_second);
+  printf("│ Frequency:         %d Hz                                 │\n",
+         g_sound_output.tone_hz);
+  printf("│ Volume:            %d / 15000                            │\n",
+         g_sound_output.tone_volume);
+  printf("│ Pan:               %+d (L=%d, R=%d)                      │\n",
+         g_sound_output.pan_position, 100 - g_sound_output.pan_position,
+         100 + g_sound_output.pan_position);
+  printf("└─────────────────────────────────────────────────────────┘\n");
+}
