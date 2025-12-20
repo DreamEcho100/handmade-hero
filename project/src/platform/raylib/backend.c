@@ -1,7 +1,16 @@
 #define _POSIX_C_SOURCE 199309L
 #include "backend.h"
-#include "../base.h"
+#include "../../base.h"
+#include "../../game.h"
 #include "audio.h"
+
+PlatformPixelFormatShift g_platform_pixel_format_shift = {
+    .ALPHA_SHIFT = 24,
+    .RED_SHIFT = 0,
+    .GREEN_SHIFT = 8,
+    .BLUE_SHIFT = 16,
+};
+
 #include <raylib.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -11,23 +20,9 @@
 #include <time.h>
 
 typedef struct {
-  void *memory;
-  int width;
-  int height;
-  int bytes_per_pixel;
   Texture2D texture;
   bool has_texture;
-} OffscreenBuffer;
-
-typedef struct {
-  int offset_x;
-  int offset_y;
-} GradientState;
-
-typedef struct {
-  int offset_x;
-  int offset_y;
-} PixelState;
+} OffscreenBufferMeta;
 
 // Button states (mirrors Casey's XInput button layout)
 typedef struct {
@@ -66,6 +61,7 @@ typedef struct {
 } GameState;
 
 file_scoped_global_var OffscreenBuffer g_backbuffer;
+file_scoped_global_var OffscreenBufferMeta g_backbuffer_meta = {0};
 file_scoped_global_var GameState g_game_state = {0}; // Zero-initialized struct
 file_scoped_global_var struct timespec g_frame_start;
 file_scoped_global_var struct timespec g_frame_end;
@@ -252,27 +248,6 @@ file_scoped_fn void handle_controls(GameState *game_state) {
   }
 }
 
-inline file_scoped_fn void
-render_weird_gradient(OffscreenBuffer *buffer, GradientState *gradient_state) {
-  int pitch = buffer->width * buffer->bytes_per_pixel;
-  uint8_t *row = (uint8_t *)buffer->memory;
-
-  for (int y = 0; y < buffer->height; ++y) {
-    uint32_t *pixels = (uint32_t *)row;
-    for (int x = 0; x < buffer->width; ++x) {
-      uint8_t blue = (x + gradient_state->offset_x);
-      uint8_t green = (y + gradient_state->offset_y);
-
-      // *pixels++ = (0xFF000000 | (green << 8) | (blue << 16));
-      // For RGBA format:
-      uint8_t red = 0;
-      uint8_t alpha = 255;
-      *pixels++ = (alpha << 24) | (blue << 16) | (green << 8) | red;
-    }
-    row += pitch;
-  }
-}
-
 /********************************************************************
  RESIZE BACKBUFFER
  - Free old CPU memory
@@ -280,8 +255,9 @@ render_weird_gradient(OffscreenBuffer *buffer, GradientState *gradient_state) {
  - Allocate new CPU pixel memory
  - Create new Raylib texture (GPU)
 *********************************************************************/
-file_scoped_fn void resize_back_buffer(OffscreenBuffer *buffer, int width,
-                                       int height) {
+file_scoped_fn void resize_back_buffer(OffscreenBuffer *buffer,
+                                       OffscreenBufferMeta *backbuffer_meta,
+                                       int width, int height) {
   printf("Resizing back buffer → %dx%d\n", width, height);
 
   if (width <= 0 || height <= 0) {
@@ -295,6 +271,7 @@ file_scoped_fn void resize_back_buffer(OffscreenBuffer *buffer, int width,
   // Update first!
   buffer->width = width;
   buffer->height = height;
+  buffer->pitch = g_backbuffer.width * g_backbuffer.bytes_per_pixel;
 
   // ---- 1. FREE OLD PIXEL MEMORY
   // -------------------------------------------------
@@ -305,9 +282,9 @@ file_scoped_fn void resize_back_buffer(OffscreenBuffer *buffer, int width,
 
   // ---- 2. FREE OLD TEXTURE
   // ------------------------------------------------------
-  if (buffer->has_texture) {
-    UnloadTexture(buffer->texture);
-    buffer->has_texture = false;
+  if (backbuffer_meta->has_texture) {
+    UnloadTexture(backbuffer_meta->texture);
+    backbuffer_meta->has_texture = false;
   }
   // ---- 3. ALLOCATE NEW BACKBUFFER
   // ----------------------------------------------
@@ -328,6 +305,7 @@ file_scoped_fn void resize_back_buffer(OffscreenBuffer *buffer, int width,
 
   buffer->width = width;
   buffer->height = height;
+  buffer->pitch = g_backbuffer.width * g_backbuffer.bytes_per_pixel;
 
   // ---- 4. CREATE RAYLIB TEXTURE
   // -------------------------------------------------
@@ -335,9 +313,10 @@ file_scoped_fn void resize_back_buffer(OffscreenBuffer *buffer, int width,
                .width = buffer->width,
                .height = buffer->height,
                .format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8,
+               // format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8
                .mipmaps = 1};
-  buffer->texture = LoadTextureFromImage(img);
-  buffer->has_texture = true;
+  backbuffer_meta->texture = LoadTextureFromImage(img);
+  backbuffer_meta->has_texture = true;
   printf("Raylib texture created successfully\n");
 }
 
@@ -345,15 +324,17 @@ file_scoped_fn void resize_back_buffer(OffscreenBuffer *buffer, int width,
  UPDATE WINDOW (BLIT)
  Equivalent to XPutImage or StretchDIBits
 *********************************************************************/
-file_scoped_fn void update_window_from_backbuffer(OffscreenBuffer *buffer) {
-  if (!buffer->has_texture || !buffer->memory)
+file_scoped_fn void
+update_window_from_backbuffer(OffscreenBuffer *buffer,
+                              OffscreenBufferMeta *backbuffer_meta) {
+  if (!backbuffer_meta->has_texture || !buffer->memory)
     return;
 
   // Upload CPU → GPU
-  UpdateTexture(buffer->texture, buffer->memory);
+  UpdateTexture(backbuffer_meta->texture, buffer->memory);
 
   // Draw GPU texture → screen
-  DrawTexture(buffer->texture, 0, 0, WHITE);
+  DrawTexture(backbuffer_meta->texture, 0, 0, WHITE);
 }
 
 /********************************************************************
@@ -363,8 +344,9 @@ file_scoped_fn void update_window_from_backbuffer(OffscreenBuffer *buffer) {
  - Allocate new CPU pixel memory
  - Create new Raylib texture (GPU)
 *********************************************************************/
-file_scoped_fn void ResizeBackBuffer(OffscreenBuffer *buffer, int width,
-                                     int height) {
+file_scoped_fn void ResizeBackBuffer(OffscreenBuffer *buffer,
+                                     OffscreenBufferMeta *backbuffer_meta,
+                                     int width, int height) {
   printf("Resizing back buffer → %dx%d\n", width, height);
 
   if (width <= 0 || height <= 0) {
@@ -388,9 +370,9 @@ file_scoped_fn void ResizeBackBuffer(OffscreenBuffer *buffer, int width,
 
   // ---- 2. FREE OLD TEXTURE
   // ------------------------------------------------------
-  if (buffer->has_texture) {
-    UnloadTexture(buffer->texture);
-    buffer->has_texture = false;
+  if (backbuffer_meta->has_texture) {
+    UnloadTexture(backbuffer_meta->texture);
+    backbuffer_meta->has_texture = false;
   }
   // ---- 3. ALLOCATE NEW BACKBUFFER
   // ----------------------------------------------
@@ -418,8 +400,8 @@ file_scoped_fn void ResizeBackBuffer(OffscreenBuffer *buffer, int width,
                .height = buffer->height,
                .format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8,
                .mipmaps = 1};
-  buffer->texture = LoadTextureFromImage(img);
-  buffer->has_texture = true;
+  backbuffer_meta->texture = LoadTextureFromImage(img);
+  backbuffer_meta->has_texture = true;
   printf("Raylib texture created successfully\n");
 }
 
@@ -500,10 +482,32 @@ int platform_main() {
   g_backbuffer.width = 1280;
   g_backbuffer.height = 720;
   g_backbuffer.bytes_per_pixel = 4;
-  memset(&g_backbuffer.texture, 0, sizeof(g_backbuffer.texture));
-  g_backbuffer.has_texture = false;
+  g_backbuffer.pitch = g_backbuffer.width * g_backbuffer.bytes_per_pixel;
+  memset(&g_backbuffer_meta.texture, 0, sizeof(g_backbuffer_meta.texture));
+  g_backbuffer_meta.has_texture = false;
 
-  resize_back_buffer(&g_backbuffer, g_backbuffer.width, g_backbuffer.height);
+  resize_back_buffer(&g_backbuffer, &g_backbuffer_meta, g_backbuffer.width,
+                     g_backbuffer.height);
+
+  // DEBUG: Verify allocation and texture creation
+  // printf("DBG: backbuffer mem=%p w=%d h=%d bpp=%d has_texture=%d\n",
+  //        g_backbuffer.memory, g_backbuffer.width, g_backbuffer.height,
+  //        g_backbuffer.bytes_per_pixel, g_backbuffer_meta.has_texture);
+
+  // // DEBUG: Fill with a solid test color (should paint the screen if pipeline
+  // // works)
+  // if (g_backbuffer.memory) {
+  //   uint32_t *px = (uint32_t *)g_backbuffer.memory;
+  //   int total = g_backbuffer.width * g_backbuffer.height;
+  //   for (int i = 0; i < total; ++i) {
+  //     px[i] = 0xFF0000FF; // test: opaque red (R=255,G=0,B=0,A=255) in
+  //     R8G8B8A8
+  //   }
+  //   BeginDrawing();
+  //   ClearBackground(BLACK);
+  //   update_window_from_backbuffer(&g_backbuffer, &g_backbuffer_meta);
+  //   EndDrawing();
+  // }
 
   printf("Entering main loop...\n");
 
@@ -543,7 +547,8 @@ int platform_main() {
      */
     if (IsWindowResized()) {
       printf("Window resized to: %dx%d\n", GetScreenWidth(), GetScreenHeight());
-      ResizeBackBuffer(&g_backbuffer, GetScreenWidth(), GetScreenHeight());
+      ResizeBackBuffer(&g_backbuffer, &g_backbuffer_meta, GetScreenWidth(),
+                       GetScreenHeight());
     }
 
     // ═══════════════════════════════════════════════════════
@@ -627,33 +632,15 @@ int platform_main() {
     // ═══════════════════════════════════════════════════════
     if (g_backbuffer.memory) {
       // Render gradient
-      render_weird_gradient(&g_backbuffer, &g_game_state.gradient);
-
-      // Test pixel animation
-      uint32_t *pixels = (uint32_t *)g_backbuffer.memory;
-      int total_pixels = g_backbuffer.width * g_backbuffer.height;
-
-      int test_offset = g_game_state.pixel.offset_y * g_backbuffer.width +
-                        g_game_state.pixel.offset_x;
-
-      if (test_offset < total_pixels) {
-        pixels[test_offset] = 0xFF0000FF; // Red pixel
-      }
-
-      if (g_game_state.pixel.offset_x + 1 < g_backbuffer.width - 1) {
-        g_game_state.pixel.offset_x += 1;
-      } else {
-        g_game_state.pixel.offset_x = 0;
-        if (g_game_state.pixel.offset_y + 75 < g_backbuffer.height - 1) {
-          g_game_state.pixel.offset_y += 75;
-        } else {
-          g_game_state.pixel.offset_y = 0;
-        }
-      }
-
+      render_weird_gradient(&g_backbuffer, &g_game_state.gradient,
+                            &g_platform_pixel_format_shift);
+      testPixelAnimation(&g_backbuffer, &g_game_state.pixel,
+                         0xFF0000FF); // opaque red in R8G8B8A8
+      // Example: Convert Raylib Color struct to int (RGBA)
+      // You can now use color_int as a packed 32-bit RGBA value
       BeginDrawing();
       ClearBackground(BLACK);
-      update_window_from_backbuffer(&g_backbuffer);
+      update_window_from_backbuffer(&g_backbuffer, &g_backbuffer_meta);
       EndDrawing();
     }
 
@@ -680,6 +667,7 @@ int platform_main() {
    * So, following Casey's philosophy, we just exit cleanly!
    */
   printf("Goodbye!\n");
+  RED;
 
   return 0;
 }

@@ -1,5 +1,7 @@
-#define _POSIX_C_SOURCE 199309L // Enable POSIX functions like nanosleep, sleep
-#include "../base.h"
+#define _POSIX_C_SOURCE 199309L // Enable POSIX functions like nanosleep, sleep;
+#include "backend.h"
+#include "../../base.h"
+#include "../../game.h"
 #include "audio.h"
 #include <X11/X.h>
 #include <X11/Xlib.h>
@@ -47,23 +49,6 @@ file_scoped_global_var linux_joystick_read *LinuxJoystickRead_ =
  * This is a design choice - simpler but less "pure".
  */
 
-typedef struct {
-  XImage *info; // X11 image wrapper
-  void *memory; // Raw pixel memory (our canvas!)
-  int width;    // Current buffer dimensions
-  int height;
-  int pitch;
-  int bytes_per_pixel;
-} OffscreenBuffer;
-
-typedef struct {
-  int offset_x;
-  int offset_y;
-} GradientState;
-typedef struct {
-  int offset_x;
-  int offset_y;
-} PixelState;
 // Button states (mirrors Casey's XInput button layout)
 typedef struct {
   bool up;
@@ -98,6 +83,13 @@ typedef struct {
   bool is_running;
 } GameState;
 
+file_scoped_global_var PlatformPixelFormatShift
+    g_platform_pixel_format_shift = {
+        .ALPHA_SHIFT = 24,
+        .RED_SHIFT = 16,
+        .GREEN_SHIFT = 8,
+        .BLUE_SHIFT = 0,
+};
 file_scoped_global_var GameState g_game_state = {0}; // Zero-initialized struct
 
 /*
@@ -116,6 +108,7 @@ get_window_dimension(Display *display, Window window) {
 */
 
 file_scoped_global_var OffscreenBuffer g_backbuffer;
+file_scoped_global_var XImage *g_backbuffer_info = NULL;
 
 // Real implementation (only used if joystick found)
 file_scoped_fn LINUX_JOYSTICK_READ(linux_joystick_read_impl) {
@@ -615,23 +608,6 @@ file_scoped_fn void linux_handle_controls(GameState *game_state) {
   }
 }
 
-file_scoped_fn void render_weird_gradient(OffscreenBuffer *buffer,
-
-                                          GradientState *gradient_state) {
-  uint8_t *row = (uint8_t *)buffer->memory;
-
-  for (int y = 0; y < buffer->height; ++y) {
-    uint32_t *pixels = (uint32_t *)row;
-    for (int x = 0; x < buffer->width; ++x) {
-      uint8_t blue = (x + gradient_state->offset_x);
-      uint8_t green = (y + gradient_state->offset_y);
-
-      *pixels++ = ((green << 8) | blue);
-    }
-    row += buffer->pitch;
-  }
-}
-
 /**
  * RESIZE BACK BUFFER
  *
@@ -668,7 +644,9 @@ file_scoped_fn void render_weird_gradient(OffscreenBuffer *buffer,
  *    So malloc/free here is totally fine!
  */
 inline file_scoped_fn void resize_back_buffer(OffscreenBuffer *buffer,
-                                              Display *display, int width,
+                                              XImage **backbuffer_info,
+                                              Display *display, Visual *visual,
+                                              int window_depth, int width,
                                               int height) {
 
   // Free old buffer if it exists
@@ -677,7 +655,7 @@ inline file_scoped_fn void resize_back_buffer(OffscreenBuffer *buffer,
   // Visual: What happens on resize
   // ┌─────────────────────────────────────────┐
   // │ Before (800×600):                       │
-  // │ buffer->info → [1.8 MB of pixels]       │
+  // │ backbuffer_info → [1.8 MB of pixels]       │
   // │                                         │
   // │ User resizes to 1920×1080               │
   // │ ↓                                       │
@@ -685,25 +663,25 @@ inline file_scoped_fn void resize_back_buffer(OffscreenBuffer *buffer,
   // │ Otherwise it leaks forever! 💥          │
   // │                                         │
   // │ After cleanup:                          │
-  // │ buffer->info → NULL                     │
+  // │ backbuffer_info → NULL                     │
   // │ buffer->memory → NULL                      │
   // │                                         │
   // │ Now allocate new 8.3 MB buffer          │
-  // │ buffer->info → [8.3 MB of pixels] ✅    │
+  // │ backbuffer_info → [8.3 MB of pixels] ✅    │
   // └─────────────────────────────────────────┘
 
-  if (buffer->info) {
+  if ((*backbuffer_info)) {
     // Call XDestroyImage() to free it
     // This ALSO frees buffer->memory automatically!
     // (X11 owns the memory once XCreateImage is called)
     if (buffer->memory) {
-      buffer->info->data = NULL; // XDestroyImage should not free
+      (*backbuffer_info)->data = NULL; // XDestroyImage should not free
       munmap(buffer->memory, buffer->width * buffer->height * 4);
       buffer->memory = NULL;
     }
-    XDestroyImage(buffer->info);
+    XDestroyImage((*backbuffer_info));
 
-    buffer->info = NULL;
+    (*backbuffer_info) = NULL;
     buffer->memory = NULL;
   }
 
@@ -742,16 +720,26 @@ inline file_scoped_fn void resize_back_buffer(OffscreenBuffer *buffer,
   // Create XImage wrapper
   // XImage is like ImageData - it describes the pixel format
 
-  buffer->info = XCreateImage(
-      display,                                        // X11 connection
-      DefaultVisual(display, DefaultScreen(display)), // Color format
-      24,                     // Depth (24-bit RGB, ignore alpha)
-      ZPixmap,                // Format (chunky pixels, not planar)
-      0,                      // Offset in data
-      (char *)buffer->memory, // Our pixel buffer
-      width, height,          // Dimensions
-      32,                     // Bitmap pad (align to 32-bit boundaries)
-      0                       // Bytes per line (0 = auto-calculate)
+  *backbuffer_info = XCreateImage(
+      // display,                                        // X11 connection
+      // DefaultVisual(display, DefaultScreen(display)), // Color format
+      // 24,                     // Depth (24-bit RGB, ignore alpha)
+      // ZPixmap,                // Format (chunky pixels, not planar)
+      // 0,                      // Offset in data
+      // (char *)buffer->memory, // Our pixel buffer
+      // width, height,          // Dimensions
+      // 32,                     // Bitmap pad (align to 32-bit boundaries)
+      // 0                       // Bytes per line (0 = auto-calculate)
+      display,                //
+      visual,                 //
+      window_depth,           //
+      ZPixmap,                //
+      0,                      //
+      (char *)buffer->memory, //
+      width,                  //
+      height,                 //
+      32,                     //
+      0                       //
   );
 
   // Save the dimensions
@@ -772,11 +760,11 @@ inline file_scoped_fn void resize_back_buffer(OffscreenBuffer *buffer,
  * 🔴 HOT PATH: Could be called 60 times/second!
  * XPutImage is hardware-accelerated, so it's fast.
  */
-static void update_window(OffscreenBuffer *buffer, Display *display,
-                          Window window, GC gc, int x, int y, int width,
-                          int height) {
+static void update_window(OffscreenBuffer *buffer, XImage **backbuffer_info,
+                          Display *display, Window window, GC gc, int x, int y,
+                          int width, int height) {
   // Don't blit if no buffer exists!
-  if (!buffer->info) {
+  if (!(*backbuffer_info)) {
     printf("WARNING: Tried to blit, but no buffer exists!\n");
     return;
   }
@@ -796,13 +784,13 @@ static void update_window(OffscreenBuffer *buffer, Display *display,
    */
   // Copy pixels from back buffer to window
   // This is THE KEY FUNCTION for double buffering!
-  XPutImage(display,      // X11 connection
-            window,       // Destination (the actual window)
-            gc,           // Graphics context
-            buffer->info, // Source (our pixel buffer)
-            x, y,         // Source position (which part of buffer)
-            x, y,         // Dest position (where on window)
-            width, height // How much to copy
+  XPutImage(display,            // X11 connection
+            window,             // Destination (the actual window)
+            gc,                 // Graphics context
+            (*backbuffer_info), // Source (our pixel buffer)
+            x, y,               // Source position (which part of buffer)
+            x, y,               // Dest position (where on window)
+            width, height       // How much to copy
   );
 }
 
@@ -823,6 +811,7 @@ static void update_window(OffscreenBuffer *buffer, Display *display,
  * switch(event.type) { case 'click': ..., case 'resize': ... }
  */
 inline file_scoped_fn void handle_event(OffscreenBuffer *buffer,
+                                        XImage **backbuffer_info,
                                         Display *display, Window window, GC gc,
                                         XEvent *event, GameState *game_state) {
   switch (event->type) {
@@ -850,7 +839,8 @@ inline file_scoped_fn void handle_event(OffscreenBuffer *buffer,
     //   printf("Window resized: %dx%d → %dx%d\n", buffer->width,
     //   buffer->height,
     //          new_width, new_height);
-    //   resize_back_buffer(buffer, display, new_width, new_height);
+    //   resize_back_buffer(buffer, backbuffer_info, display, new_width,
+    //   new_height);
     // } else {
     //   printf("ConfigureNotify (same size, ignoring)\n");
     // }
@@ -861,7 +851,8 @@ inline file_scoped_fn void handle_event(OffscreenBuffer *buffer,
     // if (new_width != buffer->width || new_height != buffer->height) {
     //     printf("Window resized: %dx%d → %dx%d\n",
     //            buffer->width, buffer->height, new_width, new_height);
-    //     resize_back_buffer(buffer, display, new_width, new_height);
+    //     resize_back_buffer(buffer, backbuffer_info, display, new_width,
+    //     new_height);
     // }
 
     break;
@@ -908,8 +899,8 @@ inline file_scoped_fn void handle_event(OffscreenBuffer *buffer,
     if (event->xexpose.count != 0)
       break;
     printf("Repainting window");
-    update_window(buffer, display, window, gc, 0, 0, buffer->width,
-                  buffer->height);
+    update_window(buffer, backbuffer_info, display, window, gc, 0, 0,
+                  buffer->width, buffer->height);
     break;
   }
 
@@ -1164,9 +1155,17 @@ int platform_main() {
   int screen = DefaultScreen(display);
   Window root = RootWindow(display, screen);
 
-  // g_game_state.controls = {0};
-  // g_game_state.gradient = {0};
-  // g_game_state.speed = 1;
+  // Force 32-bit visual with alpha
+  XVisualInfo vinfo;
+  if (!XMatchVisualInfo(display, screen, 32, TrueColor, &vinfo)) {
+    fprintf(stderr, "❌ No 32-bit visual available\n");
+    return 1;
+  }
+
+  printf("✅ Using 32-bit visual (depth: %d)\n", vinfo.depth);
+
+  // Create colormap for 32-bit visual
+  Colormap colormap = XCreateColormap(display, root, vinfo.visual, AllocNone);
 
   g_game_state.controls = (GameControls){0};
   g_game_state.gradient = (GradientState){0};
@@ -1174,7 +1173,7 @@ int platform_main() {
   g_game_state.speed = 1;
   g_game_state.is_running = true;
 
-  g_backbuffer.info = NULL;
+  g_backbuffer_info = NULL;
   // g_backbuffer.memory = NULL;
   g_backbuffer.width = 1280;
   g_backbuffer.height = 720;
@@ -1191,16 +1190,25 @@ int platform_main() {
     return 1;
   }
 
-  g_backbuffer.info = XCreateImage(
-      display,                                        // X11 connection
-      DefaultVisual(display, DefaultScreen(display)), // Color format
-      24,                          // Depth (24-bit RGB, ignore alpha)
-      ZPixmap,                     // Format (chunky pixels, not planar)
-      0,                           // Offset in data
-      (char *)g_backbuffer.memory, // Our pixel buffer
-      g_backbuffer.width, g_backbuffer.height, // Dimensions
-      32, // Bitmap pad (align to 32-bit boundaries)
-      0   // Bytes per line (0 = auto-calculate)
+  g_backbuffer_info = XCreateImage(
+      // display,                                        // X11 connection
+      // DefaultVisual(display, DefaultScreen(display)), // Color format
+      // 24,                          // Depth (24-bit RGB, ignore alpha)
+      // ZPixmap,                     // Format (chunky pixels, not planar)
+      // 0,                           // Offset in data
+      // (char *)g_backbuffer.memory, // Our pixel buffer
+      // g_backbuffer.width, g_backbuffer.height, // Dimensions
+      // 32, // Bitmap pad (align to 32-bit boundaries)
+      // 0   // Bytes per line (0 = auto-calculate)
+      display,                                 //
+      vinfo.visual,                            //
+      vinfo.depth,                             //
+      ZPixmap,                                 //
+      0,                                       //
+      (char *)g_backbuffer.memory,             //
+      g_backbuffer.width, g_backbuffer.height, //
+      32,                                      //
+      0                                        //
   );
 
   /**
@@ -1223,15 +1231,34 @@ int platform_main() {
    *
    * Casey uses CreateWindowExA() in Windows with WS_OVERLAPPEDWINDOW
    */
-  Window window = XCreateSimpleWindow(
-      display,                                 //
-      root,                                    //
-      0, 0,                                    // x, y position
-      g_backbuffer.width, g_backbuffer.height, // width, height
-      1,                                       // border width
-      BlackPixel(display, screen),             // border color
-      WhitePixel(display, screen)              // background color
-  );
+  // Window window = XCreateSimpleWindow(
+  //     display,                                 //
+  //     root,                                    //
+  //     0, 0,                                    // x, y position
+  //     g_backbuffer.width, g_backbuffer.height, // width, height
+  //     1,                                       // border width
+  //     BlackPixel(display, screen),             // border color
+  //     WhitePixel(display, screen)              // background color
+  // );
+  XSetWindowAttributes attrs = {0};
+  attrs.colormap = colormap;
+  attrs.event_mask = ExposureMask | StructureNotifyMask | FocusChangeMask |
+                     KeyPressMask | KeyReleaseMask;
+
+  Window window =
+      XCreateWindow(display,                                                //
+                    root,                                                   //
+                    0, 0,                                                   //
+                    g_backbuffer.width,                                     //
+                    g_backbuffer.height,                                    //
+                    0,                                                      //
+                    vinfo.depth,                                            //
+                    InputOutput,                                            //
+                    vinfo.visual,                                           //
+                    CWColormap | CWBorderPixel | CWBackPixel | CWEventMask, //
+                    &attrs                                                  //
+      );
+
   printf("Created window\n");
 
   /**
@@ -1308,10 +1335,10 @@ int platform_main() {
    * Note: ConfigureNotify will fire after XMapWindow, but we also
    * want to draw immediately, so we allocate here.
    */
-  resize_back_buffer(&g_backbuffer, display, g_backbuffer.width,
-                     g_backbuffer.height);
+  resize_back_buffer(&g_backbuffer, &g_backbuffer_info, display, vinfo.visual,
+                     vinfo.depth, g_backbuffer.width, g_backbuffer.height);
 
-  int test_offset = 0;
+  // int test_offset = 0;
 
   /**
    * EVENT LOOP (THE HEART OF THE PROGRAM)
@@ -1361,7 +1388,8 @@ int platform_main() {
 
     while (XPending(display) > 0) {
       XNextEvent(display, &event);
-      handle_event(&g_backbuffer, display, window, gc, &event, &g_game_state);
+      handle_event(&g_backbuffer, &g_backbuffer_info, display, window, gc,
+                   &event, &g_game_state);
     }
     // ═══════════════════════════════════════════════════════
     // 🎮 Poll joystick (Casey's XInputGetState pattern)
@@ -1393,32 +1421,36 @@ int platform_main() {
     // For now, this demonstrates how to write pixels to memory.
     //
     if (g_backbuffer.memory) {
-      render_weird_gradient(&g_backbuffer, &g_game_state.gradient);
+      render_weird_gradient(&g_backbuffer, &g_game_state.gradient,
+                            &g_platform_pixel_format_shift);
 
-      // Test pixel animation
-      uint32_t *pixels = (uint32_t *)g_backbuffer.memory;
-      int total_pixels = g_backbuffer.width * g_backbuffer.height;
+      // // Test pixel animation
+      // uint32_t *pixels = (uint32_t *)g_backbuffer.memory;
+      // int total_pixels = g_backbuffer.width * g_backbuffer.height;
 
-      test_offset = g_game_state.pixel.offset_y * g_backbuffer.width +
-                    g_game_state.pixel.offset_x;
+      // test_offset = g_game_state.pixel.offset_y * g_backbuffer.width +
+      //               g_game_state.pixel.offset_x;
 
-      if (test_offset < total_pixels)
-        pixels[test_offset] = 0xFF0000;
+      // if (test_offset < total_pixels)
+      //   pixels[test_offset] = 0xFF0000;
 
-      // Move the red dot every frame
-      if (g_game_state.pixel.offset_x + 1 < g_backbuffer.width - 1) {
-        g_game_state.pixel.offset_x += 1;
-      } else {
-        g_game_state.pixel.offset_x = 0;
-        if (g_game_state.pixel.offset_y + 75 < g_backbuffer.height - 1) {
-          g_game_state.pixel.offset_y += 75;
-        } else {
-          g_game_state.pixel.offset_y = 0;
-        }
-      }
+      // // Move the red dot every frame
+      // if (g_game_state.pixel.offset_x + 1 < g_backbuffer.width - 1) {
+      //   g_game_state.pixel.offset_x += 1;
+      // } else {
+      //   g_game_state.pixel.offset_x = 0;
+      //   if (g_game_state.pixel.offset_y + 75 < g_backbuffer.height - 1) {
+      //     g_game_state.pixel.offset_y += 75;
+      //   } else {
+      //     g_game_state.pixel.offset_y = 0;
+      //   }
+      // }
+
+      testPixelAnimation(&g_backbuffer, &g_game_state.pixel, 0xFFFF0000);
+
       // Display the result
-      update_window(&g_backbuffer, display, window, gc, 0, 0,
-                    g_backbuffer.width, g_backbuffer.height);
+      update_window(&g_backbuffer, &g_backbuffer_info, display, window, gc, 0,
+                    0, g_backbuffer.width, g_backbuffer.height);
 
       // offset_x++;
 

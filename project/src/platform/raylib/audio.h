@@ -1,7 +1,7 @@
 #ifndef RAYLIB_AUDIO_H
 #define RAYLIB_AUDIO_H
 
-#include "../base.h"
+#include "../../base.h"
 #include <raylib.h>
 #include <stdlib.h>
 

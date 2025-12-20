@@ -130,7 +130,7 @@
  *
  */
 #include "audio.h"
-#include "../base.h"
+#include "../../base.h"
 #include <dlfcn.h> // For dlopen, dlsym, dlclose (Casey's LoadLibrary equivalent)
 #include <errno.h>
 #include <math.h>
