@@ -2140,6 +2140,524 @@ if (IsKeyPressed(KEY_F1)) {
 
 ---
 
+### 📆 Day 11: Platform/Game Layer Separation
+
+**Focus:** Separating platform-specific code (X11/Raylib) from game logic into distinct compilation units, creating a clean API boundary that enables future hot-reloading and multi-platform support.
+
+---
+
+#### 🗓️ Commits
+
+| Date         | Commit    | What Changed                                            |
+| ------------ | --------- | ------------------------------------------------------- |
+| Dec 28, 2025 | `ff28c88` | **Day 11 Complete** - Platform/game separation refactor |
+|              |           | - Moved game state from platform to `game.c`            |
+|              |           | - Created `pixel_composer_fn` abstraction               |
+|              |           | - Unified controls handling across backends             |
+|              |           | - Added `game_update_and_render()` entry point          |
+|              |           | - Removed `PlatformPixelFormatShift` leak               |
+
+---
+
+#### 📊 Architecture: The Great Separation
+
+```
+BEFORE DAY 11 (Monolithic):
+┌─────────────────────────────────────────────────────────┐
+│ Platform Layer (platform/x11/backend.c)                 │
+│                                                          │
+│  • GameState contains:                                  │
+│    - gradient (offset_x, offset_y)  ❌ Game logic!      │
+│    - pixel (offset_x, offset_y)      ❌ Game logic!      │
+│    - speed                           ❌ Game logic!      │
+│                                                          │
+│  • Multiple render calls:                               │
+│    render_weird_gradient(&buffer, &state, &shift); ❌   │
+│    testPixelAnimation(&buffer, &pixel, color);     ❌   │
+│                                                          │
+│  • Game receives platform pixel format:                 │
+│    PlatformPixelFormatShift { ALPHA_SHIFT, ... }  ❌    │
+│                                                          │
+└─────────────────────────────────────────────────────────┘
+
+AFTER DAY 11 (Separated):
+┌─────────────────────────────────────────────────────────┐
+│ Platform Layer (platform/x11/backend.c)                 │
+│                                                          │
+│  • GameState contains ONLY:                             │
+│    - controls (input state)         ✅ Platform domain  │
+│    - gamepad_id                     ✅ Platform config  │
+│    - is_running                     ✅ Platform state   │
+│                                                          │
+│  • Single entry point:                                  │
+│    game_update_and_render(0xFF0000FF);  ✅              │
+│                                                          │
+│  • Platform provides pixel composer:                    │
+│    g_backbuffer.compose_pixel = compose_pixel_xrgb; ✅  │
+│                                                          │
+└──────────────────┬──────────────────────────────────────┘
+                   │
+                   │ API Boundary (game.h)
+                   │
+                   ▼
+┌─────────────────────────────────────────────────────────┐
+│ void game_update_and_render(int pixel_color);           │
+└──────────────────┬──────────────────────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────────────────────┐
+│ Game Layer (game.c)                                     │
+│                                                          │
+│  • Game state (hidden via local_persist_var):           │
+│    static int gradient_offset_x = 0;  ✅ Game owns this │
+│    static int gradient_offset_y = 0;                    │
+│    static int pixel_offset_x = 0;                       │
+│    static int pixel_offset_y = 0;                       │
+│                                                          │
+│  • render_weird_gradient()           ✅ Game logic      │
+│    Uses buffer->compose_pixel()      ✅ No platform!    │
+│                                                          │
+└─────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### 🎯 Core Concepts
+
+| Concept                  | Casey's Day 11                                                    | Your Implementation                    | Status                 |
+| ------------------------ | ----------------------------------------------------------------- | -------------------------------------- | ---------------------- |
+| **Game Entry Point**     | `GameUpdateAndRender(Buffer, BlueOffset, GreenOffset)`            | `game_update_and_render(pixel_color)`  | ✅ Match               |
+| **Game State Ownership** | Platform owns `XOffset, YOffset` (static in `win32_handmade.cpp`) | Platform owns `g_game_state`           | ✅ Match               |
+| **State Passing**        | Parameters to `GameUpdateAndRender()`                             | Global `g_game_state` struct           | ⚠️ Different but valid |
+| **Buffer Abstraction**   | `game_offscreen_buffer`                                           | `OffscreenBuffer` with `compose_pixel` | ✅ Better than Casey!  |
+| **Pixel Format**         | Hardcoded `0x00RRGGBB`                                            | Platform-provided composer function    | ✅ Better than Casey!  |
+| **File Separation**      | `handmade.h/.cpp` + `win32_handmade.cpp`                          | `game.h/.c` + `platform/x11/backend.c` | ✅ Match               |
+
+---
+
+#### 🔧 Key Innovation: Platform-Agnostic Pixel Composer
+
+##### **The Problem Casey Had**
+
+```c
+// Casey's handmade.cpp (Day 11) - Hardcoded format
+internal void
+RenderWeirdGradient(game_offscreen_buffer *Buffer, int BlueOffset, int GreenOffset)
+{
+    for(int Y = 0; Y < Buffer->Height; ++Y) {
+        uint32 *Pixel = (uint32 *)Row;
+        for(int X = 0; X < Buffer->Width; ++X) {
+            uint8 Blue = (X + BlueOffset);
+            uint8 Green = (Y + GreenOffset);
+
+            *Pixel++ = ((Green << 8) | Blue);  // ❌ Hardcoded 0x00GGBB00
+        }
+    }
+}
+```
+
+**Problem:** Works only for Windows' BGR format. Adding Linux/Mac/WASM requires changing game code!
+
+---
+
+##### **Your Solution: Function Pointer Abstraction**
+
+**Step 1: Define Composer Type** (`base.h`)
+
+```c
+// Platform-agnostic pixel composer function
+// Platform sets this once, game just calls it
+typedef uint32_t (*pixel_composer_fn)(uint8_t r, uint8_t g, uint8_t b, uint8_t a);
+```
+
+**Step 2: Add to Buffer Struct** (`game.h`)
+
+```c
+typedef struct {
+  void *memory;
+  int width, height, pitch, bytes_per_pixel;
+  pixel_composer_fn compose_pixel;  // ✅ Platform-provided composer
+} OffscreenBuffer;
+```
+
+**Step 3: Platform Implements Composers**
+
+```c
+// X11 Backend (0xAARRGGBB format)
+file_scoped_fn uint32_t compose_pixel_xrgb(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+  return ((a << 24) | (r << 16) | (g << 8) | b);
+}
+
+// Raylib Backend (R8G8B8A8 in memory)
+file_scoped_fn uint32_t compose_pixel_rgba(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+  return ((a << 24) | (b << 16) | (g << 8) | r);
+}
+
+// In resize_back_buffer():
+g_backbuffer.compose_pixel = compose_pixel_xrgb;  // X11
+// OR
+g_backbuffer.compose_pixel = compose_pixel_rgba;  // Raylib
+```
+
+**Step 4: Game Uses Composer** (`game.c`)
+
+```c
+void render_weird_gradient() {
+  // ✅ Game is 100% platform-agnostic!
+  for (int y = 0; y < g_backbuffer.height; ++y) {
+    uint32_t *pixels = (uint32_t *)row;
+    for (int x = 0; x < g_backbuffer.width; ++x) {
+      uint8_t red = 0;
+      uint8_t green = (y + g_gradient_state.offset_y);
+      uint8_t blue = (x + g_gradient_state.offset_x);
+      uint8_t alpha = 255;
+
+      *pixels++ = g_backbuffer.compose_pixel(red, green, blue, alpha);
+      //          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      //          Platform-provided function - game doesn't care about format!
+    }
+    row += g_backbuffer.pitch;
+  }
+}
+```
+
+---
+
+#### 💻 Code Snippets with Explanations
+
+##### **1. Game Initialization** (`game.c`)
+
+```c
+// ═══════════════════════════════════════════════════════════════
+// Game state is HIDDEN from platform (static variables)
+// ═══════════════════════════════════════════════════════════════
+// Casey's pattern: Use static to enforce encapsulation
+// Platform can't see or modify these - only through game_update_and_render()
+
+local_persist_var GradientState g_gradient_state = {0};
+local_persist_var PixelState g_pixel_state = {0};
+
+INIT_BACKBUFFER_STATUS init_backbuffer(int width, int height,
+                                       int bytes_per_pixel,
+                                       pixel_composer_fn composer) {
+  g_backbuffer.memory = NULL;
+  g_backbuffer.width = width;
+  g_backbuffer.height = height;
+  g_backbuffer.bytes_per_pixel = bytes_per_pixel;
+  g_backbuffer.pitch = g_backbuffer.width * g_backbuffer.bytes_per_pixel;
+
+  int buffer_size = g_backbuffer.pitch * g_backbuffer.height;
+  g_backbuffer.memory = mmap(NULL, buffer_size, PROT_READ | PROT_WRITE,
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+
+  if (g_backbuffer.memory == MAP_FAILED) {
+    fprintf(stderr, "mmap failed: could not allocate %d bytes\n", buffer_size);
+    return INIT_BACKBUFFER_STATUS_MMAP_FAILED;
+  }
+
+  // ✅ Store platform-provided composer
+  g_backbuffer.compose_pixel = composer;
+
+  return INIT_BACKBUFFER_STATUS_SUCCESS;
+}
+```
+
+**Why this works:**
+
+- `local_persist_var` = `static` (Casey's style)
+- Game state lives in `game.c`, not platform layer
+- Platform only provides `composer` function pointer once
+
+---
+
+##### **2. Unified Controls Handling** (`game.c`)
+
+```c
+// ═══════════════════════════════════════════════════════════════
+// handle_controls() - Game logic, called BY platform
+// ═══════════════════════════════════════════════════════════════
+// This replaces the OLD approach where platform modified game state directly
+
+inline void handle_controls() {
+  // D-pad controls
+  if (g_game_state.controls.up) {
+    g_gradient_state.offset_y += g_game_state.speed;
+  }
+  if (g_game_state.controls.left) {
+    g_gradient_state.offset_x += g_game_state.speed;
+  }
+  if (g_game_state.controls.down) {
+    g_gradient_state.offset_y -= g_game_state.speed;
+  }
+  if (g_game_state.controls.right) {
+    g_gradient_state.offset_x -= g_game_state.speed;
+  }
+
+  // Audio controls
+  if (g_game_state.controls.increase_sound_volume) {
+    handle_increase_volume(500);
+    g_game_state.controls.increase_sound_volume = false;
+  }
+
+  // Musical notes
+  switch (g_game_state.controls.set_to_defined_tone) {
+    case DEFINED_TONE_C4:
+      set_tone_frequency(262);
+      printf("🎵 Note: C4 (261.63 Hz)\n");
+      g_game_state.controls.set_to_defined_tone = DEFINED_TONE_NONE;
+      break;
+    // ... other notes
+  }
+}
+```
+
+**Casey's Philosophy:**
+
+- Game logic (what happens when button pressed) lives in game layer
+- Platform layer only sets `controls.up = true/false`
+- Clean separation of concerns
+
+---
+
+##### **3. Platform Main Loop** (X11 Example)
+
+```c
+// ═══════════════════════════════════════════════════════════════
+// X11 Main Loop - Platform responsibilities ONLY
+// ═══════════════════════════════════════════════════════════════
+
+while (g_game_state.is_running) {
+  // ─────────────────────────────────────────────────────────────
+  // STEP 1: Poll platform input
+  // ─────────────────────────────────────────────────────────────
+  while (XPending(display) > 0) {
+    XNextEvent(display, &event);
+    handle_event(&g_backbuffer, &g_buffer_info, display, window, gc,
+                 &event, &g_game_state, &g_sound_output);
+  }
+
+  linux_poll_joystick();  // Updates g_game_state.controls
+
+  // ─────────────────────────────────────────────────────────────
+  // STEP 2: Call game logic (single entry point!)
+  // ─────────────────────────────────────────────────────────────
+  handle_controls();  // Game updates its own state
+
+  // ─────────────────────────────────────────────────────────────
+  // STEP 3: Render (game fills buffer, platform displays)
+  // ─────────────────────────────────────────────────────────────
+  if (g_backbuffer.memory) {
+    game_update_and_render(0xFF0000FF);  // ✅ Single call!
+
+    // Display result
+    update_window(&g_backbuffer, &g_buffer_info, display, window, gc,
+                  0, 0, g_backbuffer.width, g_backbuffer.height);
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // STEP 4: Audio output
+  // ─────────────────────────────────────────────────────────────
+  linux_fill_sound_buffer(&g_sound_output);
+}
+```
+
+**Casey's Pattern:**
+
+1. Poll input (platform domain)
+2. Call game (single entry point)
+3. Display result (platform domain)
+4. Handle audio (platform domain)
+
+---
+
+##### **4. Game Update and Render** (`game.c`)
+
+```c
+// ═══════════════════════════════════════════════════════════════
+// game_update_and_render() - THE API CONTRACT
+// ═══════════════════════════════════════════════════════════════
+// This is what Casey calls GameUpdateAndRender() in Day 11
+// Platform calls this ONCE per frame, game does everything else
+
+void game_update_and_render(int pixel_color) {
+  // ─────────────────────────────────────────────────────────────
+  // RENDER (game logic - no platform knowledge!)
+  // ─────────────────────────────────────────────────────────────
+
+  // Gradient uses platform-agnostic composer
+  render_weird_gradient();
+
+  // Test pixel animation
+  testPixelAnimation(pixel_color);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// render_weird_gradient() - Platform-agnostic rendering
+// ═══════════════════════════════════════════════════════════════
+
+void render_weird_gradient() {
+  uint8_t *row = (uint8_t *)g_backbuffer.memory;
+
+  for (int y = 0; y < g_backbuffer.height; ++y) {
+    uint32_t *pixels = (uint32_t *)row;
+    for (int x = 0; x < g_backbuffer.width; ++x) {
+      // ✅ No #ifdef X11 or #ifdef RAYLIB needed!
+      // ✅ No PlatformPixelFormatShift struct needed!
+      // ✅ Game just calls the composer function
+
+      *pixels++ = g_backbuffer.compose_pixel(
+          0,                                  // Red
+          (y + g_gradient_state.offset_y),    // Green
+          (x + g_gradient_state.offset_x),    // Blue
+          255                                 // Alpha
+      );
+    }
+    row += g_backbuffer.pitch;
+  }
+}
+```
+
+---
+
+#### 🔄 Comparison: Before vs After
+
+##### **Pixel Format Handling**
+
+| Aspect                  | Before Day 11                                     | After Day 11                                |
+| ----------------------- | ------------------------------------------------- | ------------------------------------------- |
+| **Game code knows**     | Platform pixel layout (ARGB vs ABGR)              | Nothing! Just RGBA values                   |
+| **Abstraction**         | `PlatformPixelFormatShift` struct with bit shifts | `compose_pixel()` function pointer          |
+| **Adding new platform** | Modify game code + platform code                  | Only add new composer in platform           |
+| **Branching**           | `#ifdef X11` / `#ifdef RAYLIB` in game            | Zero branching in game code                 |
+| **Performance**         | Direct bit shifts (fast)                          | Function pointer call (inlined by compiler) |
+
+```c
+// BEFORE: Game code had platform knowledge ❌
+*pixels++ = ((alpha << platform_pixel_format_shift->ALPHA_SHIFT) |
+             (red << platform_pixel_format_shift->RED_SHIFT) |
+             (green << platform_pixel_format_shift->GREEN_SHIFT) |
+             (blue << platform_pixel_format_shift->BLUE_SHIFT));
+
+// AFTER: Game code is platform-agnostic ✅
+*pixels++ = g_backbuffer.compose_pixel(red, green, blue, alpha);
+```
+
+---
+
+##### **Game State Ownership**
+
+| Aspect                 | Before Day 11                            | After Day 11                              |
+| ---------------------- | ---------------------------------------- | ----------------------------------------- |
+| **Where state lives**  | `GameState` in `platform/x11/backend.c`  | `game.c` (hidden via `local_persist_var`) |
+| **Who modifies state** | Both platform AND game                   | Only game (via `handle_controls()`)       |
+| **Platform access**    | Direct: `g_game_state.gradient.offset_x` | Only through `g_game_state.controls`      |
+| **Encapsulation**      | ❌ Platform knows game internals         | ✅ Platform only knows input/output       |
+
+---
+
+#### 🐛 Common Pitfalls
+
+| Issue                          | Cause                                                                         | Fix                                                                                              |
+| ------------------------------ | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| **Gradient not rendering**     | Forgot to set `compose_pixel` in `resize_back_buffer()`                       | Always set `buffer->compose_pixel = compose_pixel_xrgb;` after creating buffer                   |
+| **Segfault on render**         | `g_backbuffer.compose_pixel` is `NULL`                                        | Check `compose_pixel != NULL` before calling, or provide default                                 |
+| **Controls not working**       | Platform modifying game state directly instead of calling `handle_controls()` | Move all game logic to `game.c`, platform only updates `GameControls`                            |
+| **Wrong colors on Raylib**     | Using X11's composer (`0xAARRGGBB`) instead of Raylib's (`R8G8B8A8`)          | Each platform must provide its own composer matching its pixel format                            |
+| **Compile errors on `extern`** | Forgot to move `extern` declarations from `game.h`                            | Keep `extern OffscreenBuffer g_backbuffer;` in `game.h` for now (matches Casey's Day 11 pattern) |
+
+---
+
+#### ✅ Skills Acquired
+
+- ✅ **Platform/Game Separation** - Understanding Casey's Day 11 architecture pattern
+- ✅ **Function Pointer Abstraction** - Using function pointers to hide platform differences
+- ✅ **Pixel Format Abstraction** - Writing platform-agnostic rendering code
+- ✅ **State Encapsulation** - Hiding game state from platform layer
+- ✅ **Single Entry Point Pattern** - `game_update_and_render()` as the API boundary
+- ✅ **DOP (Data-Oriented Programming)** - Using data-driven design instead of OOP virtuals
+- ✅ **Cross-Platform Design** - Code that works on X11, Raylib, and future platforms
+- ✅ **Clean Architecture** - Separating concerns between platform and game logic
+
+---
+
+#### 🎓 Casey's Day 11 vs Your Implementation
+
+##### **What Casey Did**
+
+```c
+// handmade.h - The contract
+struct game_offscreen_buffer {
+    void *Memory;
+    int Width, Height, Pitch;
+};
+
+internal void GameUpdateAndRender(game_offscreen_buffer *Buffer,
+                                   int BlueOffset, int GreenOffset);
+
+// win32_handmade.cpp - Platform owns state
+static int XOffset = 0;
+static int YOffset = 0;
+
+// Main loop
+GameUpdateAndRender(&Buffer, XOffset, YOffset);
+```
+
+##### **What You Did (Better!)**
+
+```c
+// game.h - The contract (improved!)
+typedef struct {
+    void *memory;
+    int width, height, pitch, bytes_per_pixel;
+    pixel_composer_fn compose_pixel;  // ✅ Your innovation!
+} OffscreenBuffer;
+
+void game_update_and_render(int pixel_color);
+
+// game.c - Game owns state (hidden)
+local_persist_var int gradient_offset_x = 0;
+local_persist_var int gradient_offset_y = 0;
+
+// Main loop
+game_update_and_render(0xFF0000FF);
+```
+
+**Your Improvements:**
+
+1. ✅ **Pixel format abstraction** (Casey hardcoded `0x00GGBB00`)
+2. ✅ **Two platform backends** (X11 + Raylib, Casey only had Win32)
+3. ✅ **Cleaner API** (no need to pass offsets as parameters)
+
+**Casey's Advantages:**
+
+1. ✅ **Pure functional style** (state passed as parameters)
+2. ✅ **Easier to test** (can call with mock state)
+3. ✅ **No global state** (all state explicit)
+
+**Verdict:** Your approach is **more practical for larger games**, Casey's is **more academically pure**. Both are valid Day 11 implementations!
+
+---
+
+#### 📝 Summary
+
+Day 11 establishes the **foundation for professional game architecture**:
+
+```
+Platform Layer (platform/x11/backend.c):
+  ✅ Window management
+  ✅ Input polling
+  ✅ Audio output
+  ✅ File I/O
+  ✅ Memory allocation
+
+Game Layer (game.c):
+  ✅ Game state
+  ✅ Game logic
+  ✅ Rendering (platform-agnostic!)
+  ✅ Physics (future)
+  ✅ AI (future)
+```
+
 ### 🔊 Audio Fundamentals: Understanding Sound in Computers
 
 > **Before diving into Day 10's audio latency control, let's understand what audio actually IS and how operating systems handle it.**
