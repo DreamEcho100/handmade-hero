@@ -2658,6 +2658,629 @@ Game Layer (game.c):
   ✅ AI (future)
 ```
 
+---
+
+### 📆 Day 12 & 13: Platform-Independent Input Abstraction
+
+**Focus:** Abstract controller input (keyboard + joystick) into platform-agnostic structures, enabling the game layer to work identically across all platforms.
+
+---
+
+#### 🗓️ Commits
+
+| Date       | Commit    | What Changed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ---------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-01-01 | `656accc` | **Day 12 & 13: Complete input abstraction**<br>• Introduced `GameInput`, `GameControllerInput`, `GameButtonState` structs<br>• Implemented double-buffered input with pointer swapping<br>• Added joystick support via Linux `/dev/input/jsX`<br>• Refactored keyboard to use `GameButtonState` transitions<br>• Moved deadzone handling from platform → game layer<br>• Added controller priority system (joystick > keyboard)<br>• Fixed D-pad to set both button states AND analog values |
+
+---
+
+#### 🧠 Mental Model: Casey's Input System Architecture
+
+##### **The Restaurant Analogy** 🍽️
+
+```
+┌──────────────────────────────────────────────────────────┐
+│ 🧑 CUSTOMER (User)                                       │
+│    Moves joystick, presses keyboard                     │
+└──────────────────────────────────────────────────────────┘
+           ↓ (gives order)
+┌──────────────────────────────────────────────────────────┐
+│ 🤵 WAITER (Platform Layer: X11/Raylib)                  │
+│    "Customer moved stick 0.75 units right"              │
+│    → Just reports EXACTLY what customer said            │
+│    → NO interpretation, NO filtering!                   │
+│    → Fills GameInput struct with RAW values             │
+└──────────────────────────────────────────────────────────┘
+           ↓ (GameInput struct)
+┌──────────────────────────────────────────────────────────┐
+│ 👨‍🍳 CHEF (Game Layer: game.c)                           │
+│    Reads order, decides how to cook                      │
+│    "0.75? That's too much, use 0.70 instead"            │
+│    → Applies deadzone, sensitivity, acceleration        │
+│    → Converts input to game actions (movement, jump)     │
+└──────────────────────────────────────────────────────────┘
+           ↓ (game state updates)
+┌──────────────────────────────────────────────────────────┐
+│ 🍽️ PLATE (Screen)                                       │
+│    Player character moves                                │
+└──────────────────────────────────────────────────────────┘
+```
+
+**Key Insight:** The waiter (platform) should **NEVER** cook the food (apply game logic)! They just take the order.
+
+---
+
+#### 📊 Data Flow Visualization
+
+##### **The Double-Buffered Input Pipeline**
+
+```
+FRAME N:
+┌─────────────────────────────────────────────────────────────┐
+│ 1️⃣ PREPARE INPUT FRAME                                      │
+│ ──────────────────────────────────────────────────────────  │
+│ for each controller:                                        │
+│   new.is_connected = old.is_connected  ← Copy connection   │
+│   new.end_x = old.end_x                ← Preserve joystick │
+│   new.buttons[i].ended_down = old.buttons[i].ended_down    │
+│   new.buttons[i].half_transition_count = 0  ← Clear!       │
+└─────────────────────────────────────────────────────────────┘
+           ↓
+┌─────────────────────────────────────────────────────────────┐
+│ 2️⃣ PROCESS PLATFORM EVENTS                                  │
+│ ──────────────────────────────────────────────────────────  │
+│ X11:    while (XPending()) { XNextEvent(&event); ... }     │
+│ Raylib: IsKeyDown(KEY_W); GetGamepadAxisMovement(...);     │
+│                                                             │
+│ Result: new_input updated with THIS frame's input          │
+└─────────────────────────────────────────────────────────────┘
+           ↓
+┌─────────────────────────────────────────────────────────────┐
+│ 3️⃣ CALL GAME LAYER                                          │
+│ ──────────────────────────────────────────────────────────  │
+│ game_update_and_render(new_input);                         │
+│   ↓                                                         │
+│   Compare old vs new to detect transitions:                │
+│   if (new.up.ended_down && new.up.half_transition_count)  │
+│     → Button JUST pressed this frame!                      │
+└─────────────────────────────────────────────────────────────┘
+           ↓
+┌─────────────────────────────────────────────────────────────┐
+│ 4️⃣ SWAP BUFFERS                                             │
+│ ──────────────────────────────────────────────────────────  │
+│ temp = new_input;                                           │
+│ new_input = old_input;  ← Points to buffer A               │
+│ old_input = temp;       ← Points to buffer B               │
+│                                                             │
+│ Now "new" is ready for fresh data!                         │
+└─────────────────────────────────────────────────────────────┘
+           ↓
+FRAME N+1: Repeat (buffers flip-flop)
+```
+
+##### **Why Two Buffers?**
+
+```
+WITHOUT DOUBLE BUFFERING:
+Frame 1: Button pressed  → state = true
+Frame 2: Button held     → state = true (CAN'T DETECT "JUST PRESSED"!)
+
+WITH DOUBLE BUFFERING:
+Frame 1: old.ended_down=false, new.ended_down=true
+         → Transition detected! half_transition_count = 1
+
+Frame 2: old.ended_down=true, new.ended_down=true
+         → No transition, half_transition_count = 0
+         → Button is HELD, not newly pressed
+```
+
+---
+
+#### 🎯 Core Concepts
+
+| Concept                   | Implementation                                                | Why It Matters                                                  |
+| ------------------------- | ------------------------------------------------------------- | --------------------------------------------------------------- |
+| **Platform Abstraction**  | `GameInput` struct hides X11/Raylib/Win32                     | Game code works on ALL platforms without `#ifdef`               |
+| **Button State Tracking** | `GameButtonState` with `ended_down` + `half_transition_count` | Detect press, release, hold, double-tap                         |
+| **Double Buffering**      | `GameInput[2]` with pointer swap                              | Compare old vs new to find transitions                          |
+| **Analog Normalization**  | Platform converts to `-1.0` to `+1.0`                         | Game uses consistent range, no platform-specific math           |
+| **Deadzone Separation**   | Platform reports raw, game applies `apply_deadzone()`         | Different games need different sensitivity                      |
+| **D-Pad Duality**         | Set BOTH button states AND analog values                      | Game can use either digital or analog movement                  |
+| **Input Preparation**     | Copy old → new BEFORE processing events                       | Preserve joystick hold state (Linux events only fire on change) |
+| **Controller Priority**   | Joystick checked before keyboard                              | First active input wins (local multiplayer ready!)              |
+
+---
+
+#### 💻 Code Snippets with Explanations
+
+##### **1. The GameButtonState Structure (Casey's Genius)**
+
+```c
+/**
+ * 🎮 BUTTON STATE TRACKING
+ * ═══════════════════════════════════════════════════════════════
+ *
+ * Tracks BOTH current state AND transitions (press/release events).
+ *
+ * Casey's Day 13 insight: "A bool is not enough!"
+ *
+ * Examples:
+ *   half_transition_count=0, ended_down=false → Not pressed, no change
+ *   half_transition_count=1, ended_down=true  → JUST pressed! ✨
+ *   half_transition_count=0, ended_down=true  → Held down
+ *   half_transition_count=1, ended_down=false → JUST released!
+ *   half_transition_count=2, ended_down=true  → Pressed, released, pressed (same frame!)
+ */
+typedef struct {
+  int half_transition_count;  // How many times state changed this frame
+  bool32 ended_down;          // Final state (pressed/released)
+} GameButtonState;
+
+/**
+ * WHY THIS WORKS:
+ *
+ * Game can detect:
+ *   - PRESS:   ended_down && half_transition_count > 0
+ *   - RELEASE: !ended_down && half_transition_count > 0
+ *   - HOLD:    ended_down && half_transition_count == 0
+ *
+ * Example: Jump only on PRESS, not while held:
+ *   if (controller->a_button.ended_down &&
+ *       controller->a_button.half_transition_count > 0) {
+ *     player_jump();  // Only fires on button DOWN, not every frame!
+ *   }
+ */
+```
+
+##### **2. The process_key() Helper (Transition Detection)**
+
+```c
+/**
+ * 🔄 PROCESS KEY TRANSITION
+ * ═══════════════════════════════════════════════════════════════
+ *
+ * Casey's pattern for detecting state changes.
+ *
+ * This tiny function is called EVERY TIME a button event occurs.
+ * It compares old vs new state to set half_transition_count.
+ *
+ * @param is_down     - New state (true = pressed, false = released)
+ * @param old_state   - Previous frame's button state
+ * @param new_state   - This frame's button state (OUTPUT)
+ */
+file_scoped_fn void process_key(bool is_down,
+                                GameButtonState *old_state,
+                                GameButtonState *new_state) {
+  // Set final state
+  new_state->ended_down = is_down;
+
+  // Detect transition (XOR: true if different)
+  new_state->half_transition_count =
+      (old_state->ended_down != new_state->ended_down) ? 1 : 0;
+}
+
+/**
+ * USAGE EXAMPLE (X11 keyboard):
+ *
+ * case XK_W:  // W key pressed
+ *   new_controller->end_y = +1.0f;  // Set analog value
+ *   process_key(true, &old->up, &new->up);  // Set button state
+ *   break;
+ *
+ * case XK_W:  // W key released
+ *   new_controller->end_y = 0.0f;
+ *   process_key(false, &old->up, &new->up);
+ *   break;
+ *
+ * WHY TWO CALLS?
+ * - Keyboard sends separate events for press/release
+ * - Joystick buttons work the same way
+ * - process_key() abstracts both!
+ */
+```
+
+##### **3. Analog Stick Normalization (Linux vs Windows)**
+
+```c
+case 0: { // Left stick X axis
+  /**
+   * 🎮 LINUX JOYSTICK NORMALIZATION
+   * ═══════════════════════════════════════════════════════════
+   *
+   * Linux /dev/input/jsX range: -32767 to +32767 (SYMMETRIC!)
+   *
+   * So we use SINGLE divisor:
+   *   x = (real32)event.value / 32767.0f;
+   *
+   * Casey's XInput (Windows) needs TWO divisors:
+   *   if (Pad->sThumbLX < 0) x = value / 32768.0f;  // Negative
+   *   else                    x = value / 32767.0f;  // Positive
+   *
+   * Why? XInput range is -32768 to +32767 (ASYMMETRIC!)
+   *
+   * Both normalize to -1.0 to +1.0 range.
+   */
+  real32 x = (real32)event.value / 32767.0f;
+
+  // Store RAW value (game layer applies deadzone!)
+  new_controller->end_x = x;
+  new_controller->min_x = x;  // Day 13: just mirror
+  new_controller->max_x = x;  // Day 14+: track actual min/max
+
+  break;
+}
+
+/**
+ * RAYLIB VERSION (already normalized):
+ *
+ * real32 x = GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_LEFT_X);
+ * new_controller->end_x = x;  // Already -1.0 to +1.0!
+ *
+ * Raylib handles platform differences internally (SDL2 backend).
+ */
+```
+
+##### **4. D-Pad Handling (Digital → Analog Conversion)**
+
+```c
+case 6: { // D-pad X axis (PlayStation controller)
+  /**
+   * 🎮 D-PAD: DIGITAL BUTTONS, ANALOG REPORTING
+   * ═══════════════════════════════════════════════════════════
+   *
+   * D-pad is DIGITAL (4 discrete directions), but Linux reports
+   * it as ANALOG axis (-32767 to +32767).
+   *
+   * We must set BOTH:
+   *   1. Button states (for "is left pressed?" checks)
+   *   2. Analog values (for movement calculations)
+   *
+   * Threshold: ±16384 (half of max) for digital detection
+   */
+
+  new_controller->start_x = old_controller->end_x;
+  new_controller->start_y = old_controller->end_y;
+
+  if (event.value < -16384) {
+    // D-pad LEFT pressed
+    process_key(true, &old_controller->left, &new_controller->left);
+    process_key(false, &old_controller->right, &new_controller->right);
+
+    // Convert to full stick left
+    new_controller->end_x = -1.0f;
+
+  } else if (event.value > 16384) {
+    // D-pad RIGHT pressed
+    process_key(true, &old_controller->right, &new_controller->right);
+    process_key(false, &old_controller->left, &new_controller->left);
+
+    new_controller->end_x = +1.0f;
+
+  } else {
+    // D-pad RELEASED (centered)
+    process_key(false, &old_controller->left, &new_controller->left);
+    process_key(false, &old_controller->right, &new_controller->right);
+
+    new_controller->end_x = 0.0f;
+  }
+
+  new_controller->min_x = new_controller->max_x = new_controller->end_x;
+  break;
+}
+
+/**
+ * WHY SET BOTH BUTTON AND ANALOG?
+ *
+ * Game layer can choose movement style:
+ *
+ * OPTION A (Digital movement):
+ *   if (controller->left.ended_down) {
+ *     player_x -= 5;  // Fixed speed
+ *   }
+ *
+ * OPTION B (Analog movement):
+ *   real32 x = apply_deadzone(controller->end_x);
+ *   player_x -= (int)(4.0f * x);  // Proportional to stick
+ *
+ * D-pad works with BOTH patterns!
+ */
+```
+
+##### **5. Input Preparation (State Preservation)**
+
+```c
+/**
+ * 🔄 PREPARE INPUT FRAME
+ * ═══════════════════════════════════════════════════════════════
+ *
+ * Casey's Day 13 pattern: Copy old state to new BEFORE processing events.
+ *
+ * WHY THIS IS CRITICAL:
+ *
+ * X11 keyboard only sends events on press/release, NOT while held.
+ * Linux joystick only sends events on CHANGE, NOT while held.
+ *
+ * Without this step:
+ *   Frame 1: User presses D-pad UP → end_y = +1.0 ✅
+ *   Frame 2: No event (still holding) → end_y = 0.0 ❌ WRONG!
+ *
+ * With this step:
+ *   Frame 1: User presses D-pad UP → end_y = +1.0 ✅
+ *   Frame 2: No event → end_y = +1.0 ✅ (preserved from old!)
+ */
+file_scoped_fn void prepare_input_frame(GameInput *old_input,
+                                        GameInput *new_input) {
+  for (int i = 0; i < MAX_CONTROLLER_COUNT; i++) {
+    GameControllerInput *old_ctrl = &old_input->controllers[i];
+    GameControllerInput *new_ctrl = &new_input->controllers[i];
+
+    // Preserve connection state
+    new_ctrl->is_connected = old_ctrl->is_connected;
+    new_ctrl->is_analog = old_ctrl->is_analog;
+
+    // Set start = last frame's end (for delta tracking)
+    new_ctrl->start_x = old_ctrl->end_x;
+    new_ctrl->start_y = old_ctrl->end_y;
+
+    // ✅ PRESERVE analog values (joystick hold!)
+    new_ctrl->end_x = old_ctrl->end_x;  // Event-based systems need this!
+    new_ctrl->end_y = old_ctrl->end_y;
+
+    new_ctrl->min_x = new_ctrl->max_x = new_ctrl->end_x;
+    new_ctrl->min_y = new_ctrl->max_y = new_ctrl->end_y;
+
+    // Buttons: preserve state, clear transition count
+    for (int btn = 0; btn < ArraySize(new_ctrl->buttons); btn++) {
+      new_ctrl->buttons[btn].ended_down = old_ctrl->buttons[btn].ended_down;
+      new_ctrl->buttons[btn].half_transition_count = 0;  // Will be set by process_key()
+    }
+  }
+}
+
+/**
+ * WHEN TO CALL THIS:
+ *
+ * while (is_game_running) {
+ *   prepare_input_frame(old_input, new_input);  // ← FIRST!
+ *
+ *   while (XPending()) {
+ *     XNextEvent(&event);
+ *     handle_event(..., old_input, new_input);  // ← Updates new_input
+ *   }
+ *
+ *   game_update_and_render(new_input);
+ *
+ *   // Swap buffers
+ *   GameInput *temp = new_input;
+ *   new_input = old_input;
+ *   old_input = temp;
+ * }
+ */
+```
+
+---
+
+#### 📊 Comparison Tables
+
+##### **Platform Input Abstraction**
+
+| Aspect                   | Before (Day 1-11)              | After (Day 12-13)                          |
+| ------------------------ | ------------------------------ | ------------------------------------------ |
+| **Keyboard handling**    | `bool g_controls.up`           | `GameButtonState up` with transitions      |
+| **Joystick handling**    | Platform-specific structs      | `GameControllerInput` (unified)            |
+| **Game code**            | `#ifdef X11 ... #ifdef RAYLIB` | No `#ifdef` needed!                        |
+| **Adding new platform**  | Rewrite game logic             | Just fill `GameInput` struct               |
+| **Button detection**     | `if (key_pressed)`             | `if (ended_down && half_transition_count)` |
+| **Analog normalization** | Per-platform math              | `-1.0` to `+1.0` everywhere                |
+
+##### **Deadzone Philosophy**
+
+| Location           | Before (Wrong)                 | After (Correct)              | Why                                              |
+| ------------------ | ------------------------------ | ---------------------------- | ------------------------------------------------ |
+| **X11 backend**    | `if (fabs(x) < 0.10) x = 0;`   | `end_x = x;` (RAW)           | Platform just reports hardware state             |
+| **Raylib backend** | `if (fabsf(x) > 0.10) { ... }` | `end_x = x;` (RAW)           | No filtering in platform layer                   |
+| **Game layer**     | Nothing                        | `x = apply_deadzone(end_x);` | Game decides sensitivity                         |
+| **Result**         | Hardcoded sensitivity          | Configurable per game!       | Racing game wants 0.05, accessibility wants 0.25 |
+
+##### **Button State Tracking**
+
+| Scenario                 | Old System        | New System                                  |
+| ------------------------ | ----------------- | ------------------------------------------- |
+| **Button just pressed**  | Can't detect!     | `ended_down && half_transition_count == 1`  |
+| **Button held**          | `if (is_pressed)` | `ended_down && half_transition_count == 0`  |
+| **Button just released** | Can't detect!     | `!ended_down && half_transition_count == 1` |
+| **Double-tap detection** | Impossible        | Check `half_transition_count == 2`          |
+
+---
+
+#### 🐛 Common Pitfalls
+
+| Issue                          | Cause                                       | Fix                                                         |
+| ------------------------------ | ------------------------------------------- | ----------------------------------------------------------- |
+| **Joystick not working**       | Stored controller index (1) as gamepad ID   | Store Raylib gamepad ID (0-3) in `g_joysticks[].gamepad_id` |
+| **D-pad stuck**                | `IsGamepadButtonReleased()` only fires once | Poll `IsGamepadButtonDown()` every frame                    |
+| **Y-axis inverted**            | `offset_y -= y` instead of `offset_y += y`  | Match coordinate system (positive Y = up)                   |
+| **Keyboard doesn't work**      | No analog values set on key press           | Set `end_x/end_y = ±1.0` when key pressed                   |
+| **Input preparation missing**  | Analog values reset to 0 every frame        | Call `prepare_input_frame()` BEFORE processing events       |
+| **Buffer swap missing**        | Same buffer used every frame                | Swap pointers: `temp = new; new = old; old = temp;`         |
+| **Deadzone in platform layer** | Platform applies filtering                  | Move `apply_deadzone()` to game layer                       |
+| **`is_analog` flag wrong**     | Set to `false` when stick centered          | Set based on DEVICE TYPE, not movement!                     |
+
+---
+
+#### 🎨 ASCII Art: Input System Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│ 🎮 CASEY'S INPUT SYSTEM (Day 12-13)                                │
+└─────────────────────────────────────────────────────────────────────┘
+
+HARDWARE LAYER (Platform-Specific)
+═══════════════════════════════════════════════════════════════════════
+┌───────────────┐  ┌───────────────┐  ┌───────────────┐
+│ /dev/input/js0│  │ X11 KeyPress  │  │ Raylib        │
+│ (Linux)       │  │ events        │  │ IsKeyDown()   │
+└───────┬───────┘  └───────┬───────┘  └───────┬───────┘
+        │                  │                  │
+        └─────────┬────────┴────────┬─────────┘
+                  ↓                 ↓
+          ┌───────────────────────────────────┐
+          │ PLATFORM LAYER (backend.c)        │
+          │ ─────────────────────────────────│
+          │ • Read hardware events            │
+          │ • Normalize to -1.0 to +1.0      │
+          │ • Fill GameInput struct          │
+          │ • NO DEADZONE FILTERING!         │
+          └───────────┬───────────────────────┘
+                      ↓
+          ┌───────────────────────────────────┐
+          │ GameInput (Platform-Agnostic)     │
+          │ ═════════════════════════════════│
+          │ controllers[5]                    │
+          │   [0] = Keyboard                 │
+          │   [1] = Joystick 1               │
+          │   [2] = Joystick 2               │
+          │   [3] = Joystick 3               │
+          │   [4] = Joystick 4               │
+          └───────────┬───────────────────────┘
+                      ↓
+          ┌───────────────────────────────────┐
+          │ GAME LAYER (game.c)               │
+          │ ─────────────────────────────────│
+          │ • Pick active controller          │
+          │ • Apply deadzone                  │
+          │ • Convert input → game actions    │
+          │ • NO PLATFORM KNOWLEDGE!          │
+          └───────────────────────────────────┘
+                      ↓
+              [Player moves] 🏃
+
+DOUBLE BUFFERING PATTERN
+═══════════════════════════════════════════════════════════════════════
+
+Memory Layout:
+┌─────────────────┐  ┌─────────────────┐
+│ game_inputs[0]  │  │ game_inputs[1]  │
+│ (Buffer A)      │  │ (Buffer B)      │
+└─────────────────┘  └─────────────────┘
+        ↑                    ↑
+        │                    │
+   new_input            old_input
+   (this frame)         (last frame)
+
+Frame N:
+1. prepare_input_frame(old, new)  → Copy old→new
+2. Process events                  → Update new
+3. game_update_and_render(new)    → Compare old vs new
+4. Swap pointers                   → new↔old
+
+Frame N+1:
+   new_input  now points to Buffer B ←┐
+   old_input  now points to Buffer A  │ Swapped!
+                                      └─────────┘
+
+BUTTON STATE MACHINE
+═══════════════════════════════════════════════════════════════════════
+
+        ┌─────────────────────────────────────┐
+        │ RELEASED                             │
+        │ ended_down = false                  │
+        │ half_transition_count = 0           │
+        └──────────┬──────────────────────────┘
+                   │
+     [PRESS EVENT] │ process_key(true, old, new)
+                   ↓
+        ┌─────────────────────────────────────┐
+        │ JUST PRESSED                         │
+        │ ended_down = true                   │
+        │ half_transition_count = 1  ← ✨     │
+        └──────────┬──────────────────────────┘
+                   │
+    [NO EVENT]     │ (button held)
+                   ↓
+        ┌─────────────────────────────────────┐
+        │ HELD                                 │
+        │ ended_down = true                   │
+        │ half_transition_count = 0           │
+        └──────────┬──────────────────────────┘
+                   │
+  [RELEASE EVENT]  │ process_key(false, old, new)
+                   ↓
+        ┌─────────────────────────────────────┐
+        │ JUST RELEASED                        │
+        │ ended_down = false                  │
+        │ half_transition_count = 1  ← ✨     │
+        └──────────┬──────────────────────────┘
+                   │
+                   ↓ (next frame)
+               [RELEASED]
+```
+
+---
+
+#### ✅ Skills Acquired
+
+- ✅ **Platform Abstraction**: Designed structs that hide X11/Raylib/Win32 differences
+- ✅ **Double Buffering**: Implemented pointer-swapping pattern for state comparison
+- ✅ **Transition Detection**: Tracked button press/release events using `half_transition_count`
+- ✅ **Joystick Integration**: Opened `/dev/input/jsX`, parsed `js_event` structs
+- ✅ **Analog Normalization**: Converted hardware ranges to `-1.0` to `+1.0`
+- ✅ **Deadzone Separation**: Moved sensitivity logic from platform to game layer
+- ✅ **D-Pad Handling**: Set both button states AND analog values for dual usage
+- ✅ **Input Preparation**: Preserved held state for event-based systems (X11/Linux)
+- ✅ **Controller Priority**: Implemented first-active-wins selection (joystick > keyboard)
+- ✅ **State Machine Design**: Used `ended_down` + `half_transition_count` to track lifecycle
+- ✅ **Casey's Philosophy**: "Platform reports, game decides" - clean separation of concerns
+- ✅ **Cross-Platform Input**: Game code now works identically on all platforms! 🎉
+
+---
+
+#### 🎓 Casey's Key Teachings (Mental Models)
+
+##### **1. Abstraction Layers**
+
+> "The platform layer should just give you the RAW controller state. It's the GAME's job to decide what's too small to care about."
+
+- Platform = Hardware interface
+- Game = Gameplay logic
+- **Never mix them!**
+
+##### **2. Double Buffering for State**
+
+> "You need TWO copies to know what CHANGED."
+
+- One buffer = current state
+- Two buffers = current + previous = **transitions**!
+- Swap pointers, don't copy data (performance)
+
+##### **3. Button State is NOT a Bool**
+
+> "Was it down last frame? Is it down now? Did it change?"
+
+- `ended_down` = final state
+- `half_transition_count` = number of changes
+- Both needed for complete picture!
+
+##### **4. Deadzone Belongs in Game Layer**
+
+> "Different games want different sensitivities."
+
+- Racing game: 0.05 (very sensitive)
+- Accessibility: 0.25 (very forgiving)
+- Platform shouldn't decide this!
+
+##### **5. Event-Based Systems Need State Preservation**
+
+> "X11 doesn't tell you when you're STILL holding the key!"
+
+- Windows: Polling (`GetAsyncKeyState()`) every frame
+- X11: Events only on change
+- Solution: Copy old state to new BEFORE processing
+
+## Misc
+
+---
+
 ### 🔊 Audio Fundamentals: Understanding Sound in Computers
 
 > **Before diving into Day 10's audio latency control, let's understand what audio actually IS and how operating systems handle it.**
