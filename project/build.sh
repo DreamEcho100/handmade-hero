@@ -14,7 +14,18 @@ echo "Building with backend: $BACKEND"
 
 FLAGS="-Isrc -Wall -Wextra -std=c11 -g -O0"
 
-SRC="src/main.c src/base.c src/game.c"
+# ═══════════════════════════════════════════════════════════════
+# 🐛 DAY 14: DEVELOPMENT BUILD FLAG
+# ═══════════════════════════════════════════════════════════════
+# HANDMADE_INTERNAL enables:
+#   - Assert() macros
+#   - Fixed memory address (2TB) for easier debugging
+#   - Extra logging
+# ═══════════════════════════════════════════════════════════════
+
+FLAGS="$FLAGS -DHANDMADE_INTERNAL=1"
+
+SRC="src/main.c src/base/memory.c src/game.c"
 
 if [ "$BACKEND" = "x11" ]; then
      # -ldl = Link against libdl (for dlopen, dlsym, dlclose)

@@ -2,7 +2,7 @@
 #ifndef X11_AUDIO_H
 #define X11_AUDIO_H
 
-#include "../../base.h"
+#include "../../base/base.h"
 #include "../../game.h"
 #include <stdbool.h>
 #include <stdint.h>
@@ -189,11 +189,11 @@ extern LinuxSoundOutput g_linux_sound_output;
 // ═══════════════════════════════════════════════════════════════
 
 void linux_load_alsa(void);
-void linux_init_sound(SoundOutput *sound_output, int32_t samples_per_second, int32_t buffer_size_bytes);
+void linux_init_sound(GameSoundOutput *sound_output, int32_t samples_per_second, int32_t buffer_size_bytes);
 
 // Day 8: Fill backbuffer with square wave and write to ALSA
-void linux_fill_sound_buffer(SoundOutput *sound_output);
+void linux_fill_sound_buffer(GameSoundOutput *sound_output);
 
-void linux_debug_audio_latency(SoundOutput *sound_output);
+void linux_debug_audio_latency(GameSoundOutput *sound_output);
 
 #endif // X11_AUDIO_H

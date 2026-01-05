@@ -1,7 +1,7 @@
 #define _POSIX_C_SOURCE 199309L // Enable POSIX functions like nanosleep, sleep;
 
 #include "backend.h"
-#include "../../base.h"
+#include "../../base/base.h"
 #include "../../game.h"
 #include "audio.h"
 #include <X11/X.h>
@@ -14,7 +14,6 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>    // For sleep()
 #include <x86intrin.h> // for __rdtsc() (CPU cycle counter)
@@ -48,7 +47,7 @@ file_scoped_global_var linux_joystick_read *LinuxJoystickRead_ =
 // Redefine API name
 #define LinuxJoystickRead LinuxJoystickRead_
 
-// file_scoped_global_var OffscreenBuffer g_backbuffer;
+// file_scoped_global_var GameOffscreenBuffer game_buffer;
 file_scoped_global_var XImage *g_buffer_info = NULL;
 
 // Real implementation (only used if joystick found)
@@ -515,7 +514,9 @@ file_scoped_fn void linux_poll_joystick(GameInput *old_input,
         }
 
         default:
-          // printf("D-pad number: %d, value: %d\n", event.number, event.value);
+          //   // printf("D-pad number: %d, value: %d\n", event.number,
+          //   event.value);
+          break;
         }
       }
     }
@@ -557,7 +558,7 @@ file_scoped_fn void linux_poll_joystick(GameInput *old_input,
  * 🟡 COLD PATH: Only runs on window resize (maybe once per second)
  *    So malloc/free here is totally fine!
  */
-inline file_scoped_fn void resize_back_buffer(OffscreenBuffer *backbuffer,
+inline file_scoped_fn void resize_back_buffer(GameOffscreenBuffer *backbuffer,
                                               XImage **backbuffer_info,
                                               Display *display, Visual *visual,
                                               int window_depth, int width,
@@ -588,15 +589,14 @@ inline file_scoped_fn void resize_back_buffer(OffscreenBuffer *backbuffer,
     // Call XDestroyImage() to free it
     // This ALSO frees backbuffer->memory automatically!
     // (X11 owns the memory once XCreateImage is called)
-    if (backbuffer->memory) {
+    if (backbuffer->memory.base) {
       (*backbuffer_info)->data = NULL; // XDestroyImage should not free
-      munmap(backbuffer->memory, backbuffer->width * backbuffer->height * 4);
-      backbuffer->memory = NULL;
+      platform_free_memory(&backbuffer->memory);
+      backbuffer->memory = (PlatformMemoryBlock){0};
     }
     XDestroyImage((*backbuffer_info));
 
     (*backbuffer_info) = NULL;
-    backbuffer->memory = NULL;
   }
 
   // Calculate how much memory we need
@@ -608,15 +608,19 @@ inline file_scoped_fn void resize_back_buffer(OffscreenBuffer *backbuffer,
   printf("Allocating back backbuffer: %dx%d (%d bytes = %.2f MB)\n", width,
          height, buffer_size, buffer_size / (1024.0 * 1024.0));
 
-  // Allocate pixel memory using mmap (Casey-style)
-  backbuffer->memory = mmap(NULL, buffer_size, PROT_READ | PROT_WRITE,
-                            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  PlatformMemoryBlock backbuffer_memory = platform_allocate_memory(
+      NULL, buffer_size,
+      PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE | PLATFORM_MEMORY_ZEROED);
 
-  if (backbuffer->memory == MAP_FAILED) {
-    backbuffer->memory = NULL;
-    fprintf(stderr, "mmap failed: could not allocate %d bytes\n", buffer_size);
+  if (!backbuffer_memory.base) {
+    fprintf(stderr,
+            "platform_allocate_memory failed: could not allocate %d bytes\n",
+            buffer_size);
     return;
   }
+
+  // Allocate pixel memory using mmap (Casey-style)
+  backbuffer->memory = backbuffer_memory;
 
   // NOTE: mmap gives you ZEROED pages automatically (like calloc), no memset
   // needed.
@@ -644,16 +648,16 @@ inline file_scoped_fn void resize_back_buffer(OffscreenBuffer *backbuffer,
       // width, height,          // Dimensions
       // 32,                     // Bitmap pad (align to 32-bit boundaries)
       // 0                       // Bytes per line (0 = auto-calculate)
-      display,                    //
-      visual,                     //
-      window_depth,               //
-      ZPixmap,                    //
-      0,                          //
-      (char *)backbuffer->memory, //
-      width,                      //
-      height,                     //
-      32,                         //
-      0                           //
+      display,                         //
+      visual,                          //
+      window_depth,                    //
+      ZPixmap,                         //
+      0,                               //
+      (char *)backbuffer->memory.base, //
+      width,                           //
+      height,                          //
+      32,                              //
+      0                                //
   );
 
   // Save the dimensions
@@ -674,9 +678,10 @@ inline file_scoped_fn void resize_back_buffer(OffscreenBuffer *backbuffer,
  * 🔴 HOT PATH: Could be called 60 times/second!
  * XPutImage is hardware-accelerated, so it's fast.
  */
-static void update_window(OffscreenBuffer *backbuffer, XImage **backbuffer_info,
-                          Display *display, Window window, GC gc, int x, int y,
-                          int width, int height) {
+static void update_window(GameOffscreenBuffer *backbuffer,
+                          XImage **backbuffer_info, Display *display,
+                          Window window, GC gc, int x, int y, int width,
+                          int height) {
   // Don't blit if no backbuffer exists!
   if (!(*backbuffer_info)) {
     printf("WARNING: Tried to blit, but no backbuffer exists!\n");
@@ -725,9 +730,9 @@ static void update_window(OffscreenBuffer *backbuffer, XImage **backbuffer_info,
  * switch(event.type) { case 'click': ..., case 'resize': ... }
  */
 inline file_scoped_fn void
-handle_event(OffscreenBuffer *backbuffer, XImage **backbuffer_info,
+handle_event(GameOffscreenBuffer *backbuffer, XImage **backbuffer_info,
              Display *display, Window window, GC gc, XEvent *event,
-             SoundOutput *sound_output, GameInput *old_game_input,
+             GameSoundOutput *sound_output, GameInput *old_game_input,
              GameInput *new_game_input) {
   switch (event->type) {
 
@@ -1073,364 +1078,421 @@ file_scoped_fn void prepare_input_frame(GameInput *old_input,
 }
 
 int platform_main() {
-  static GameInput game_inputs[2] = {0}; // Static - survives across frames!
-  GameInput *new_game_input = &game_inputs[0];
-  GameInput *old_game_input = &game_inputs[1];
-
-  init_game_state();
-
-  // ═══════════════════════════════════════════════════════════
-  // 🎮 Initialize joystick BEFORE main loop (Casey's pattern)
-  // ═══════════════════════════════════════════════════════════
-  linux_init_joystick(old_game_input->controllers, new_game_input->controllers);
-  // ═══════════════════════════════════════════════════════════
-  // 🔊 Load ALSA library (Casey's Win32LoadXInput pattern)
-  // ═══════════════════════════════════════════════════════════
-  // This MUST come before linux_init_sound()!
-  // Just like Casey calls Win32LoadXInput() before using XInput.
-  linux_load_alsa();
-
-  // ═══════════════════════════════════════════════════════════
-  // 🔊 Initialize sound (Casey's Win32InitDSound equivalent)
-  // ═══════════════════════════════════════════════════════════
+#if HANDMADE_INTERNAL
+  // Debug/Development mode: Reserve 2TB of address space for debugging
+  // What if your RAM is less than 2TB? No problem, we're just reserving
+  // address space, not committing physical memory yet.
+  // Which means no actual RAM is used until we commit it (with mmap or
+  // similar).
   //
-  // Casey's Day 7 call:
-  //   Win32InitDSound(Window, 48000, 48000*sizeof(int16)*2);
-  //
-  // Parameters breakdown:
-  //   48000 = samples per second (CD quality is 44100, we use higher)
-  //   48000 * sizeof(int16_t) * 2 = 1 second of stereo 16-bit audio
-  //                                = 48000 * 2 * 2 = 192,000 bytes
-  //
-  // NOTE: This is a SECONDARY backbuffer size (where we write audio).
-  //       The PRIMARY backbuffer just sets the format.
-  // ═══════════════════════════════════════════════════════════
-  int samples_per_second = 48000;
-  int bytes_per_sample = sizeof(int16_t) * 2; // 16-bit stereo
-  int secondary_buffer_size = samples_per_second * bytes_per_sample;
-  linux_init_sound(&g_sound_output, samples_per_second, secondary_buffer_size);
+  void *base_address = (void *)TERABYTES(2);
+#else
+  void *base_address = NULL;
+#endif
 
-  /**
-   * CONNECT TO X SERVER
-   *
-   * XOpenDisplay(NULL) connects to the default display.
-   * Display is like a connection to the windowing system.
-   *
-   * WEB ANALOGY: Like opening a WebSocket connection to a server
-   *
-   * NULL means "use the DISPLAY environment variable"
-   * (usually ":0" for the first monitor)
-   */
-  Display *display = XOpenDisplay(NULL);
-  if (!display) {
-    fprintf(stderr, "ERROR: Cannot connect to X server\n");
-    return 1;
-  }
-  printf("Connected to X server\n");
+  uint64_t permanent_storage_size = MEGABYTES(64);
+  uint64_t transient_storage_size = GIGABYTES(4);
+  PlatformMemoryBlock permanent_storage = platform_allocate_memory(
+      base_address, permanent_storage_size,
+      PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE | PLATFORM_MEMORY_ZEROED);
 
-  /**
-   * GET SCREEN INFO
-   *
-   * X11 supports multiple screens (monitors).
-   * We'll use the default screen.
-   *
-   * Like getting window.screen.width/height in JavaScript
-   */
-  int screen = DefaultScreen(display);
-  Window root = RootWindow(display, screen);
-
-  // Force 32-bit visual with alpha
-  XVisualInfo vinfo;
-  if (!XMatchVisualInfo(display, screen, 32, TrueColor, &vinfo)) {
-    fprintf(stderr, "❌ No 32-bit visual available\n");
+  if (!permanent_storage.base) {
+    fprintf(stderr, "ERROR: Could not allocate permanent storage\n");
     return 1;
   }
 
-  printf("✅ Using 32-bit visual (depth: %d)\n", vinfo.depth);
+  // Calculate next address
+  void *transient_base =
+      (uint8_t *)permanent_storage.base + permanent_storage.size;
 
-  // Create colormap for 32-bit visual
-  Colormap colormap = XCreateColormap(display, root, vinfo.visual, AllocNone);
+  PlatformMemoryBlock transient_storage = platform_allocate_memory(
+      transient_base, transient_storage_size, // ← Actually allocate it!
+      PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE | PLATFORM_MEMORY_ZEROED);
 
-  g_buffer_info = NULL;
-
-  int init_backbuffer_status =
-      init_backbuffer(1280, 720, 4, compose_pixel_xrgb);
-  if (init_backbuffer_status != 0) {
-    fprintf(stderr, "Failed to initialize backbuffer\n");
-    return init_backbuffer_status;
+  if (!transient_storage.base) {
+    fprintf(stderr, "ERROR: Could not allocate transient storage\n");
+    platform_free_memory(&permanent_storage);
+    return 1;
   }
 
-  g_buffer_info = XCreateImage(
-      // display,                                        // X11 connection
-      // DefaultVisual(display, DefaultScreen(display)), // Color format
-      // 24,                          // Depth (24-bit RGB, ignore alpha)
-      // ZPixmap,                     // Format (chunky pixels, not planar)
-      // 0,                           // Offset in data
-      // (char *)g_backbuffer.memory, // Our pixel backbuffer
-      // g_backbuffer.width, g_backbuffer.height, // Dimensions
-      // 32, // Bitmap pad (align to 32-bit boundaries)
-      // 0   // Bytes per line (0 = auto-calculate)
-      display,                                 //
-      vinfo.visual,                            //
-      vinfo.depth,                             //
-      ZPixmap,                                 //
-      0,                                       //
-      (char *)g_backbuffer.memory,             //
-      g_backbuffer.width, g_backbuffer.height, //
-      32,                                      //
-      0                                        //
-  );
+  GameMemory game_memory = {0};
+  game_memory.permanent_storage = permanent_storage;
+  game_memory.transient_storage = transient_storage;
+  game_memory.permanent_storage_size = permanent_storage.size;
+  game_memory.transient_storage_size = transient_storage.size;
 
-  /**
-   * CREATE THE WINDOW
-   *
-   * This is like:
-   * const div = document.createElement('div');
-   * div.style.width = '800px';
-   * div.style.height = '600px';
-   * document.body.appendChild(div);
-   *
-   * XCreateSimpleWindow parameters:
-   * - display: Our connection to X server
-   * - root: Parent window (desktop)
-   * - x, y: Position (0, 0 = top-left)
-   * - width, height: Size in pixels
-   * - border_width: Border size
-   * - border: Border color
-   * - background: Background color
-   *
-   * Casey uses CreateWindowExA() in Windows with WS_OVERLAPPEDWINDOW
-   */
-  // Window window = XCreateSimpleWindow(
-  //     display,                                 //
-  //     root,                                    //
-  //     0, 0,                                    // x, y position
-  //     g_backbuffer.width, g_backbuffer.height, // width, height
-  //     1,                                       // border width
-  //     BlackPixel(display, screen),             // border color
-  //     WhitePixel(display, screen)              // background color
-  // );
-  XSetWindowAttributes attrs = {0};
-  attrs.colormap = colormap;
-  attrs.event_mask = ExposureMask | StructureNotifyMask | FocusChangeMask |
-                     KeyPressMask | KeyReleaseMask;
+  printf("✅ Game memory allocated:\n");
+  printf("   Permanent: %lu MB at %p\n",
+         game_memory.permanent_storage.size / (1024 * 1024),
+         game_memory.permanent_storage.base);
+  printf("   Transient: %lu GB at %p\n",
+         game_memory.transient_storage.size / (1024 * 1024 * 1024),
+         game_memory.transient_storage.base);
 
-  Window window =
-      XCreateWindow(display,                                                //
-                    root,                                                   //
-                    0, 0,                                                   //
-                    g_backbuffer.width,                                     //
-                    g_backbuffer.height,                                    //
-                    0,                                                      //
-                    vinfo.depth,                                            //
-                    InputOutput,                                            //
-                    vinfo.visual,                                           //
-                    CWColormap | CWBorderPixel | CWBackPixel | CWEventMask, //
-                    &attrs                                                  //
-      );
+  if (game_memory.permanent_storage.base &&
+      game_memory.transient_storage.base) {
+    static GameInput game_inputs[2] = {0}; // Static - survives across frames!
+    GameInput *new_game_input = &game_inputs[0];
+    GameInput *old_game_input = &game_inputs[1];
 
-  printf("Created window\n");
+    GameSoundOutput game_sound_output = {0};
+    GameOffscreenBuffer game_buffer = {0};
 
-  /**
-   * SET WINDOW TITLE
-   *
-   * Like document.title = "Handmade Hero"
-   *
-   * Casey sets this in CreateWindowExA() as the window name parameter
-   */
-  XStoreName(display, window, "Handmade Hero");
-
-  /**
-   * REGISTER FOR WINDOW CLOSE EVENT
-   *
-   * By default, clicking X just closes the window without notifying us.
-   * We need to tell X11 we want to handle the close event ourselves.
-   *
-   * This is like:
-   * window.addEventListener('beforeunload', (e) => {
-   *   e.preventDefault(); // We handle it ourselves
-   * });
-   *
-   * WM_DELETE_WINDOW is a protocol that says "let me know when user wants
-   * to close"
-   */
-  Atom wmDeleteMsg = XInternAtom(display, "WM_DELETE_WINDOW", false);
-  XSetWMProtocols(display, window, &wmDeleteMsg, 1);
-  printf("Registered close event handler\n");
-
-  /**
-   * SELECT EVENTS WE WANT TO RECEIVE
-   *
-   * Like calling addEventListener() for specific events.
-   * We tell X11 which events we care about.
-   *
-   * Think of this like:
-   * element.addEventListener('click', handler);
-   * element.addEventListener('resize', handler);
-   * element.addEventListener('focus', handler);
-   *
-   * Event masks are bit flags (like MB_OK|MB_ICONINFORMATION in Windows)
-   */
-  XSelectInput(display, window,
-               ExposureMask |            // Repaint events (WM_PAINT)
-                   StructureNotifyMask | // Resize events (WM_SIZE)
-                   FocusChangeMask |     // Focus events (WM_ACTIVATEAPP)
-                   KeyPressMask |        // Key press events
-                   KeyReleaseMask        // Key release events
-  );
-  printf("Registered event listeners\n");
-
-  /**
-   * SHOW THE WINDOW
-   *
-   * Like element.style.display = 'block'
-   * or element.classList.remove('hidden')
-   *
-   * Window is created but hidden by default. XMapWindow makes it visible.
-   * Casey uses WS_VISIBLE flag to show window immediately.
-   */
-  XMapWindow(display, window);
-  printf("Window shown\n");
-
-  // Create GC (graphics context)
-  // Like ctx = canvas.getContext('2d')
-  GC gc = XCreateGC(display, window, 0, NULL);
-
-  /**
-   * : ALLOCATE INITIAL BACK BUFFER
-   *
-   * We need to create the back backbuffer BEFORE entering the event loop
-   * so we have something to draw to!
-   *
-   * Note: ConfigureNotify will fire after XMapWindow, but we also
-   * want to draw immediately, so we allocate here.
-   */
-  resize_back_buffer(&g_backbuffer, &g_buffer_info, display, vinfo.visual,
-                     vinfo.depth, g_backbuffer.width, g_backbuffer.height);
-
-  // int test_offset = 0;
-
-  /**
-   * EVENT LOOP (THE HEART OF THE PROGRAM)
-   *
-   * This is like:
-   * while (true) {
-   *   const event = await waitForEvent();
-   *   handleEvent(event);
-   * }
-   *
-   * Casey's version:
-   * for(;;) {
-   *   GetMessageA(&Message, ...);
-   *   TranslateMessage(&Message);
-   *   DispatchMessageA(&Message);
-   * }
-   *
-   * DIFFERENCES:
-   * - Windows: GetMessageA() blocks until message arrives (synchronous)
-   * - X11: XNextEvent() blocks until event arrives (synchronous)
-   *
-   * Both are essentially: "Wait for next event, then handle it"
-   *
-   * This loop runs forever until g_Running becomes false
-   * (when user closes the window)
-   */
-  printf("Entering event loop...\n");
-
-  struct timespec start, end;
-  uint64_t start_cycles, end_cycles;
-
-  clock_gettime(CLOCK_MONOTONIC, &start);
-  start_cycles = __rdtsc();
-
-  while (is_game_running) {
     // ═══════════════════════════════════════════════════════════
-    // 🐛 DEBUG: Print controller states (TEMPORARY!)
+    // 🎮 Initialize joystick BEFORE main loop (Casey's pattern)
     // ═══════════════════════════════════════════════════════════
-    static int frame_count = 0;
-    if (frame_count++ % 60 == 0) { // Print once per second (60 FPS)
-      printf("\n🎮 Controller States:\n");
-      for (int i = 0; i < MAX_CONTROLLER_COUNT; i++) {
-        GameControllerInput *c = &old_game_input->controllers[i];
-        LinuxJoystickState *joystick_state = NULL;
-        if (i > 0 && i - 1 < MAX_JOYSTICK_COUNT) {
-          joystick_state = &g_joysticks[i - 1];
+    linux_init_joystick(old_game_input->controllers,
+                        new_game_input->controllers);
+    // ═══════════════════════════════════════════════════════════
+    // 🔊 Load ALSA library (Casey's Win32LoadXInput pattern)
+    // ═══════════════════════════════════════════════════════════
+    // This MUST come before linux_init_sound()!
+    // Just like Casey calls Win32LoadXInput() before using XInput.
+    linux_load_alsa();
+
+    // ═══════════════════════════════════════════════════════════
+    // 🔊 Initialize sound (Casey's Win32InitDSound equivalent)
+    // ═══════════════════════════════════════════════════════════
+    //
+    // Casey's Day 7 call:
+    //   Win32InitDSound(Window, 48000, 48000*sizeof(int16)*2);
+    //
+    // Parameters breakdown:
+    //   48000 = samples per second (CD quality is 44100, we use higher)
+    //   48000 * sizeof(int16_t) * 2 = 1 second of stereo 16-bit audio
+    //                                = 48000 * 2 * 2 = 192,000 bytes
+    //
+    // NOTE: This is a SECONDARY backbuffer size (where we write audio).
+    //       The PRIMARY backbuffer just sets the format.
+    // ═══════════════════════════════════════════════════════════
+    int samples_per_second = 48000;
+    int bytes_per_sample = sizeof(int16_t) * 2; // 16-bit stereo
+    int secondary_buffer_size = samples_per_second * bytes_per_sample;
+    linux_init_sound(&game_sound_output, samples_per_second,
+                     secondary_buffer_size);
+
+    /**
+     * CONNECT TO X SERVER
+     *
+     * XOpenDisplay(NULL) connects to the default display.
+     * Display is like a connection to the windowing system.
+     *
+     * WEB ANALOGY: Like opening a WebSocket connection to a server
+     *
+     * NULL means "use the DISPLAY environment variable"
+     * (usually ":0" for the first monitor)
+     */
+    Display *display = XOpenDisplay(NULL);
+    if (!display) {
+      fprintf(stderr, "ERROR: Cannot connect to X server\n");
+      return 1;
+    }
+    printf("Connected to X server\n");
+
+    /**
+     * GET SCREEN INFO
+     *
+     * X11 supports multiple screens (monitors).
+     * We'll use the default screen.
+     *
+     * Like getting window.screen.width/height in JavaScript
+     */
+    int screen = DefaultScreen(display);
+    Window root = RootWindow(display, screen);
+
+    // Force 32-bit visual with alpha
+    XVisualInfo vinfo;
+    if (!XMatchVisualInfo(display, screen, 32, TrueColor, &vinfo)) {
+      fprintf(stderr, "❌ No 32-bit visual available\n");
+      return 1;
+    }
+
+    printf("✅ Using 32-bit visual (depth: %d)\n", vinfo.depth);
+
+    // Create colormap for 32-bit visual
+    Colormap colormap = XCreateColormap(display, root, vinfo.visual, AllocNone);
+
+    g_buffer_info = NULL;
+
+    int init_backbuffer_status =
+        init_backbuffer(&game_buffer, 1280, 720, 4, compose_pixel_xrgb);
+    if (init_backbuffer_status != 0) {
+      fprintf(stderr, "Failed to initialize backbuffer\n");
+      return init_backbuffer_status;
+    }
+
+    g_buffer_info = XCreateImage(
+        // display,                                        // X11 connection
+        // DefaultVisual(display, DefaultScreen(display)), // Color format
+        // 24,                          // Depth (24-bit RGB, ignore alpha)
+        // ZPixmap,                     // Format (chunky pixels, not planar)
+        // 0,                           // Offset in data
+        // (char *)game_buffer.memory, // Our pixel backbuffer
+        // game_buffer.width, game_buffer.height, // Dimensions
+        // 32, // Bitmap pad (align to 32-bit boundaries)
+        // 0   // Bytes per line (0 = auto-calculate)
+        display,                               //
+        vinfo.visual,                          //
+        vinfo.depth,                           //
+        ZPixmap,                               //
+        0,                                     //
+        (char *)game_buffer.memory.base,       //
+        game_buffer.width, game_buffer.height, //
+        32,                                    //
+        0                                      //
+    );
+
+    /**
+     * CREATE THE WINDOW
+     *
+     * This is like:
+     * const div = document.createElement('div');
+     * div.style.width = '800px';
+     * div.style.height = '600px';
+     * document.body.appendChild(div);
+     *
+     * XCreateSimpleWindow parameters:
+     * - display: Our connection to X server
+     * - root: Parent window (desktop)
+     * - x, y: Position (0, 0 = top-left)
+     * - width, height: Size in pixels
+     * - border_width: Border size
+     * - border: Border color
+     * - background: Background color
+     *
+     * Casey uses CreateWindowExA() in Windows with WS_OVERLAPPEDWINDOW
+     */
+    // Window window = XCreateSimpleWindow(
+    //     display,                                 //
+    //     root,                                    //
+    //     0, 0,                                    // x, y position
+    //     game_buffer.width, game_buffer.height, // width, height
+    //     1,                                       // border width
+    //     BlackPixel(display, screen),             // border color
+    //     WhitePixel(display, screen)              // background color
+    // );
+    XSetWindowAttributes attrs = {0};
+    attrs.colormap = colormap;
+    attrs.event_mask = ExposureMask | StructureNotifyMask | FocusChangeMask |
+                       KeyPressMask | KeyReleaseMask;
+
+    Window window =
+        XCreateWindow(display,                                                //
+                      root,                                                   //
+                      0, 0,                                                   //
+                      game_buffer.width,                                      //
+                      game_buffer.height,                                     //
+                      0,                                                      //
+                      vinfo.depth,                                            //
+                      InputOutput,                                            //
+                      vinfo.visual,                                           //
+                      CWColormap | CWBorderPixel | CWBackPixel | CWEventMask, //
+                      &attrs                                                  //
+        );
+
+    printf("Created window\n");
+
+    /**
+     * SET WINDOW TITLE
+     *
+     * Like document.title = "Handmade Hero"
+     *
+     * Casey sets this in CreateWindowExA() as the window name parameter
+     */
+    XStoreName(display, window, "Handmade Hero");
+
+    /**
+     * REGISTER FOR WINDOW CLOSE EVENT
+     *
+     * By default, clicking X just closes the window without notifying us.
+     * We need to tell X11 we want to handle the close event ourselves.
+     *
+     * This is like:
+     * window.addEventListener('beforeunload', (e) => {
+     *   e.preventDefault(); // We handle it ourselves
+     * });
+     *
+     * WM_DELETE_WINDOW is a protocol that says "let me know when user wants
+     * to close"
+     */
+    Atom wmDeleteMsg = XInternAtom(display, "WM_DELETE_WINDOW", false);
+    XSetWMProtocols(display, window, &wmDeleteMsg, 1);
+    printf("Registered close event handler\n");
+
+    /**
+     * SELECT EVENTS WE WANT TO RECEIVE
+     *
+     * Like calling addEventListener() for specific events.
+     * We tell X11 which events we care about.
+     *
+     * Think of this like:
+     * element.addEventListener('click', handler);
+     * element.addEventListener('resize', handler);
+     * element.addEventListener('focus', handler);
+     *
+     * Event masks are bit flags (like MB_OK|MB_ICONINFORMATION in Windows)
+     */
+    XSelectInput(display, window,
+                 ExposureMask |            // Repaint events (WM_PAINT)
+                     StructureNotifyMask | // Resize events (WM_SIZE)
+                     FocusChangeMask |     // Focus events (WM_ACTIVATEAPP)
+                     KeyPressMask |        // Key press events
+                     KeyReleaseMask        // Key release events
+    );
+    printf("Registered event listeners\n");
+
+    /**
+     * SHOW THE WINDOW
+     *
+     * Like element.style.display = 'block'
+     * or element.classList.remove('hidden')
+     *
+     * Window is created but hidden by default. XMapWindow makes it visible.
+     * Casey uses WS_VISIBLE flag to show window immediately.
+     */
+    XMapWindow(display, window);
+    printf("Window shown\n");
+
+    // Create GC (graphics context)
+    // Like ctx = canvas.getContext('2d')
+    GC gc = XCreateGC(display, window, 0, NULL);
+
+    /**
+     * : ALLOCATE INITIAL BACK BUFFER
+     *
+     * We need to create the back backbuffer BEFORE entering the event loop
+     * so we have something to draw to!
+     *
+     * Note: ConfigureNotify will fire after XMapWindow, but we also
+     * want to draw immediately, so we allocate here.
+     */
+    resize_back_buffer(&game_buffer, &g_buffer_info, display, vinfo.visual,
+                       vinfo.depth, game_buffer.width, game_buffer.height);
+
+    // int test_offset = 0;
+
+    /**
+     * EVENT LOOP (THE HEART OF THE PROGRAM)
+     *
+     * This is like:
+     * while (true) {
+     *   const event = await waitForEvent();
+     *   handleEvent(event);
+     * }
+     *
+     * Casey's version:
+     * for(;;) {
+     *   GetMessageA(&Message, ...);
+     *   TranslateMessage(&Message);
+     *   DispatchMessageA(&Message);
+     * }
+     *
+     * DIFFERENCES:
+     * - Windows: GetMessageA() blocks until message arrives (synchronous)
+     * - X11: XNextEvent() blocks until event arrives (synchronous)
+     *
+     * Both are essentially: "Wait for next event, then handle it"
+     *
+     * This loop runs forever until g_Running becomes false
+     * (when user closes the window)
+     */
+    printf("Entering event loop...\n");
+
+    struct timespec start, end;
+    uint64_t start_cycles, end_cycles;
+
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    start_cycles = __rdtsc();
+
+    while (is_game_running) {
+      // ═══════════════════════════════════════════════════════════
+      // 🐛 DEBUG: Print controller states (TEMPORARY!)
+      // ═══════════════════════════════════════════════════════════
+      static int frame_count = 0;
+      if (frame_count++ % 60 == 0) { // Print once per second (60 FPS)
+        printf("\n🎮 Controller States:\n");
+        for (int i = 0; i < MAX_CONTROLLER_COUNT; i++) {
+          GameControllerInput *c = &old_game_input->controllers[i];
+          LinuxJoystickState *joystick_state = NULL;
+          if (i > 0 && i - 1 < MAX_JOYSTICK_COUNT) {
+            joystick_state = &g_joysticks[i - 1];
+          }
+          printf("  [%d] connected=%d analog=%d fd=%d end_x=%.2f end_y=%.2f\n",
+                 i, c->is_connected, c->is_analog,
+                 joystick_state ? joystick_state->fd : -1, c->end_x, c->end_y);
         }
-        printf("  [%d] connected=%d analog=%d fd=%d end_x=%.2f end_y=%.2f\n", i,
-               c->is_connected, c->is_analog,
-               joystick_state ? joystick_state->fd : -1, c->end_x, c->end_y);
       }
+
+      // ═══════════════════════════════════════════════════════════
+      // Clear new input buttons to released state
+      // ═══════════════════════════════════════════════════════════
+      // X11 keyboard only sends events on press/release.
+      // If no event, button stays in old state (wrong!).
+      // So we must explicitly clear to "not pressed".
+      // ═══════════════════════════════════════════════════════════
+      prepare_input_frame(old_game_input, new_game_input);
+
+      XEvent event;
+
+      // ═══════════════════════════════════════════════════════════
+      // Process events, joystick, call game...
+      // ═══════════════════════════════════════════════════════════
+      while (XPending(display) > 0) {
+        XNextEvent(display, &event);
+        handle_event(&game_buffer, &g_buffer_info, display, window, gc, &event,
+                     &game_sound_output, old_game_input, new_game_input);
+      }
+      linux_poll_joystick(old_game_input, new_game_input);
+      // printf("new_game_input->controllers[1].is_analog: %d\n",
+      //        new_game_input->controllers[1].is_analog);
+
+      if (game_buffer.memory.base) {
+
+        // Display the result
+        update_window(&game_buffer, &g_buffer_info, display, window, gc, 0, 0,
+                      game_buffer.width, game_buffer.height);
+
+        game_update_and_render(&game_memory, new_game_input, &game_buffer,
+                               &game_sound_output);
+      }
+      // ═══════════════════════════════════════════════════════════
+      // Day 8: Fill and write audio backbuffer every frame
+      // ═══════════════════════════════════════════════════════════
+      //
+      // We generate samples and write them to ALSA.
+      //
+      // NOTE: ALSA handles playback automatically once we start
+      // writing. No explicit "Play()" call needed!
+      // ═══════════════════════════════════════════════════════════
+      linux_fill_sound_buffer(&game_sound_output);
+
+      // ═══════════════════════════════════════════════════════════
+      // Timing
+      // ═══════════════════════════════════════════════════════════
+      clock_gettime(CLOCK_MONOTONIC, &end);
+      end_cycles = __rdtsc();
+
+      double ms_per_frame = (end.tv_sec - start.tv_sec) * 1000.0 +
+                            (end.tv_nsec - start.tv_nsec) / 1000000.0;
+      double fps = 1000.0 / ms_per_frame;
+      double mcpf = (end_cycles - start_cycles) / 1000000.0;
+
+      // printf("%.2fms/f, %.2ff/s, %.2fmc/f\n", ms_per_frame, fps, mcpf);
+
+      start = end;
+      start_cycles = end_cycles;
+
+      // ═══════════════════════════════════════════════════════════
+      // SWAP INPUT BUFFERS (THE CRITICAL STEP!)
+      // ═══════════════════════════════════════════════════════════
+      // This is what makes double buffering work!
+      // ═══════════════════════════════════════════════════════════
+      // Swap pointers (preserves previous frame!)
+      GameInput *temp_game_input = new_game_input;
+      new_game_input = old_game_input;
+      old_game_input = temp_game_input;
     }
-
-    // ═══════════════════════════════════════════════════════════
-    // Clear new input buttons to released state
-    // ═══════════════════════════════════════════════════════════
-    // X11 keyboard only sends events on press/release.
-    // If no event, button stays in old state (wrong!).
-    // So we must explicitly clear to "not pressed".
-    // ═══════════════════════════════════════════════════════════
-    prepare_input_frame(old_game_input, new_game_input);
-
-    XEvent event;
-
-    // ═══════════════════════════════════════════════════════════
-    // Process events, joystick, call game...
-    // ═══════════════════════════════════════════════════════════
-    while (XPending(display) > 0) {
-      XNextEvent(display, &event);
-      handle_event(&g_backbuffer, &g_buffer_info, display, window, gc, &event,
-                   &g_sound_output, old_game_input, new_game_input);
-    }
-    linux_poll_joystick(old_game_input, new_game_input);
-    // printf("new_game_input->controllers[1].is_analog: %d\n",
-    //        new_game_input->controllers[1].is_analog);
-
-    if (g_backbuffer.memory) {
-
-      // Display the result
-      update_window(&g_backbuffer, &g_buffer_info, display, window, gc, 0, 0,
-                    g_backbuffer.width, g_backbuffer.height);
-
-      game_update_and_render(new_game_input);
-    }
-    // ═══════════════════════════════════════════════════════════
-    // Day 8: Fill and write audio backbuffer every frame
-    // ═══════════════════════════════════════════════════════════
-    //
-    // We generate samples and write them to ALSA.
-    //
-    // NOTE: ALSA handles playback automatically once we start
-    // writing. No explicit "Play()" call needed!
-    // ═══════════════════════════════════════════════════════════
-    linux_fill_sound_buffer(&g_sound_output);
-
-    // ═══════════════════════════════════════════════════════════
-    // Timing
-    // ═══════════════════════════════════════════════════════════
-    clock_gettime(CLOCK_MONOTONIC, &end);
-    end_cycles = __rdtsc();
-
-    double ms_per_frame = (end.tv_sec - start.tv_sec) * 1000.0 +
-                          (end.tv_nsec - start.tv_nsec) / 1000000.0;
-    double fps = 1000.0 / ms_per_frame;
-    double mcpf = (end_cycles - start_cycles) / 1000000.0;
-
-    // printf("%.2fms/f, %.2ff/s, %.2fmc/f\n", ms_per_frame, fps, mcpf);
-
-    start = end;
-    start_cycles = end_cycles;
-
-    // ═══════════════════════════════════════════════════════════
-    // SWAP INPUT BUFFERS (THE CRITICAL STEP!)
-    // ═══════════════════════════════════════════════════════════
-    // This is what makes double buffering work!
-    // ═══════════════════════════════════════════════════════════
-    // Swap pointers (preserves previous frame!)
-    GameInput *temp_game_input = new_game_input;
-    new_game_input = old_game_input;
-    old_game_input = temp_game_input;
   }
-
   /**
    * CLEANUP - CASEY'S "RESOURCE LIFETIMES IN WAVES" PHILOSOPHY
    *

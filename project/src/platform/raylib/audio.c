@@ -17,6 +17,8 @@
 
 RaylibSoundOutput g_linux_sound_output = {0};
 
+GameSoundOutput *raylib_audio_callback_sound_output = NULL;
+
 // ═══════════════════════════════════════════════════════════════
 // 🔊 AUDIO CALLBACK (Raylib's equivalent of linux_fill_sound_buffer)
 // ═══════════════════════════════════════════════════════════════
@@ -30,7 +32,8 @@ RaylibSoundOutput g_linux_sound_output = {0};
 //
 // ═══════════════════════════════════════════════════════════════
 void raylib_audio_callback(void *backbuffer, unsigned int frames) {
-  if (!g_sound_output.is_initialized) {
+  if (!raylib_audio_callback_sound_output ||
+      !raylib_audio_callback_sound_output->is_initialized) {
     return;
   }
 
@@ -46,27 +49,33 @@ void raylib_audio_callback(void *backbuffer, unsigned int frames) {
     //   tSine += 2π / WavePeriod;
     // ═══════════════════════════════════════════════════════════
 
-    real32 sine_value = sinf(g_sound_output.t_sine);
-    int16_t sample_value = (int16_t)(sine_value * g_sound_output.tone_volume);
+    real32 sine_value = sinf(raylib_audio_callback_sound_output->t_sine);
+    int16_t sample_value =
+        (int16_t)(sine_value * raylib_audio_callback_sound_output->tone_volume);
 
     // Apply panning (your extension from X11 version)
-    int left_gain = (100 - g_sound_output.pan_position);  // 0 to 200
-    int right_gain = (100 + g_sound_output.pan_position); // 0 to 200
+    int left_gain =
+        (100 - raylib_audio_callback_sound_output->pan_position); // 0 to 200
+    int right_gain =
+        (100 + raylib_audio_callback_sound_output->pan_position); // 0 to 200
 
     *sample_out++ = (sample_value * left_gain) / 200;  // Left channel
     *sample_out++ = (sample_value * right_gain) / 200; // Right channel
 
     // Increment phase accumulator (Day 9)
-    g_sound_output.t_sine +=
-        (2.0f * M_PI * 1.0f) / (real32)g_sound_output.wave_period;
+    raylib_audio_callback_sound_output->t_sine +=
+        (2.0f * M_PI * 1.0f) /
+        (real32)raylib_audio_callback_sound_output->wave_period;
 
     // Wrap to [0, 2π) range to prevent overflow
-    if (g_sound_output.t_sine >= 2.0f * M_PI) {
-      g_sound_output.t_sine -= 2.0f * M_PI;
+    if (raylib_audio_callback_sound_output->t_sine >= 2.0f * M_PI) {
+      raylib_audio_callback_sound_output->t_sine -= 2.0f * M_PI;
     }
 
-    g_sound_output.running_sample_index++;
+    raylib_audio_callback_sound_output->running_sample_index++;
   }
+
+  raylib_audio_callback_sound_output = NULL;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -85,7 +94,7 @@ void raylib_audio_callback(void *backbuffer, unsigned int frames) {
 //
 // ═══════════════════════════════════════════════════════════════
 
-void raylib_init_audio(void) {
+void raylib_init_audio(GameSoundOutput *sound_output) {
   printf("🔊 Initializing audio system...\n");
 
   // ═══════════════════════════════════════════════════════════
@@ -96,7 +105,7 @@ void raylib_init_audio(void) {
   if (!IsAudioDeviceReady()) {
     fprintf(stderr, "❌ Audio: Device initialization failed\n");
     fprintf(stderr, "   Game will run without sound\n");
-    g_sound_output.is_initialized = false;
+    sound_output->is_initialized = false;
     return;
   }
 
@@ -105,23 +114,23 @@ void raylib_init_audio(void) {
   // ═══════════════════════════════════════════════════════════
   // Step 2: Set audio parameters (Day 7-9)
   // ═══════════════════════════════════════════════════════════
-  g_sound_output.samples_per_second = 48000;
-  g_sound_output.bytes_per_sample = sizeof(int16_t) * 2; // 16-bit stereo
+  sound_output->samples_per_second = 48000;
+  sound_output->bytes_per_sample = sizeof(int16_t) * 2; // 16-bit stereo
 
   // Day 8: Sound generation parameters
-  g_sound_output.running_sample_index = 0;
-  g_sound_output.tone_hz = 256;      // Middle C-ish
-  g_sound_output.tone_volume = 6000; // Casey's Day 8 value
-  g_sound_output.wave_period =
-      g_sound_output.samples_per_second / g_sound_output.tone_hz;
+  sound_output->running_sample_index = 0;
+  sound_output->tone_hz = 256;      // Middle C-ish
+  sound_output->tone_volume = 6000; // Casey's Day 8 value
+  sound_output->wave_period =
+      sound_output->samples_per_second / sound_output->tone_hz;
 
   // Day 9: Sine wave phase accumulator
-  g_sound_output.t_sine = 0.0f;
+  sound_output->t_sine = 0.0f;
 
   // Day 9: Latency (1/15 second like Casey)
-  g_sound_output.latency_sample_count = g_sound_output.samples_per_second / 15;
+  sound_output->latency_sample_count = sound_output->samples_per_second / 15;
 
-  g_sound_output.pan_position = 0; // Center
+  sound_output->pan_position = 0; // Center
 
   // ═══════════════════════════════════════════════════════════
   // Step 3: Create audio stream (Casey's secondary backbuffer)
@@ -136,9 +145,9 @@ void raylib_init_audio(void) {
   // ═══════════════════════════════════════════════════════════
 
   g_linux_sound_output.stream =
-      LoadAudioStream(g_sound_output.samples_per_second, // 48000 Hz
-                      16,                                // 16-bit samples
-                      2                                  // Stereo
+      LoadAudioStream(sound_output->samples_per_second, // 48000 Hz
+                      16,                               // 16-bit samples
+                      2                                 // Stereo
       );
 
   // ═══════════════════════════════════════════════════════════
@@ -159,16 +168,16 @@ void raylib_init_audio(void) {
   // ═══════════════════════════════════════════════════════════
   PlayAudioStream(g_linux_sound_output.stream);
 
-  g_sound_output.is_initialized = true;
+  sound_output->is_initialized = true;
 
   printf("✅ Audio: Initialized with sine wave!\n");
-  printf("   Sample rate:  %d Hz\n", g_sound_output.samples_per_second);
-  printf("   Tone:         %d Hz (sine wave)\n", g_sound_output.tone_hz);
-  printf("   Wave period:  %d samples\n", g_sound_output.wave_period);
+  printf("   Sample rate:  %d Hz\n", sound_output->samples_per_second);
+  printf("   Tone:         %d Hz (sine wave)\n", sound_output->tone_hz);
+  printf("   Wave period:  %d samples\n", sound_output->wave_period);
   printf("   Latency:      %d samples (~%.1f ms)\n",
-         g_sound_output.latency_sample_count,
-         (float)g_sound_output.latency_sample_count /
-             g_sound_output.samples_per_second * 1000.0f);
+         sound_output->latency_sample_count,
+         (float)sound_output->latency_sample_count /
+             sound_output->samples_per_second * 1000.0f);
   printf("   Buffer:       4096 frames (~85 ms)\n");
 }
 
@@ -178,8 +187,8 @@ void raylib_init_audio(void) {
 // These mirror your X11 backend functions exactly
 // ═══════════════════════════════════════════════════════════════
 
-void raylib_debug_audio(void) {
-  if (!g_sound_output.is_initialized) {
+void raylib_debug_audio(GameSoundOutput *sound_output) {
+  if (!sound_output->is_initialized) {
     printf("❌ Audio: Not initialized\n");
     return;
   }
@@ -190,13 +199,13 @@ void raylib_debug_audio(void) {
   printf("│ Mode: Callback-based (automatic latency control)       │\n");
   printf("│                                                         │\n");
   printf("│ Sample rate:       %d Hz                                 │\n",
-         g_sound_output.samples_per_second);
+         sound_output->samples_per_second);
   printf("│ Frequency:         %d Hz                                 │\n",
-         g_sound_output.tone_hz);
+         sound_output->tone_hz);
   printf("│ Volume:            %d / 15000                            │\n",
-         g_sound_output.tone_volume);
+         sound_output->tone_volume);
   printf("│ Pan:               %+d (L=%d, R=%d)                      │\n",
-         g_sound_output.pan_position, 100 - g_sound_output.pan_position,
-         100 + g_sound_output.pan_position);
+         sound_output->pan_position, 100 - sound_output->pan_position,
+         100 + sound_output->pan_position);
   printf("└─────────────────────────────────────────────────────────┘\n");
 }

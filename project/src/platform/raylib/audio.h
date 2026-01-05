@@ -1,7 +1,7 @@
 #ifndef RAYLIB_AUDIO_H
 #define RAYLIB_AUDIO_H
 
-#include "../../base.h"
+#include "../../base/base.h"
 #include <raylib.h>
 #include <stdlib.h>
 
@@ -21,9 +21,10 @@ typedef struct {
 
 extern RaylibSoundOutput g_linux_sound_output;
 void raylib_audio_callback(void *backbuffer, unsigned int frames);
-void raylib_init_audio(void);
+void raylib_init_audio(GameSoundOutput *sound_output);
 
-void raylib_debug_audio(void);
+
+void raylib_debug_audio(GameSoundOutput *sound_output);
 
 #endif // RAYLIB_AUDIO_H
 #define RAYLIB_AUDIO_H

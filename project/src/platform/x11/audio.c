@@ -130,7 +130,7 @@
  *
  */
 #include "audio.h"
-#include "../../base.h"
+#include "../../base/base.h"
 #include "../../game.h"
 #include <dlfcn.h> // For dlopen, dlsym, dlclose (Casey's LoadLibrary equivalent)
 #include <errno.h>
@@ -356,7 +356,7 @@ void linux_load_alsa(void) {
 //
 // ═══════════════════════════════════════════════════════════════
 
-void linux_init_sound(SoundOutput *sound_output, int32_t samples_per_second,
+void linux_init_sound(GameSoundOutput *sound_output, int32_t samples_per_second,
                       int32_t buffer_size_bytes) {
   printf("Initializing sound output...\n");
 
@@ -527,7 +527,7 @@ file_scoped_fn inline bool linux_audio_has_latency_measurement(void) {
 //   - Write as much as ALSA allows (up to our backbuffer size)
 //
 // This graceful degradation is Casey's pattern!
-void linux_fill_sound_buffer(SoundOutput *sound_output) {
+void linux_fill_sound_buffer(GameSoundOutput *sound_output) {
   if (!sound_output->is_initialized) {
     return;
   }
@@ -696,7 +696,7 @@ void linux_fill_sound_buffer(SoundOutput *sound_output) {
 // ═══════════════════════════════════════════════════════════════
 // 🔊 DAY 10: Audio Latency Debug Helper
 // ═══════════════════════════════════════════════════════════════
-void linux_debug_audio_latency(SoundOutput *sound_output) {
+void linux_debug_audio_latency(GameSoundOutput *sound_output) {
   if (!sound_output->is_initialized) {
     printf("❌ Audio: Not initialized\n");
     return;

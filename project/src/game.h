@@ -2,126 +2,100 @@
 #define GAME_H
 
 #include "platform/platform.h"
-#include "base.h"
+#include "base/base.h"
+#include <stdint.h>
 
-#define CONTROLLER_DEADZONE 0.10f
+// ═══════════════════════════════════════════════════════════════
+// 🧠 DAY 14: EXPLICIT GAME MEMORY
+// ═══════════════════════════════════════════════════════════════
+// Casey's Day 14 addition: Platform allocates, game manages!
+//
+// MEMORY LAYOUT:
+// ┌─────────────────────────────────────────────────────────────┐
+// │ PermanentStorage (64MB)                                     │
+// │ ┌───────────────────────────────────────────────────────┐   │
+// │ │ game_state (your actual game data)                   │   │
+// │ │ - gradient_state                                      │   │
+// │ │ - pixel_state                                         │   │
+// │ │ - speed                                               │   │
+// │ └───────────────────────────────────────────────────────┘   │
+// │ [Rest of 64MB available for:]                               │
+// │ - Save game data                                            │
+// │ - Player stats                                              │
+// │ - Settings/options                                          │
+// └─────────────────────────────────────────────────────────────┘
+// ┌─────────────────────────────────────────────────────────────┐
+// │ TransientStorage (4GB)                                      │
+// │ [Ready for:]                                                │
+// │ - Level geometry                                            │
+// │ - Particle systems                                          │
+// │ - Temporary buffers                                         │
+// └─────────────────────────────────────────────────────────────┘
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * 🧠 GAME MEMORY
+ * ───────────────────────────────────────────────────────────────
+ * Platform allocates this ONCE at startup using mmap().
+ * Game receives pointer and casts to game_state*.
+ *
+ * Casey's Day 14 pattern:
+ *   - IsInitialized flag for first-run detection
+ *   - PermanentStorage for save data, settings
+ *   - TransientStorage for level data, temp buffers
+ * ───────────────────────────────────────────────────────────────
+ */
+typedef struct {
+  // A permanent block of memory that the game can use between calls to
+  // `game_update_and_render`. This is where you should store all your game
+  // state!
+  PlatformMemoryBlock permanent_storage;         
+  // A temporary block of memory that the game can use between calls to
+  // `game_update_and_render`. This is where you should store all your
+  // scratch data!
+  PlatformMemoryBlock transient_storage;          
+  // Size of the permanent storage block in bytes
+  uint64_t permanent_storage_size;  
+  // Size of the temporary storage block in bytes
+  uint64_t transient_storage_size;  
+  // Has this memory been initialized?
+  bool32 is_initialized;            
+} GameMemory;
 
 typedef struct {
-  int offset_x;
-  int offset_y;
-} GradientState;
-
-typedef struct {
-  int offset_x;
-  int offset_y;
-} PixelState;
-
-typedef struct {
-  GradientState gradient_state;
-  PixelState pixel_state;
-  int speed;
-} GameState;
-
-typedef enum {
-  INIT_BACKBUFFER_STATUS_SUCCESS = 0,
-  INIT_BACKBUFFER_STATUS_MMAP_FAILED = 1,
-} INIT_BACKBUFFER_STATUS;
-
-typedef struct {
-  void *memory; // Raw pixel memory (our canvas!)
+  PlatformMemoryBlock memory; // Raw pixel memory (our canvas!)
   int width;    // Current backbuffer dimensions
   int height;
   int pitch;
   int bytes_per_pixel;
   pixel_composer_fn compose_pixel;
-} OffscreenBuffer;
-
-
-/**
- * GLOBAL STATE
- *
- * In C, we often use global variables for things that need to persist
- * across function calls. Think of these like module-level variables in JS.
- *
- * Casey uses globals to avoid passing everything as parameters.
- * This is a design choice - simpler but less "pure".
- */
-
-// Button states (mirrors Casey's XInput button layout)
-
-typedef enum {
-  DEFINED_TONE_NONE,
-  DEFINED_TONE_C4,
-  DEFINED_TONE_D4,
-  DEFINED_TONE_E4,
-  DEFINED_TONE_F4,
-  DEFINED_TONE_G4,
-  DEFINED_TONE_A4,
-  DEFINED_TONE_B4,
-  DEFINED_TONE_C5,
-} DefinedTone;
-
-// typedef struct {
-//   bool up;
-//   bool down;
-//   bool left;
-//   bool right;
-
-//   bool start;
-//   bool back;
-//   bool a_button;
-//   bool b_button;
-//   bool x_button;
-//   bool y_button;
-//   bool left_shoulder;
-//   bool right_shoulder;
-
-//   // Analog sticks (16-bit signed, like XInput)
-//   int16_t left_stick_x;
-//   int16_t left_stick_y;
-//   int16_t right_stick_x;
-//   int16_t right_stick_y;
-//   int16_t left_trigger;
-//   int16_t right_trigger;
-
-//   // // Analog sticks (normalized -1.0 to +1.0, Raylib style)
-//   // float left_stick_x;
-//   // float left_stick_y;
-//   // float right_stick_x;
-//   // float right_stick_y;
-//   // float left_trigger;
-//   // float right_trigger;
-
-//   //
-//   bool increase_sound_volume;
-//   bool decrease_sound_volume;
-//   bool move_sound_pan_left;
-//   bool move_sound_pan_right;
-
-//   DefinedTone set_to_defined_tone;
-// } GameControls;
+} GameOffscreenBuffer;
 
 typedef struct {
+  // ═════════════════════════════════════════════════════════
+  // HARDWARE PARAMETERS (Platform Layer Owns)
+  // ═════════════════════════════════════════════════════════
   bool is_initialized;
 
-  // Audio format parameters (Casey's Day 7)
-  int32_t samples_per_second; // 48000 Hz
-  int32_t bytes_per_sample;   // 4 (16-bit stereo)
+  int32_t samples_per_second;  // 48000 Hz (hardware config)
+  int32_t bytes_per_sample;    // 4 (16-bit stereo)
+
+  // ═════════════════════════════════════════════════════════
+  // AUDIO GENERATION STATE (Platform Layer Uses)
+  // ═════════════════════════════════════════════════════════
+  uint32_t running_sample_index;  // Sample counter (for waveform)
+  int wave_period;                // Samples per wave (cached calculation)
+  real32 t_sine;                  // Phase accumulator (0 to 2π)
+  int latency_sample_count;       // Target latency in samples
 
 
-  // Day 8: Sound generation state
-  uint32_t running_sample_index;
-  int tone_hz;
-  int16_t tone_volume;
-  int wave_period;
-
-  // Day 9
-  real32 t_sine;            // Phase accumulator (0 to 2π)
-  int latency_sample_count; // How many samples to backbuffer ahead
-
-  //
-  int pan_position; // -100 (left) to +100 (right)
-} SoundOutput;
+  // ═════════════════════════════════════════════════════════
+  // GAME-SET PARAMETERS (Game Layer Sets)
+  // ═════════════════════════════════════════════════════════
+  int tone_hz;               // Frequency of tone to generate           
+  int16_t tone_volume;       // Volume of tone to generate
+  int pan_position;          // -100 (left) to +100 (right)
+} GameSoundOutput;
 
 /**
   * 🎮 DAY 13: PLATFORM-INDEPENDENT INPUT ABSTRACTION
@@ -157,6 +131,8 @@ typedef struct {
   /** Final state (true = pressed, false = released) */
   bool32 ended_down;
 } GameButtonState;
+
+#define CONTROLLER_DEADZONE 0.10f
 
 /**
 * CONTROLLER INPUT (replaces your GameControls struct)
@@ -259,19 +235,32 @@ typedef struct {
 #define MAX_KEYBOARD_COUNT 1
 #define MAX_JOYSTICK_COUNT (MAX_CONTROLLER_COUNT - MAX_KEYBOARD_COUNT)
 
-
-extern OffscreenBuffer g_backbuffer;
-extern SoundOutput g_sound_output;
 extern int KEYBOARD_CONTROLLER_INDEX;
 // extern GameState g_game_state;
 extern bool is_game_running;
 
-INIT_BACKBUFFER_STATUS init_backbuffer(int width, int height,
-                                       int bytes_per_pixel,
-                                       pixel_composer_fn composer);
-void init_game_state();
-void render_weird_gradient();
-void testPixelAnimation(int pixel_color);
+typedef struct {
+  int offset_x;
+  int offset_y;
+} GradientState;
+
+typedef struct {
+  int offset_x;
+  int offset_y;
+} PixelState;
+
+typedef struct {
+  GradientState gradient_state;
+  PixelState pixel_state;
+  int speed;
+} GameState;
+
+
+typedef enum {
+  INIT_BACKBUFFER_STATUS_SUCCESS = 0,
+  INIT_BACKBUFFER_STATUS_MMAP_FAILED = 1,
+} INIT_BACKBUFFER_STATUS;
+INIT_BACKBUFFER_STATUS init_backbuffer(GameOffscreenBuffer *buffer, int width, int height, int bytes_per_pixel, pixel_composer_fn composer);
 
 /**
 * 🎮 DAY 13: Updated Game Entry Point
@@ -291,15 +280,10 @@ void testPixelAnimation(int pixel_color);
 *
 * ═══════════════════════════════════════════════════════════════
 */
-void game_update_and_render(GameInput *input);
+void game_update_and_render(GameMemory *memory, GameInput *input, GameOffscreenBuffer *buffer, GameSoundOutput *sound_buffer);
 
 
 //
-void set_tone_frequency(int hz);
-void handle_update_tone_frequency(int hz_to_add);
-void handle_increase_volume(int num);
-void handle_increase_pan(int num);
-void handle_controls(GameControllerInput *controller);
 void process_game_button_state(bool is_down, GameButtonState *old_state, GameButtonState *new_state);
 
 #endif // GAME_H
