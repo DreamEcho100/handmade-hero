@@ -2,7 +2,8 @@
 #define GAME_H
 
 #include "platform/platform.h"
-#include "base/base.h"
+#include "platform/_common/memory.h"
+#include "base.h"
 #include <stdint.h>
 
 // ═══════════════════════════════════════════════════════════════

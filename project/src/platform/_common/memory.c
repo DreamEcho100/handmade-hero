@@ -1,4 +1,4 @@
-#include "../base/base.h"
+#include "memory.h"
 #include <stdint.h>
 
 #if defined(_WIN32)

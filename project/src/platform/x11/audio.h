@@ -2,7 +2,7 @@
 #ifndef X11_AUDIO_H
 #define X11_AUDIO_H
 
-#include "../../base/base.h"
+#include "../../base.h"
 #include "../../game.h"
 #include <stdbool.h>
 #include <stdint.h>

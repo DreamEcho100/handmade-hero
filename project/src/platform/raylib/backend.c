@@ -1,7 +1,7 @@
 #define _POSIX_C_SOURCE 199309L
 
 #include "backend.h"
-#include "../../base/base.h"
+#include "../../base.h"
 #include "../../game.h"
 #include "audio.h"
 #include <assert.h>
