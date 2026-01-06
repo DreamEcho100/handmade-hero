@@ -15,7 +15,7 @@ echo "Building with backend: $BACKEND"
 FLAGS="-Isrc -Wall -Wextra -std=c11 -g -O0 -lm"
 FLAGS="$FLAGS -DHANDMADE_INTERNAL=1"
 
-SRC="src/main.c src/base/memory.c src/game.c"
+SRC="src/main.c src/base/memory.c src/base/debug-file-io.c src/game.c"
 
 if [ "$BACKEND" = "x11" ]; then
     FLAGS="$FLAGS -DUSE_X11 -DARGB -lX11 -Wno-unused-parameter"

@@ -1,6 +1,7 @@
 #ifndef BASE_H
 #define BASE_H
 
+#include <stdint.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -117,5 +118,14 @@ platform_allocate_memory(void* base_hint, size_t size, PlatformMemoryFlags flags
  */
 // void platform_free_memory(void* base, size_t total_size);
 void platform_free_memory(PlatformMemoryBlock *block);
+
+typedef struct
+{
+    uint32_t size;
+    PlatformMemoryBlock contents;
+} DebugReadFileResult;
+DebugReadFileResult debug_platform_read_entire_file(char *filename);
+void debug_platform_free_file_memory(PlatformMemoryBlock *memory_block);
+bool32 debug_platform_write_entire_file(char *filename, uint32_t memory_size, void *memory);
 
 #endif // BASE_H

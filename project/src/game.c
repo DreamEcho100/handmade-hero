@@ -1,9 +1,13 @@
 #include "game.h"
 #include "base/base.h"
+#include <bits/types/__FILE.h>
+#include <fcntl.h>
 #include <math.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <sys/mman.h>
+#include <unistd.h>
 
 // ═══════════════════════════════════════════════════════════════
 // PLATFORM-SHARED STATE (declared extern in game.h)
@@ -185,6 +189,88 @@ void game_update_and_render(GameMemory *memory, GameInput *input,
   if (!memory->is_initialized) { // false (skip!)
                                  // Never runs again!
                                  // First-time initialization
+
+    /*--------------------------------------------------------------------*/
+    /*--------------------------------------------------------------------*/
+    /*--------------------------------------------------------------------*/
+
+    // // Step 1: Set the filename to read game state initialization data
+    // char *game_state_init_filename = __FILE__; //"game_state_init.txt";
+
+    // // Step 2: Open the file in read-only mode
+    // int game_state_init_fd = open(game_state_init_filename, O_RDONLY);
+
+    // // Step 3: Check if the file was opened successfully
+    // if (game_state_init_fd != -1) {
+    //   // Step 4: Get the size of the file using lseek
+    //   off_t game_state_init_file_size = lseek(game_state_init_fd, 0,
+    //   SEEK_END);
+
+    //   // Step 5: If lseek fails, print error and close file descriptor
+    //   if (game_state_init_file_size == -1) {
+    //     perror("lseek failed to get file size for game_state_init.txt");
+    //     close(game_state_init_fd);
+    //   } else {
+    //     // Step 6: Reset file offset to the beginning for reading
+    //     if (lseek(game_state_init_fd, 0, SEEK_SET) == -1) {
+    //       perror("lseek failed to set file offset for game_state_init.txt");
+    //       close(game_state_init_fd);
+    //     } else if (game_state_init_file_size > 0) {
+    //       // Step 7: Allocate memory to read the file contents (+1 for null
+    //       // terminator)
+    //       PlatformMemoryBlock game_state_init_buffer =
+    //       platform_allocate_memory(
+    //           NULL, game_state_init_file_size + 1,
+    //           PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE);
+
+    //       // Step 8: Check if memory allocation succeeded
+    //       if (game_state_init_buffer.base) {
+    //         // Step 9: Read the file contents into the allocated buffer
+    //         ssize_t game_state_init_bytes_read =
+    //             read(game_state_init_fd, game_state_init_buffer.base,
+    //                  game_state_init_file_size);
+
+    //         // Step 10: If read fails, print error
+    //         if (game_state_init_bytes_read < 0) {
+    //           perror("read failed for game_state_init.txt");
+    //         } else if (game_state_init_bytes_read > 0) {
+    //           // Step 11: Null-terminate the buffer to safely print as a
+    //           string
+    //           ((char *)
+    //                game_state_init_buffer.base)[game_state_init_bytes_read] =
+    //               '\0';
+
+    //           // Step 12: Print the contents of the file for debugging or
+    //           // initialization
+    //           printf("%s\n", (char *)game_state_init_buffer.base);
+    //         }
+    //         // Step 13: Free the allocated memory after use
+    //         platform_free_memory(&game_state_init_buffer);
+    //       }
+    //     }
+    //     // Step 14: Close the file descriptor after reading
+    //     close(game_state_init_fd);
+    //   }
+    // } else {
+    //   // Step 15: Print error if file could not be opened
+    //   printf("Failed to open file: %s\n", game_state_init_filename);
+    // }
+    //
+    char *Filename = __FILE__;
+
+    DebugReadFileResult file = debug_platform_read_entire_file(Filename);
+    if (file.contents.base) {
+      debug_platform_write_entire_file("test.out", file.size,
+                                       file.contents.base);
+      debug_platform_free_file_memory(&file.contents);
+    }
+
+    is_game_running = false; // For testing: exit after first frame
+
+    /*--------------------------------------------------------------------*/
+    /*--------------------------------------------------------------------*/
+    /*--------------------------------------------------------------------*/
+
     game_state->gradient_state = (GradientState){0};
     game_state->pixel_state = (PixelState){0};
     game_state->speed = 5;
