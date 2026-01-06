@@ -3769,6 +3769,322 @@ void LoadGame(GameMemory *Memory, const char *filename) {
 > **"If you crash, you want to know IMMEDIATELY where the problem is. Guard pages give you that."**  
 > — Casey Muratori, Day 25
 
+### 📆 Day 15: Platform-Independent Debug File IO
+
+**Focus:** Implementing cross-platform file reading/writing utilities for debugging purposes, separating platform-agnostic code from platform-specific implementations.
+
+---
+
+#### 🗓️ Commits
+
+| Date        | Commit    | What Changed                                                                  | What I Changed & Why                                                                                                                                                                     |
+| ----------- | --------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Jan 6, 2026 | `affe25e` | Add debug file I/O functions and integrate file reading/writing in game logic | Initial implementation using standard C `fopen`/`fread`/`fwrite` instead of platform-specific APIs                                                                                       |
+| Jan 6, 2026 | `4c6083e` | Refactor memory management and file I/O for platform compatibility            | Moved files to `platform/_common/` directory to better organize cross-platform code; improved error handling with `errno`/`strerror`; wrapped debug functions in `#if HANDMADE_INTERNAL` |
+
+---
+
+#### 📊 Debug File I/O Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      GAME LAYER                             │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │  game.c: Calls debug file I/O during initialization  │  │
+│  └───────────────────────────────────────────────────────┘  │
+│                           │                                 │
+│                           ▼                                 │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │  platform/_common/debug-file-io.h                     │  │
+│  │  - DebugReadFileResult struct                         │  │
+│  │  - debug_platform_read_entire_file()                  │  │
+│  │  - debug_platform_write_entire_file()                 │  │
+│  │  - debug_platform_free_file_memory()                  │  │
+│  └───────────────────────────────────────────────────────┘  │
+│                           │                                 │
+│                           ▼                                 │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │  platform/_common/debug-file-io.c                     │  │
+│  │  Uses standard C library:                             │  │
+│  │  - fopen(filename, "rb"/"wb")                         │  │
+│  │  - fseek(file, 0, SEEK_END) / ftell() for size        │  │
+│  │  - fread() / fwrite()                                 │  │
+│  │  - fclose()                                           │  │
+│  └───────────────────────────────────────────────────────┘  │
+│                           │                                 │
+│                           ▼                                 │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │  platform/_common/memory.c                            │  │
+│  │  - platform_allocate_memory() for file buffer         │  │
+│  │  - platform_free_memory() to clean up                 │  │
+│  └───────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+
+Memory Flow:
+1. Read file size → 2. Allocate buffer → 3. Read into buffer
+                                              ↓
+4. Process/write ← ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+                                              ↓
+5. Free buffer ← ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+```
+
+---
+
+#### 🎯 Core Concepts
+
+| Concept                           | Implementation                                                                                             | What I Learned / Adapted & Why                                                                                                                              |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Platform-Independent File I/O** | Used standard C library (`stdio.h`) instead of platform-specific APIs (Windows `CreateFile`, Linux `open`) | Casey uses Windows API for fine-grained control; I chose portable C standard library since it works across all platforms and is simpler for debug-only code |
+| **Safe Integer Truncation**       | `safe_truncate_uint64()` validates `long` → `uint32_t` conversion with assertions                          | Prevents silent data loss when file size exceeds 4GB; learned importance of defensive programming even in "impossible" scenarios                            |
+| **Guard Conditions**              | `#if HANDMADE_INTERNAL` wraps all debug I/O code                                                           | Ensures debug functions compile only in development builds; prevents shipping debug code to production                                                      |
+| **Error Handling Strategy**       | Used `errno` and `strerror()` for descriptive error messages                                               | Provides actionable feedback during development; better than Casey's approach of silent failures in early episodes                                          |
+| **Memory Ownership Model**        | File buffer allocated via `platform_allocate_memory()`, freed via `debug_platform_free_file_memory()`      | Maintains consistency with existing memory architecture; caller owns cleanup responsibility                                                                 |
+
+---
+
+#### 💻 Code Snippets with Explanations
+
+**1. Reading Entire File into Memory**
+
+```c
+DebugReadFileResult debug_platform_read_entire_file(char *filename) {
+  DebugReadFileResult result = {};  // Zero-initialize return struct
+
+  FILE *file = fopen(filename, "rb");  // "rb" = read binary (cross-platform)
+  if (file) {
+    // Get file size using standard C approach:
+    // 1. Seek to end
+    if (fseek(file, 0, SEEK_END) == 0) {
+      long file_size = ftell(file);  // 2. Tell position = size
+      if (file_size > 0) {
+        rewind(file);  // 3. Rewind to start (safer than fseek(file, 0, SEEK_SET))
+
+        // Allocate buffer using our existing memory system
+        result.contents = platform_allocate_memory(
+            NULL, file_size,
+            PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE);
+
+        if (result.contents.base) {
+          // Read entire file in one call
+          size_t bytes_read = fread(result.contents.base, 1, file_size, file);
+
+          if (bytes_read == (size_t)file_size) {
+            // SUCCESS! Convert long → uint32_t safely
+            result.size = safe_truncate_uint64(file_size);
+          } else {
+            // Partial read = failure, clean up
+            debug_platform_free_file_memory(&result.contents);
+            result.contents.base = NULL;
+          }
+        }
+      }
+    }
+    fclose(file);
+  } else {
+    // Report error with descriptive message
+    fprintf(stderr, "Could not open file %s: %s\n", filename, strerror(errno));
+  }
+
+  return result;  // Caller checks result.contents.base != NULL
+}
+```
+
+**Why This Approach:**
+
+- **Casey's Windows version** uses `CreateFile` + `ReadFile` for control over async I/O
+- **My adaptation** uses portable `fopen`/`fread` since debug I/O doesn't need performance optimization
+- **Error handling** provides actionable feedback (`strerror(errno)`) instead of silent failures
+
+---
+
+**2. Safe Integer Conversion with Validation**
+
+```c
+uint32_t safe_truncate_uint64(long value) {
+  Assert(value >= 0);         // Negative = error from ftell()
+  Assert(value <= 0xFFFFFFFF); // Ensure fits in 32 bits (4GB limit)
+
+  uint32_t result = (uint32_t)value;
+  return result;
+}
+```
+
+**Why This Matters:**
+
+- **Prevents silent truncation bugs** if someone tries to read a 5GB file
+- **Crashes immediately in debug builds** (via `Assert`) instead of corrupting data
+- **Documents assumptions** (files must be < 4GB for this system)
+
+**What I Learned:**
+Even "impossible" scenarios should be validated. A 5GB test file could trigger this, and crashing early with `Assert` is better than silent data corruption.
+
+---
+
+**3. Writing Files with Error Reporting**
+
+```c
+bool32 debug_platform_write_entire_file(char *filename, uint32_t memory_size,
+                                        void *memory) {
+  bool32 result = false;
+
+  FILE *file = fopen(filename, "wb");  // "wb" = write binary, truncate existing
+  if (file) {
+    size_t bytes_written = fwrite(memory, 1, memory_size, file);
+
+    if (bytes_written == memory_size) {
+      result = true;  // Complete write succeeded
+    } else {
+      fprintf(stderr, "Write failed for file %s: %s\n",
+              filename, strerror(errno));
+    }
+    fclose(file);
+  } else {
+    fprintf(stderr, "Could not open file %s for writing: %s\n",
+            filename, strerror(errno));
+  }
+
+  return result;
+}
+```
+
+**Key Differences from Casey's Approach:**
+
+- **Simpler API:** Single function call vs. Windows' multi-step `CreateFile`/`WriteFile`/`CloseHandle`
+- **Better error messages:** `strerror(errno)` explains WHY the operation failed (permissions, disk full, etc.)
+- **Return value clarity:** `bool32` indicates success/failure; Casey often uses `void` and expects caller to check state
+
+---
+
+**4. Integration in Game Initialization**
+
+```c
+// In game.c, during first-time initialization:
+if (!memory->is_initialized) {
+  #if HANDMADE_INTERNAL
+    char *Filename = __FILE__;  // Read current source file
+
+    DebugReadFileResult file = debug_platform_read_entire_file(Filename);
+    if (file.contents.base) {
+      // Write file to test output
+      debug_platform_write_entire_file("test.out", file.size,
+                                       file.contents.base);
+      debug_platform_free_file_memory(&file.contents);
+      printf("Wrote test.out\n");
+    }
+  #endif
+
+  // ... rest of initialization
+}
+```
+
+**What I Changed:**
+
+- **Wrapped in `#if HANDMADE_INTERNAL`** to ensure this only compiles in debug builds
+- **Removed `is_game_running = false;`** from initial commit (was for testing; keeps game running now)
+- **Added success message** to confirm file operation completed
+
+---
+
+#### 🏗️ Directory Structure Refactoring
+
+**Before (Commit `affe25e`):**
+
+```
+src/
+├── base/
+│   ├── base.h           // Memory + File I/O declarations
+│   ├── memory.c
+│   └── debug-file-io.c  // New file
+```
+
+**After (Commit `4c6083e`):**
+
+```
+src/
+├── base.h               // Moved up: Core types/macros only
+├── platform/
+│   └── _common/
+│       ├── memory.h     // Memory API declarations
+│       ├── memory.c     // Platform-specific implementations
+│       ├── debug-file-io.h  // Debug I/O API (HANDMADE_INTERNAL only)
+│       └── debug-file-io.c  // Standard C implementation
+```
+
+**Why I Reorganized:**
+
+1. **`base.h` should be minimal** – Only fundamental types, not platform code
+2. **`platform/_common/`** clearly signals "shared across platforms but still platform layer"
+3. **Separate `.h` files** allow conditional compilation (`#if HANDMADE_INTERNAL`)
+4. **Matches Casey's philosophy** of layered architecture (base → platform → game)
+
+---
+
+#### 🐛 Common Pitfalls
+
+| Issue                              | Cause                                            | Fix                                                        | My Encountered Issues & Solutions                                                  |
+| ---------------------------------- | ------------------------------------------------ | ---------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| **File size = 0 or negative**      | `ftell()` failed or empty file                   | Check `file_size > 0` before allocating memory             | Initially forgot to validate; assertion caught this during testing                 |
+| **Partial reads**                  | Disk I/O interrupted or file changed during read | Compare `bytes_read == file_size`; free buffer on mismatch | Added cleanup path to avoid leaking memory on partial reads                        |
+| **Memory leak on error**           | Forgetting to free buffer if `fread()` fails     | Always free on error paths before returning                | Used consistent `debug_platform_free_file_memory()` to centralize cleanup          |
+| **Platform-specific line endings** | Windows (`\r\n`) vs. Linux (`\n`)                | Use binary mode (`"rb"`/`"wb"`) to avoid translation       | Binary mode ensures byte-for-byte accuracy; text mode would corrupt binary data    |
+| **Integer overflow in size**       | `long` → `uint32_t` truncation                   | `safe_truncate_uint64()` with assertions                   | Prevented silent bugs; would crash immediately on oversized files                  |
+| **Missing error context**          | `fopen()` fails, no explanation                  | Use `strerror(errno)` to get descriptive error             | Improved debugging workflow significantly; knew instantly why files failed to open |
+
+---
+
+#### 🔄 Windows API vs. Standard C Comparison
+
+| Operation          | Casey's Windows API                  | My Standard C                 | Tradeoffs                                                                                  |
+| ------------------ | ------------------------------------ | ----------------------------- | ------------------------------------------------------------------------------------------ |
+| **Open File**      | `CreateFile()` with access flags     | `fopen("rb"/"wb")`            | Windows: Fine-grained control (async, overlapped I/O). C: Portable, simpler for debug code |
+| **Get Size**       | `GetFileSize()` or `GetFileSizeEx()` | `fseek(SEEK_END)` + `ftell()` | Windows: Direct size query. C: Requires seek/tell dance                                    |
+| **Read**           | `ReadFile()` with `OVERLAPPED`       | `fread()`                     | Windows: Can use async I/O. C: Always synchronous (fine for debug)                         |
+| **Write**          | `WriteFile()`                        | `fwrite()`                    | Same async vs. sync tradeoff                                                               |
+| **Close**          | `CloseHandle()`                      | `fclose()`                    | Equivalent functionality                                                                   |
+| **Error Handling** | `GetLastError()` + `FormatMessage()` | `errno` + `strerror()`        | Both provide descriptive errors; C is more concise                                         |
+
+**Why Standard C Is Acceptable Here:**
+
+- Debug file I/O happens **once at startup** (not performance-critical)
+- **Simplicity > control** for development tools
+- **Portability** allows code to run on Linux, macOS, Windows without changes
+
+---
+
+#### ✅ Skills Acquired
+
+- ✅ **Implemented cross-platform file I/O** using standard C library instead of platform-specific APIs
+- ✅ **Designed defensive integer conversion** with `safe_truncate_uint64()` to prevent silent overflow bugs
+- ✅ **Organized codebase architecture** by separating base types, platform layer, and debug utilities
+- ✅ **Applied conditional compilation** (`#if HANDMADE_INTERNAL`) to exclude debug code from release builds
+- ✅ **Improved error handling** with `errno`/`strerror()` for actionable debugging messages
+- ✅ **Practiced memory ownership patterns** (allocate → use → free with consistent API)
+- ✅ **Validated assumptions with assertions** (file size positive, fits in `uint32_t`)
+- ✅ **Learned importance of binary mode** (`"rb"`/`"wb"`) to avoid platform line-ending issues
+- ✅ **Refactored iteratively** (first working implementation, then better organization)
+- ✅ **Understood tradeoffs** between platform APIs (control) and standard library (portability)
+
+---
+
+#### 🎓 Key Takeaways
+
+**Casey's Philosophy:**
+
+> "Debug code should be SIMPLE and OBVIOUS. If it breaks, you want to fix it in 30 seconds."
+
+**My Adaptation:**
+
+- Used **standard C library** instead of Windows API → Simpler, portable, sufficient for debug needs
+- Added **descriptive error messages** → Faster debugging when things go wrong
+- Structured code in **`platform/_common/`** → Clear separation of concerns
+
+**What I Learned:**
+
+1. **Not all code needs maximum performance** – Debug I/O can prioritize simplicity
+2. **Good error messages save hours** – `strerror(errno)` is worth the extra line of code
+3. **Assertions are documentation** – They communicate assumptions to future readers
+4. **Refactoring improves clarity** – Moving files to `_common/` made architecture more obvious
+
 ## Misc
 
 ---
