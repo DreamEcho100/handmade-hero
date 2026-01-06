@@ -171,6 +171,10 @@ void handle_controls(GameControllerInput *input, GameSoundOutput *sound_output,
     sound_output->tone_hz = 20;
   if (sound_output->tone_hz > 2000)
     sound_output->tone_hz = 2000;
+
+  // Update wave_period when tone_hz changes (prevent audio clicking)
+  sound_output->wave_period =
+      sound_output->samples_per_second / sound_output->tone_hz;
 }
 
 void game_update_and_render(GameMemory *memory, GameInput *input,

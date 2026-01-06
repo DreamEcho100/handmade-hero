@@ -1077,7 +1077,18 @@ file_scoped_fn void prepare_input_frame(GameInput *old_input,
   }
 }
 
+// Helper to get current time in seconds
+static inline double get_wall_clock() {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return ts.tv_sec + ts.tv_nsec / 1000000000.0;
+}
+
 int platform_main() {
+  double t_start = get_wall_clock();
+  printf("[%.3fs] Starting platform_main\n", get_wall_clock() - t_start);
+  fflush(stdout);
+
 #if HANDMADE_INTERNAL
   // Debug/Development mode: Reserve 2TB of address space for debugging
   // What if your RAM is less than 2TB? No problem, we're just reserving
@@ -1092,9 +1103,16 @@ int platform_main() {
 
   uint64_t permanent_storage_size = MEGABYTES(64);
   uint64_t transient_storage_size = GIGABYTES(4);
+
+  printf("[%.3fs] Allocating permanent storage (%lu MB)...\n",
+         get_wall_clock() - t_start, permanent_storage_size / (1024 * 1024));
+  fflush(stdout);
   PlatformMemoryBlock permanent_storage = platform_allocate_memory(
       base_address, permanent_storage_size,
       PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE | PLATFORM_MEMORY_ZEROED);
+
+  printf("[%.3fs] Permanent storage allocated\n", get_wall_clock() - t_start);
+  fflush(stdout);
 
   if (!permanent_storage.base) {
     fprintf(stderr, "ERROR: Could not allocate permanent storage\n");
@@ -1105,9 +1123,17 @@ int platform_main() {
   void *transient_base =
       (uint8_t *)permanent_storage.base + permanent_storage.size;
 
+  printf("[%.3fs] Allocating transient storage (%lu GB)...\n",
+         get_wall_clock() - t_start,
+         transient_storage_size / (1024 * 1024 * 1024));
+  fflush(stdout);
+
   PlatformMemoryBlock transient_storage = platform_allocate_memory(
       transient_base, transient_storage_size, // ← Actually allocate it!
       PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE | PLATFORM_MEMORY_ZEROED);
+
+  printf("[%.3fs] Transient storage allocated\n", get_wall_clock() - t_start);
+  fflush(stdout);
 
   if (!transient_storage.base) {
     fprintf(stderr, "ERROR: Could not allocate transient storage\n");
@@ -1141,14 +1167,22 @@ int platform_main() {
     // ═══════════════════════════════════════════════════════════
     // 🎮 Initialize joystick BEFORE main loop (Casey's pattern)
     // ═══════════════════════════════════════════════════════════
+    printf("[%.3fs] Initializing joystick...\n", get_wall_clock() - t_start);
+    fflush(stdout);
     linux_init_joystick(old_game_input->controllers,
                         new_game_input->controllers);
+    printf("[%.3fs] Joystick initialized\n", get_wall_clock() - t_start);
+    fflush(stdout);
     // ═══════════════════════════════════════════════════════════
     // 🔊 Load ALSA library (Casey's Win32LoadXInput pattern)
     // ═══════════════════════════════════════════════════════════
     // This MUST come before linux_init_sound()!
     // Just like Casey calls Win32LoadXInput() before using XInput.
+    printf("[%.3fs] Loading ALSA library...\n", get_wall_clock() - t_start);
+    fflush(stdout);
     linux_load_alsa();
+    printf("[%.3fs] ALSA library loaded\n", get_wall_clock() - t_start);
+    fflush(stdout);
 
     // ═══════════════════════════════════════════════════════════
     // 🔊 Initialize sound (Casey's Win32InitDSound equivalent)
@@ -1477,7 +1511,12 @@ int platform_main() {
       double fps = 1000.0 / ms_per_frame;
       double mcpf = (end_cycles - start_cycles) / 1000000.0;
 
-      // printf("%.2fms/f, %.2ff/s, %.2fmc/f\n", ms_per_frame, fps, mcpf);
+      // Show FPS every 60 frames to verify performance
+      static int frame_counter = 0;
+      if (++frame_counter >= 60) {
+        printf("[X11] %.2fms/f, %.2ff/s, %.2fmc/f\n", ms_per_frame, fps, mcpf);
+        frame_counter = 0;
+      }
 
       start = end;
       start_cycles = end_cycles;

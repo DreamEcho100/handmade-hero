@@ -17,7 +17,7 @@
 
 RaylibSoundOutput g_linux_sound_output = {0};
 
-GameSoundOutput *raylib_audio_callback_sound_output = NULL;
+GameSoundOutput *temp_sound_output = NULL;
 
 // ═══════════════════════════════════════════════════════════════
 // 🔊 AUDIO CALLBACK (Raylib's equivalent of linux_fill_sound_buffer)
@@ -32,8 +32,7 @@ GameSoundOutput *raylib_audio_callback_sound_output = NULL;
 //
 // ═══════════════════════════════════════════════════════════════
 void raylib_audio_callback(void *backbuffer, unsigned int frames) {
-  if (!raylib_audio_callback_sound_output ||
-      !raylib_audio_callback_sound_output->is_initialized) {
+  if (!temp_sound_output || !temp_sound_output->is_initialized) {
     return;
   }
 
@@ -49,33 +48,28 @@ void raylib_audio_callback(void *backbuffer, unsigned int frames) {
     //   tSine += 2π / WavePeriod;
     // ═══════════════════════════════════════════════════════════
 
-    real32 sine_value = sinf(raylib_audio_callback_sound_output->t_sine);
+    real32 sine_value = sinf(temp_sound_output->t_sine);
     int16_t sample_value =
-        (int16_t)(sine_value * raylib_audio_callback_sound_output->tone_volume);
+        (int16_t)(sine_value * temp_sound_output->tone_volume);
 
     // Apply panning (your extension from X11 version)
-    int left_gain =
-        (100 - raylib_audio_callback_sound_output->pan_position); // 0 to 200
-    int right_gain =
-        (100 + raylib_audio_callback_sound_output->pan_position); // 0 to 200
+    int left_gain = (100 - temp_sound_output->pan_position);  // 0 to 200
+    int right_gain = (100 + temp_sound_output->pan_position); // 0 to 200
 
     *sample_out++ = (sample_value * left_gain) / 200;  // Left channel
     *sample_out++ = (sample_value * right_gain) / 200; // Right channel
 
     // Increment phase accumulator (Day 9)
-    raylib_audio_callback_sound_output->t_sine +=
-        (2.0f * M_PI * 1.0f) /
-        (real32)raylib_audio_callback_sound_output->wave_period;
+    temp_sound_output->t_sine +=
+        (2.0f * M_PI * 1.0f) / (real32)temp_sound_output->wave_period;
 
     // Wrap to [0, 2π) range to prevent overflow
-    if (raylib_audio_callback_sound_output->t_sine >= 2.0f * M_PI) {
-      raylib_audio_callback_sound_output->t_sine -= 2.0f * M_PI;
+    if (temp_sound_output->t_sine >= 2.0f * M_PI) {
+      temp_sound_output->t_sine -= 2.0f * M_PI;
     }
 
-    raylib_audio_callback_sound_output->running_sample_index++;
+    temp_sound_output->running_sample_index++;
   }
-
-  raylib_audio_callback_sound_output = NULL;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -161,6 +155,7 @@ void raylib_init_audio(GameSoundOutput *sound_output) {
   // ═══════════════════════════════════════════════════════════
   // Raylib will call raylib_audio_callback() when backbuffer needs data
   // This replaces your manual linux_fill_sound_buffer() call
+  temp_sound_output = sound_output;
   SetAudioStreamCallback(g_linux_sound_output.stream, raylib_audio_callback);
 
   // ═══════════════════════════════════════════════════════════

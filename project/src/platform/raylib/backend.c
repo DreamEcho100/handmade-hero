@@ -5,7 +5,6 @@
 #include "../../game.h"
 #include "audio.h"
 #include <assert.h>
-#include <math.h>
 
 #include <raylib.h>
 #include <stdbool.h>
@@ -474,8 +473,6 @@ file_scoped_fn void resize_back_buffer(GameOffscreenBuffer *backbuffer,
   // ---- 3. ALLOCATE NEW BACKBUFFER
   // ----------------------------------------------
   int buffer_size = width * height * backbuffer->bytes_per_pixel;
-  // backbuffer->memory = mmap(NULL, buffer_size, PROT_READ | PROT_WRITE,
-  //                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   PlatformMemoryBlock backbuffer_memory = platform_allocate_memory(
       NULL, buffer_size, PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE);
 
@@ -615,12 +612,18 @@ void prepare_input_frame(GameInput *old_input, GameInput *new_input) {
   }
 }
 
-/**
- * MAIN FUNCTION
- *
- * Same purpose as X11 version, but MUCH simpler!
- */
+// Helper to get current time in seconds
+static inline double get_wall_clock() {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return ts.tv_sec + ts.tv_nsec / 1000000000.0;
+}
+
 int platform_main() {
+  double t_start = get_wall_clock();
+  printf("[%.3fs] Starting platform_main\n", get_wall_clock() - t_start);
+  fflush(stdout);
+
 #if HANDMADE_INTERNAL
   // Debug/Development mode: Reserve 2TB of address space for debugging
   // What if your RAM is less than 2TB? No problem, we're just reserving
@@ -750,27 +753,6 @@ int platform_main() {
     resize_back_buffer(&game_buffer, &game_buffer_meta, game_buffer.width,
                        game_buffer.height);
 
-    // DEBUG: Verify allocation and texture creation
-    // printf("DBG: backbuffer mem=%p w=%d h=%d bpp=%d has_texture=%d\n",
-    //        game_buffer.memory, game_buffer.width, game_buffer.height,
-    //        game_buffer.bytes_per_pixel, game_buffer_meta.has_texture);
-
-    // // DEBUG: Fill with a solid test color (should paint the screen if
-    // pipeline
-    // // works)
-    // if (game_buffer.memory) {
-    //   uint32_t *px = (uint32_t *)game_buffer.memory;
-    //   int total = game_buffer.width * game_buffer.height;
-    //   for (int i = 0; i < total; ++i) {
-    //     px[i] = 0xFF0000FF; // test: opaque red (R=255,G=0,B=0,A=255) in
-    //     R8G8B8A8
-    //   }
-    //   BeginDrawing();
-    //   ClearBackground(BLACK);
-    //   update_window_from_backbuffer(&game_buffer, &game_buffer_meta);
-    //   EndDrawing();
-    // }
-
     printf("Entering main loop...\n");
 
     clock_gettime(CLOCK_MONOTONIC, &g_frame_start);
@@ -851,21 +833,18 @@ int platform_main() {
       raylib_poll_gamepad(old_game_input, new_game_input);
 
       // ═══════════════════════════════════════════════════════
-      // 🎨 RENDER
+      // 🎨 RENDER & UPDATE (Match X11 order)
       // ═══════════════════════════════════════════════════════
       if (game_buffer.memory.base) {
-        // Render gradient
-
-        // Example: Convert Raylib Color struct to int (RGBA)
-        // You can now use color_int as a packed 32-bit RGBA value
+        // Step 1: Display current backbuffer (like X11's update_window)
         BeginDrawing();
         ClearBackground(BLACK);
-
-        game_update_and_render(&game_memory, new_game_input, &game_buffer,
-                               &game_sound_output);
-
         update_window_from_backbuffer(&game_buffer, &game_buffer_meta);
         EndDrawing();
+
+        // Step 2: Update game state for NEXT frame (like X11)
+        game_update_and_render(&game_memory, new_game_input, &game_buffer,
+                               &game_sound_output);
       }
 
       GameInput *temp_game_input = new_game_input;
@@ -876,10 +855,15 @@ int platform_main() {
 
       real64 ms_per_frame =
           (g_frame_end.tv_sec - g_frame_start.tv_sec) * 1000.0 +
-          (g_frame_end.tv_nsec - g_frame_start.tv_nsec) * 1000000.0;
+          (g_frame_end.tv_nsec - g_frame_start.tv_nsec) / 1000000.0;
       real64 fps = 1000.0 / ms_per_frame;
 
-      // printf("%.2fms/f, %.2ff/s\n", ms_per_frame, fps);
+      // Show FPS every 60 frames to verify performance
+      static int frame_counter = 0;
+      if (++frame_counter >= 60) {
+        printf("[Raylib] %.2fms/f, %.2ff/s\n", ms_per_frame, fps);
+        frame_counter = 0;
+      }
 
       g_frame_start = g_frame_end;
     }

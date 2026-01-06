@@ -146,9 +146,23 @@ PlatformMemoryBlock platform_allocate_memory(void *base_hint, size_t size,
     return (PlatformMemoryBlock){0};
   }
 
-  if (flags & PLATFORM_MEMORY_ZEROED) {
-    memset((uint8_t *)reserved + page_size, 0, aligned_size);
-  }
+  // ═══════════════════════════════════════════════════════════════
+  // 🔍 OPTIMIZATION NOTE:
+  // ═══════════════════════════════════════════════════════════════
+  // On Linux, mmap() with MAP_ANONYMOUS already returns zero-initialized
+  // pages (guaranteed by POSIX). The OS uses copy-on-write zero pages,
+  // so we don't need to manually memset() here.
+  //
+  // Casey doesn't need this on Windows either because VirtualAlloc()
+  // with MEM_COMMIT also returns zero-initialized memory.
+  //
+  // However, we keep the flag for API compatibility and future platforms
+  // that might not guarantee zeroed memory.
+  // ═══════════════════════════════════════════════════════════════
+  // if (flags & PLATFORM_MEMORY_ZEROED) {
+  //   memset((uint8_t *)reserved + page_size, 0, aligned_size);
+  // }
+  // ═══════════════════════════════════════════════════════════════
 
   return (PlatformMemoryBlock){.base = (uint8_t *)reserved + page_size,
                                .size = aligned_size,

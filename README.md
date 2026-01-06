@@ -3277,6 +3277,498 @@ BUTTON STATE MACHINE
 - X11: Events only on change
 - Solution: Copy old state to new BEFORE processing
 
+### 📆 Day 14: Platform-Independent Game Memory
+
+**Focus:** Establishing explicit game memory contract between platform and game layers, enabling hot code reloading and trivial save/load systems.
+
+---
+
+#### 🗓️ Commits
+
+| Date       | Commit    | What Changed                                                        |
+| ---------- | --------- | ------------------------------------------------------------------- |
+| 2026-01-05 | `29e0442` | Platform-independent game memory implementation                     |
+|            |           | - Added `GameMemory` struct with permanent/transient storage        |
+|            |           | - Refactored memory allocation to use `platform_allocate_memory()`  |
+|            |           | - Updated `game_update_and_render()` to receive memory as parameter |
+|            |           | - Implemented guard pages for buffer overflow detection             |
+|            |           | - Added fixed base address (2TB) for deterministic debugging        |
+
+---
+
+#### 📊 Memory Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    CASEY'S DAY 14 PATTERN                       │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  BEFORE (Day 13 - Globals):                                     │
+│  ────────────────────────────                                   │
+│  file_scoped_global_var GameState g_game_state = {0};           │
+│  → Hidden in game layer                                         │
+│  → Can't save/load easily                                       │
+│  → Can't hot reload code                                        │
+│                                                                 │
+│  AFTER (Day 14 - Explicit Memory):                              │
+│  ──────────────────────────────────                             │
+│  ┌──────────────────────────────────────────────────┐           │
+│  │ Platform Layer (X11/Win32)                       │           │
+│  │ ┌──────────────────────────────────────────────┐ │           │
+│  │ │ mmap(2TB, 64MB) → PermanentStorage           │ │           │
+│  │ │ mmap(..., 4GB)  → TransientStorage           │ │           │
+│  │ └──────────────────────────────────────────────┘ │           │
+│  │         ↓ Pass pointer                           │           │
+│  │ ┌──────────────────────────────────────────────┐ │           │
+│  │ │ GameMemory {                                 │ │           │
+│  │ │   PermanentStorage (64MB)                    │ │           │
+│  │ │   TransientStorage (4GB)                     │ │           │
+│  │ │   is_initialized                             │ │           │
+│  │ │ }                                            │ │           │
+│  │ └──────────────────────────────────────────────┘ │           │
+│  └──────────────────────────────────────────────────┘           │
+│           ↓                                                     │
+│  ┌──────────────────────────────────────────────────┐           │
+│  │ Game Layer (game.c)                              │           │
+│  │ ┌──────────────────────────────────────────────┐ │           │
+│  │ │ GameState *gs = (GameState *)                │ │           │
+│  │ │     Memory->PermanentStorage.base;           │ │           │
+│  │ │                                              │ │           │
+│  │ │ if (!Memory->is_initialized) {               │ │           │
+│  │ │   gs->tone_hz = 256;  // First frame only   │ │           │
+│  │ │   Memory->is_initialized = true;            │ │           │
+│  │ │ }                                            │ │           │
+│  │ └──────────────────────────────────────────────┘ │           │
+│  └──────────────────────────────────────────────────┘           │
+│                                                                 │
+│  ADVANTAGES:                                                    │
+│  → Hot reload: Unload DLL, load new DLL, state persists!        │
+│  → Save/load: fwrite(Memory, size, file) - ONE LINE!            │
+│  → Platform agnostic: Same game.c on Linux/Windows              │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### 🎯 Core Concepts
+
+| Concept                    | Implementation                             | Casey's Philosophy                             |
+| -------------------------- | ------------------------------------------ | ---------------------------------------------- |
+| **Memory Contract**        | `GameMemory` struct defines sizes/pointers | "Platform owns allocation, game owns usage"    |
+| **Permanent Storage**      | 64 MB for game state, save data            | "Wave 2 resource - lives as long as game runs" |
+| **Transient Storage**      | 4 GB for temp data, particles              | "Can be cleared any time, never saved"         |
+| **Initialization Pattern** | `if (!Memory->is_initialized)` check       | "Survives hot reload and save/load"            |
+| **Guard Pages**            | Protected memory before/after allocations  | "Crash early on buffer overruns"               |
+| **Fixed Base Address**     | 2TB in debug builds                        | "Deterministic addresses for debugging"        |
+
+---
+
+#### 💾 Memory Layout Visualization
+
+```
+Virtual Address Space (64-bit Linux):
+┌─────────────────────────────────────────────────────────────────┐
+│ 0xFFFFFFFFFFFFFFFF ← Kernel space                               │
+├─────────────────────────────────────────────────────────────────┤
+│ ...                                                             │
+├─────────────────────────────────────────────────────────────────┤
+│ 0x00007F... ← Stack, shared libraries                           │
+├─────────────────────────────────────────────────────────────────┤
+│ 0x0000020000000000 ← YOUR GAME MEMORY (2 TB)                    │
+│ ┌─────────────────────────────────────────────────────────────┐ │
+│ │ GUARD PAGE (4 KB) - PROT_NONE                               │ │
+│ ├─────────────────────────────────────────────────────────────┤ │
+│ │ PermanentStorage (64 MB) - PROT_READ | PROT_WRITE          │ │
+│ │ ┌───────────────────────────────────────────────────────┐   │ │
+│ │ │ GameState (24 bytes)                                  │   │ │
+│ │ │ - gradient_state.offset_x (4 bytes)                   │   │ │
+│ │ │ - gradient_state.offset_y (4 bytes)                   │   │ │
+│ │ │ - pixel_state.offset_x (4 bytes)                      │   │ │
+│ │ │ - pixel_state.offset_y (4 bytes)                      │   │ │
+│ │ │ - speed (4 bytes)                                     │   │ │
+│ │ └───────────────────────────────────────────────────────┘   │ │
+│ │ Rest of 64 MB available for:                                │ │
+│ │ - Entity arrays                                             │ │
+│ │ - Level data                                                │ │
+│ │ - Save game state                                           │ │
+│ ├─────────────────────────────────────────────────────────────┤ │
+│ │ GUARD PAGE (4 KB) - PROT_NONE                               │ │
+│ ├─────────────────────────────────────────────────────────────┤ │
+│ │ GUARD PAGE (4 KB) - PROT_NONE                               │ │
+│ ├─────────────────────────────────────────────────────────────┤ │
+│ │ TransientStorage (4 GB) - PROT_READ | PROT_WRITE           │ │
+│ │ - Particle systems                                          │ │
+│ │ - Temporary render buffers                                  │ │
+│ │ - Pathfinding scratch memory                                │ │
+│ ├─────────────────────────────────────────────────────────────┤ │
+│ │ GUARD PAGE (4 KB) - PROT_NONE                               │ │
+│ └─────────────────────────────────────────────────────────────┘ │
+├─────────────────────────────────────────────────────────────────┤
+│ 0x000000... ← Heap (malloc), data segment, code                 │
+└─────────────────────────────────────────────────────────────────┘
+
+GUARD PAGES:
+If game code writes beyond allocated memory:
+  *((uint8_t*)Memory + 64MB + 100) = 0xFF;
+  ↓
+  SEGFAULT! (Hits guard page)
+  ↓
+  Debugger stops immediately at exact line!
+
+Without guard pages:
+  Silently corrupts next allocation → mysterious bugs later 💥
+```
+
+---
+
+#### 💻 Code Snippets with Explanations
+
+**1. Platform-Agnostic Memory Allocation (Your Innovation!)**
+
+```c
+/**
+ * 🎯 YOUR ABSTRACTION (Better than Casey's Day 14!)
+ *
+ * Casey directly calls VirtualAlloc (Windows) or mmap (Linux).
+ * You created a PLATFORM-AGNOSTIC API!
+ *
+ * Benefits:
+ * - Adding macOS? Just implement platform_allocate_memory() for Mach
+ * - Game code NEVER sees mmap/VirtualAlloc
+ * - Single API for both platforms
+ */
+PlatformMemoryBlock platform_allocate_memory(
+    void* base_hint,
+    size_t size,
+    PlatformMemoryFlags flags
+) {
+  size_t page_size = platform_get_page_size();        // 4096 on Linux
+  size_t aligned_size = (size + page_size - 1) & ~(page_size - 1);
+  size_t total_size = aligned_size + 2 * page_size;  // Add guard pages!
+
+  // Reserve entire region as inaccessible
+  void *reserved = mmap(base_hint, total_size, PROT_NONE,
+                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+
+  if (reserved == MAP_FAILED) {
+    return (PlatformMemoryBlock){0};
+  }
+
+  // Make middle section accessible (skip first guard page)
+  int prot = platform_posix_protection_from_flags(flags);
+  if (mprotect((uint8_t *)reserved + page_size, aligned_size, prot) != 0) {
+    munmap(reserved, total_size);
+    return (PlatformMemoryBlock){0};
+  }
+
+  // Return usable memory (skip first guard page)
+  return (PlatformMemoryBlock){
+      .base = (uint8_t *)reserved + page_size,  // Points PAST guard page
+      .size = aligned_size,                     // Usable size
+      .total_size = total_size,                 // Includes guards
+      .flags = flags
+  };
+}
+
+/**
+ * WHY THIS PATTERN?
+ *
+ * Windows equivalent (Casey's code):
+ *   void* mem = VirtualAlloc(base, size, MEM_RESERVE, PAGE_NOACCESS);
+ *   VirtualAlloc(mem, size, MEM_COMMIT, PAGE_READWRITE);
+ *
+ * Your pattern abstracts both!
+ */
+```
+
+**2. Game Memory Initialization (Casey's Day 14 Pattern)**
+
+```c
+int platform_main() {
+  // ═══════════════════════════════════════════════════════════
+  // 🧠 DAY 14: ALLOCATE GAME MEMORY
+  // ═══════════════════════════════════════════════════════════
+
+#if HANDMADE_INTERNAL
+  // Fixed base address for deterministic debugging
+  void *base_address = (void *)TERABYTES(2);
+#else
+  void *base_address = NULL;  // Let OS choose
+#endif
+
+  // Allocate permanent storage (64 MB)
+  PlatformMemoryBlock permanent_storage = platform_allocate_memory(
+      base_address,
+      MEGABYTES(64),
+      PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE | PLATFORM_MEMORY_ZEROED
+  );
+
+  if (!permanent_storage.base) {
+    fprintf(stderr, "ERROR: Could not allocate permanent storage\n");
+    return 1;
+  }
+
+  // Allocate transient storage (4 GB) right after permanent
+  void *transient_base = (uint8_t *)permanent_storage.base + permanent_storage.size;
+
+  PlatformMemoryBlock transient_storage = platform_allocate_memory(
+      transient_base,
+      GIGABYTES(4),
+      PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE | PLATFORM_MEMORY_ZEROED
+  );
+
+  if (!transient_storage.base) {
+    fprintf(stderr, "ERROR: Could not allocate transient storage\n");
+    platform_free_memory(&permanent_storage);
+    return 1;
+  }
+
+  // Create memory contract
+  GameMemory game_memory = {0};
+  game_memory.permanent_storage = permanent_storage;
+  game_memory.transient_storage = transient_storage;
+  game_memory.permanent_storage_size = permanent_storage.size;
+  game_memory.transient_storage_size = transient_storage.size;
+  game_memory.is_initialized = false;  // Game will initialize on first frame
+
+  printf("✅ Game memory allocated:\n");
+  printf("   Permanent: %lu MB at %p\n",
+         game_memory.permanent_storage.size / (1024 * 1024),
+         game_memory.permanent_storage.base);
+  printf("   Transient: %lu GB at %p\n",
+         game_memory.transient_storage.size / (1024 * 1024 * 1024),
+         game_memory.transient_storage.base);
+
+  // Main loop
+  while (is_game_running) {
+    // ...input processing...
+
+    // Pass memory to game!
+    game_update_and_render(&game_memory, &input, &buffer, &sound);
+  }
+
+  // Platform NEVER frees memory (process-lifetime resource)
+  // OS reclaims on exit
+}
+```
+
+**3. Game Layer Memory Usage (Casey's Key Pattern)**
+
+```c
+void game_update_and_render(GameMemory *memory, GameInput *input,
+                            GameOffscreenBuffer *buffer,
+                            GameSoundOutput *sound_buffer) {
+
+  // ═══════════════════════════════════════════════════════════
+  // STEP 1: Safety check (Casey's Assert pattern)
+  // ═══════════════════════════════════════════════════════════
+  Assert(sizeof(GameState) <= memory->permanent_storage.size);
+
+  // ═══════════════════════════════════════════════════════════
+  // STEP 2: Cast memory to game_state pointer
+  // ═══════════════════════════════════════════════════════════
+  // THE KEY PATTERN OF DAY 14!
+  //
+  // memory->permanent_storage.base is void* (just raw bytes).
+  // We tell C "treat these bytes as a GameState struct".
+  //
+  // This is NOT allocating new memory!
+  // It's just creating a TYPED VIEW of existing memory.
+  //
+  // Cost: ~1 CPU cycle (just loading a pointer)
+  // ═══════════════════════════════════════════════════════════
+
+  GameState *game_state = (GameState *)memory->permanent_storage.base;
+
+  // ═══════════════════════════════════════════════════════════
+  // STEP 3: Initialize on first frame (Casey's pattern)
+  // ═══════════════════════════════════════════════════════════
+  //
+  // Platform sets is_initialized = false at startup.
+  // We check it, initialize state, then set it to true.
+  //
+  // This runs ONCE (first frame only).
+  //
+  // WHY NOT USE A CONSTRUCTOR?
+  // - C has no constructors
+  // - This is explicit and debuggable
+  // - Can see exactly what initial values are
+  // - Survives hot reload (new DLL sees is_initialized = true, skips!)
+  // ═══════════════════════════════════════════════════════════
+
+  if (!memory->is_initialized) {
+    // Initialize game state (only happens once!)
+    game_state->gradient_state.offset_x = 0;
+    game_state->gradient_state.offset_y = 0;
+    game_state->pixel_state.offset_x = 0;
+    game_state->pixel_state.offset_y = 0;
+    game_state->speed = 5;
+
+    // Tell platform we're initialized
+    memory->is_initialized = true;
+
+    printf("🎮 Game state initialized (first frame)\n");
+    printf("   Address: %p\n", (void *)game_state);
+    printf("   Size:    %zu bytes\n", sizeof(GameState));
+
+    return;  // Skip first frame render
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // STEP 4: Use game_state normally
+  // ═══════════════════════════════════════════════════════════
+
+  // Handle input
+  handle_controls(active_controller, sound_buffer, game_state);
+
+  // Render
+  render_weird_gradient(buffer, game_state);
+
+  // Game state persists to next frame!
+  // Platform NEVER touches this memory again.
+}
+```
+
+**4. Hot Reload Flow (Future Day 25+)**
+
+```c
+// This is how it WILL work later (conceptual):
+
+// Frame 1000: Game running with game.so v1
+game_update_and_render(&game_memory, ...);
+// game_state->player_x = 450.0f (set by player input)
+
+// [Developer edits code, runs: ./build.sh]
+// Platform detects game.so timestamp changed
+
+// Frame 1001: Hot reload happens!
+dlclose(game_dll_handle);                      // Unload old game.so
+game_dll_handle = dlopen("game.so", RTLD_NOW); // Load new game.so
+GameUpdateAndRender = dlsym(game_dll_handle, "game_update_and_render");
+
+// Frame 1002: Call NEW game code
+game_update_and_render(&game_memory, ...);
+
+// Inside NEW game.so:
+GameState *game_state = (GameState *)memory->permanent_storage.base;
+// Points to SAME address! (0x0000020000000000)
+// game_state->player_x is STILL 450.0f!
+
+if (!memory->is_initialized) {  // false! (already initialized)
+  // SKIP initialization!
+}
+
+// Game continues with NEW code, OLD state! 🎉
+printf("Player at %.2f\n", game_state->player_x);  // 450.0f
+```
+
+**5. Save/Load System (Trivial with This Pattern)**
+
+```c
+// Day 25+ feature (works because of Day 14 foundation!):
+
+void SaveGame(GameMemory *Memory, const char *filename) {
+  FILE *f = fopen(filename, "wb");
+
+  // Write entire permanent storage to disk!
+  fwrite(Memory->permanent_storage.base,
+         Memory->permanent_storage_size,
+         1, f);
+
+  fclose(f);
+
+  printf("💾 Saved %llu bytes to %s\n",
+         Memory->permanent_storage_size, filename);
+}
+
+void LoadGame(GameMemory *Memory, const char *filename) {
+  FILE *f = fopen(filename, "rb");
+
+  // Overwrite entire permanent storage from disk!
+  fread(Memory->permanent_storage.base,
+        Memory->permanent_storage_size,
+        1, f);
+
+  fclose(f);
+
+  // CRITICAL: Mark as initialized so game doesn't reset state!
+  Memory->is_initialized = true;
+
+  printf("📂 Loaded %llu bytes from %s\n",
+         Memory->permanent_storage_size, filename);
+}
+
+// Player quicksaves at frame 1000
+// Player continues playing to frame 2000
+// Player quickloads
+// Game state restored to exact frame 1000 state!
+```
+
+---
+
+#### 🔄 Before/After Comparison
+
+| Aspect                | Day 13 (Globals)                                | Day 14 (Explicit Memory)                                              |
+| --------------------- | ----------------------------------------------- | --------------------------------------------------------------------- |
+| **State Storage**     | `file_scoped_global_var GameState g_game_state` | `GameState *game_state = (GameState *)Memory->permanent_storage.base` |
+| **Initialization**    | `init_game_state()` in platform                 | `if (!Memory->is_initialized)` in game                                |
+| **Hot Reload**        | ❌ Impossible (globals reset)                   | ✅ Works (memory persists)                                            |
+| **Save/Load**         | ❌ Manual serialization needed                  | ✅ `fwrite(Memory, size, file)`                                       |
+| **Platform Coupling** | ❌ Platform knows about `GameState`             | ✅ Platform only knows `void*`                                        |
+| **Debugging**         | ❌ Random addresses each run                    | ✅ Fixed 2TB address (debug builds)                                   |
+| **Guard Pages**       | ❌ No overflow protection                       | ✅ Crashes on buffer overrun                                          |
+
+---
+
+#### 🐛 Common Pitfalls
+
+| Issue                                            | Cause                                                        | Fix                                                               |
+| ------------------------------------------------ | ------------------------------------------------------------ | ----------------------------------------------------------------- |
+| **Segfault on first frame**                      | Forgot to check `is_initialized`                             | Add `if (!memory->is_initialized) { init }`                       |
+| **State resets after code change**               | Initialization in platform layer                             | Move initialization to game layer                                 |
+| **Transient storage not allocated**              | Calculated address, didn't call `platform_allocate_memory()` | Actually allocate with separate `platform_allocate_memory()` call |
+| **Memory leak in `platform_free_memory()`**      | Wrong offset calculation: `(total - total) / 2 = 0`          | Use `(total - size) / 2` or `base - page_size`                    |
+| **Save file is 64MB but game state is 24 bytes** | Saving entire `permanent_storage`                            | Compress with zlib or track used size                             |
+| **Pointer stored in `GameState` breaks on load** | Absolute addresses don't survive save/load                   | Use offsets: `uint32 entity_offset` instead of `Entity *entities` |
+
+---
+
+#### 🎓 Skills Acquired
+
+- ✅ **Understood memory contract pattern** (platform allocates, game manages)
+- ✅ **Implemented guard pages** for buffer overflow detection
+- ✅ **Created platform-agnostic memory API** (`platform_allocate_memory`)
+- ✅ **Mastered initialization pattern** (`is_initialized` check)
+- ✅ **Learned fixed base address technique** (deterministic debugging)
+- ✅ **Understood hot reload foundation** (state persists across DLL reloads)
+- ✅ **Prepared for trivial save/load** (`fwrite` entire memory block)
+- ✅ **Applied Casey's "Wave 2" resource philosophy** (process-lifetime allocations)
+- ✅ **Debugged subtle pointer arithmetic bugs** (guard page offset calculations)
+- ✅ **Separated platform and game concerns** (clear ownership boundaries)
+
+---
+
+#### 🔗 Related Resources
+
+- **Casey's Handmade Hero Day 14**: [Video](https://www.youtube.com/watch?v=MvDUe2evkHg&list=PLEMXAbCVnmY6RverunClc_DMLNDd3ASRp&index=14)
+- **Linux mmap man page**: `man 2 mmap`
+- **Memory protection**: `man 2 mprotect`
+- **Virtual memory concepts**: [OSDev Wiki](https://wiki.osdev.org/Paging)
+
+---
+
+#### 💡 Casey's Philosophy Highlights
+
+> **"The platform layer should be as dumb as possible. It allocates memory, it doesn't understand it."**  
+> — Casey Muratori, Day 14
+
+> **"We want to be able to reload our game code while the game is running. The only way to do that is to separate code from state."**  
+> — Casey Muratori, Day 14
+
+> **"If you crash, you want to know IMMEDIATELY where the problem is. Guard pages give you that."**  
+> — Casey Muratori, Day 25
+
 ## Misc
 
 ---
