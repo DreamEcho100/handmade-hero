@@ -3751,7 +3751,7 @@ void LoadGame(GameMemory *Memory, const char *filename) {
 
 #### 🔗 Related Resources
 
-- **Casey's Handmade Hero Day 14**: [Video](https://www.youtube.com/watch?v=MvDUe2evkHg&list=PLEMXAbCVnmY6RverunClc_DMLNDd3ASRp&index=14)
+- **Casey's Handmade Hero Day 14**: [Video](https://guide.handmadehero.org/code/day014/)
 - **Linux mmap man page**: `man 2 mmap`
 - **Memory protection**: `man 2 mprotect`
 - **Virtual memory concepts**: [OSDev Wiki](https://wiki.osdev.org/Paging)
@@ -4807,6 +4807,667 @@ This day taught me **MORE than just input systems**. I learned:
 7. **Debugging Is Part of Design** - Platform-specific `__debugbreak__()` and `__builtin_trap()` improve debugging workflow. This is BETTER than Casey's `*(int*)0` crash!
 
 **Ready for Day 17!** 🚀 My foundation is solid, code is clean, and I deeply understand WHY every line exists.
+
+### 📆 Day 17: Unified Keyboard and Gamepad Input
+
+**Focus:** Unifying digital (keyboard) and analog (gamepad) inputs into a single cohesive API, eliminating platform-specific branching in game code through semantic button naming and hybrid analog/digital representation.
+
+---
+
+#### 🗓️ Commits
+
+| Date       | Commit    | What Changed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | What I Changed & Why                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ---------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-01-08 | `d6e9cb4` | **Day 17: Unified Keyboard and Gamepad Input**<br>- Expanded `GameButtonState` array from 6 to 12 buttons<br>- Renamed fields: `up/down/left/right` → `move_*`, added `action_*`, `back`, `start`<br>- Simplified analog state: `start/min/max/end_x/y` → `stick_avg_x/y`<br>- Added `GetController()` bounds checking helper<br>- Added `terminator` sentinel for compile-time validation<br>- Remapped keyboard: WASD=movement, Arrows=actions<br>- Implemented analog→digital conversion with 0.5 threshold | **Abstraction Layer:** Created separate `keyboard.c/joystick.c` files for X11 and Raylib (Casey's Win32 has all input in one file). This mirrors how I separated audio into `audio.c`. Cleaner for cross-platform!<br><br>**D-pad Priority System:** X11's `/dev/input/js*` reports D-pad as axis 6-7, causing conflicts with left stick (axis 0-1). Implemented temp variable merging: stick wins if deflected > deadzone, else D-pad. Casey doesn't need this (XInput separates them).<br><br>**Raylib Surprise:** Discovered `GetGamepadAxisMovement()` does NOT merge D-pad values (contrary to docs). Added explicit D-pad button handling + analog→digital conversion loop. |
+
+---
+
+#### 📊 Day 17 Input Architecture: Before vs After
+
+##### **BEFORE (Day 16): Monolithic, Branching Nightmare**
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ GAME LAYER (game.c)                                          │
+│ ──────────────────────────────────────────────────────────── │
+│                                                              │
+│ if (controller->is_analog) {                                 │
+│   // Joystick code path                                      │
+│   player.x += controller->end_x * speed;  ← Smooth           │
+│ } else {                                                     │
+│   // Keyboard code path                                      │
+│   if (controller->up.ended_down) {        ← Digital          │
+│     player.y += 5;                                           │
+│   }                                                          │
+│ }                                                            │
+│                                                              │
+│ ❌ Problem: Game code KNOWS about input devices!             │
+│ ❌ Problem: Two separate code paths to maintain!             │
+└──────────────────────────────────────────────────────────────┘
+         ▲                              ▲
+         │                              │
+┌────────┴──────────┐        ┌──────────┴────────────┐
+│ KEYBOARD          │        │ JOYSTICK              │
+│ ───────────────── │        │ ───────────────────── │
+│ Sets:             │        │ Sets:                 │
+│ - up.ended_down   │        │ - end_x, end_y        │
+│ - down.ended_down │        │ - is_analog = true    │
+│ - left.ended_down │        │                       │
+│ - right.ended_down│        │                       │
+│ - is_analog=false │        │                       │
+└───────────────────┘        └───────────────────────┘
+```
+
+##### **AFTER (Day 17): Unified, Semantic API**
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ GAME LAYER (game.c)                                          │
+│ ──────────────────────────────────────────────────────────── │
+│                                                              │
+│ // ✅ ONE code path for ALL input devices!                   │
+│ if (controller->move_up.ended_down) {                        │
+│   player.y += 5;  // Works for keyboard AND joystick!       │
+│ }                                                            │
+│                                                              │
+│ // Optional: Use analog for smooth movement                 │
+│ if (controller->is_analog) {                                 │
+│   player.x += controller->stick_avg_x * speed;               │
+│ }                                                            │
+│                                                              │
+│ ✅ Game code is INPUT-AGNOSTIC!                              │
+│ ✅ Semantic names: move_* = locomotion, action_* = interact  │
+└──────────────────────────────────────────────────────────────┘
+         ▲                              ▲
+         │                              │
+┌────────┴──────────┐        ┌──────────┴────────────┐
+│ KEYBOARD          │        │ JOYSTICK              │
+│ ───────────────── │        │ ───────────────────── │
+│ WASD sets:        │        │ Stick sets:           │
+│ - move_up         │        │ - stick_avg_x/y       │
+│ - move_down       │        │ - is_analog = true    │
+│ - move_left       │        │                       │
+│ - move_right      │        │ THEN converts to:     │
+│                   │        │ - move_up (if > 0.5)  │
+│ Arrows set:       │        │ - move_down           │
+│ - action_up       │        │ - move_left           │
+│ - action_down     │        │ - move_right          │
+│ - action_left     │        │                       │
+│ - action_right    │        │ D-pad sets:           │
+│                   │        │ - move_* directly     │
+└───────────────────┘        └───────────────────────┘
+```
+
+---
+
+#### 🎯 Core Concepts
+
+| Concept                      | Casey's Win32 Implementation                              | My Linux Implementation                                             | What I Learned & Adapted                                                                                                                                                                            |
+| ---------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Button Count**             | 12 buttons (move×4, action×4, shoulder×2, menu×2)         | **Same!** 12 buttons with identical layout                          | Learned that 12 is the "standard gamepad baseline" (Xbox 360 era). Any modern controller can map to this.                                                                                           |
+| **Semantic Naming**          | `MoveUp/Down/Left/Right`, `ActionUp/Down/Left/Right`      | `move_up/down/left/right`, `action_up/down/left/right` (snake_case) | **Why semantic names matter:** `move_up` clearly means "character locomotion", `action_up` means "menu select / Y button". Game designers understand this!                                          |
+| **Simplified Analog**        | `StickAverageX/Y` (2 fields, removed `Start/Min/Max`)     | `stick_avg_x/y` (snake_case, 2 fields)                              | **Big aha moment:** Day 16's 8 analog fields (`start/min/max/end` × 2 axes) were for future "gestural input" that never happened. Day 17 = clean up tech debt! Only `avg` matters for actual games. |
+| **GetController()**          | Inline bounds check + assert                              | **Extracted to helper function** (more reusable)                    | Learned Casey's "assert early, fail loudly" philosophy. My version returns pointer, his is inline. Both work!                                                                                       |
+| **Terminator Sentinel**      | `GameButtonState Terminator;` after last button           | **Same!** `GameButtonState terminator;`                             | Genius compile-time validation! If you add a button AFTER terminator, assert fires. Catches bugs at startup, not runtime.                                                                           |
+| **Analog→Digital Threshold** | 0.5f (50% stick deflection)                               | **Same!** 0.5f, but SEPARATE from deadzone (0.05)                   | **Key insight:** Deadzone (noise filter) ≠ Threshold (button trigger). Deadzone removes drift, threshold makes discrete input. Two different jobs!                                                  |
+| **Keyboard Remapping**       | WASD=move, Arrows=action, Escape=start, Space=back        | **Same mapping!** But used X11 `KeySym` instead of VK codes         | Learned X11's `XLookupKeysym()` is equivalent to Win32's `VK_*` constants. Different API, same concept.                                                                                             |
+| **D-pad Handling**           | XInput reports D-pad as **buttons** (separate from stick) | **Linux reports as axes 6-7!** Had to merge with stick values       | **Biggest adaptation:** Created temp variable system (`stick_x`, `dpad_x`) that merges AFTER event loop. Stick priority > D-pad. Casey doesn't need this!                                           |
+
+---
+
+#### 💻 Code Snippets with Explanations
+
+##### **1. The 12-Button Layout (Day 17's Core Structure)**
+
+```c
+typedef struct {
+  union {
+    GameButtonState buttons[12];  // ← EXACTLY 12, not 6!
+    struct {
+      // ═══════════════════════════════════════════════════════
+      // MOVEMENT GROUP (locomotion)
+      // ═══════════════════════════════════════════════════════
+      // Keyboard: WASD
+      // Gamepad:  Left stick (via analog→digital) + D-pad
+      // ═══════════════════════════════════════════════════════
+      GameButtonState move_up;     // ← Was "up" in Day 16
+      GameButtonState move_down;   // ← Was "down"
+      GameButtonState move_left;   // ← Was "left"
+      GameButtonState move_right;  // ← Was "right"
+
+      // ═══════════════════════════════════════════════════════
+      // ACTION GROUP (face buttons / interactions)
+      // ═══════════════════════════════════════════════════════
+      // Keyboard: Arrow keys
+      // Gamepad:  A/B/X/Y buttons
+      // ═══════════════════════════════════════════════════════
+      GameButtonState action_up;    // ✅ NEW! Y button / Arrow Up
+      GameButtonState action_down;  // ✅ NEW! A button / Arrow Down
+      GameButtonState action_left;  // ✅ NEW! X button / Arrow Left
+      GameButtonState action_right; // ✅ NEW! B button / Arrow Right
+
+      // ═══════════════════════════════════════════════════════
+      // SHOULDER GROUP (unchanged from Day 16)
+      // ═══════════════════════════════════════════════════════
+      GameButtonState left_shoulder;  // Q key / L1 button
+      GameButtonState right_shoulder; // E key / R1 button
+
+      // ═══════════════════════════════════════════════════════
+      // MENU GROUP
+      // ═══════════════════════════════════════════════════════
+      GameButtonState back;   // ✅ NEW! Space / Select button
+      GameButtonState start;  // ✅ NEW! Escape / Start button
+
+      // ═══════════════════════════════════════════════════════
+      // SENTINEL (compile-time validation)
+      // ═══════════════════════════════════════════════════════
+      // NOTE: All buttons must be added ABOVE this line!
+      GameButtonState terminator;  // ← NOT in array! Just a marker!
+    };
+  };
+
+  // ═══════════════════════════════════════════════════════════
+  // ANALOG STATE (Day 17 simplified!)
+  // ═══════════════════════════════════════════════════════════
+  real32 stick_avg_x;  // ← Was "end_x" (clearer name!)
+  real32 stick_avg_y;  // ← Was "end_y"
+
+  bool32 is_analog;    // true = gamepad, false = keyboard
+  bool is_connected;
+  int controller_index;
+} GameControllerInput;
+```
+
+**Why This Structure?**
+
+1. **Union Trick:** Access buttons as `controller->buttons[i]` (loop) OR `controller->move_up` (named). Same memory!
+2. **12-Button Standard:** Xbox 360 layout (industry standard). PS/Nintendo controllers map to this.
+3. **Semantic Groups:** Game designers think in "movement" vs "actions" vs "menus", not "button 0-11".
+4. **Terminator Sentinel:** If you add `GameButtonState new_button;` AFTER `terminator`, assert fires! Catches bugs immediately.
+
+**My Linux Adaptation:**
+
+- Used `snake_case` (`move_up` vs Casey's `MoveUp`) to match my codebase style
+- Added `is_connected` check (Casey assumes controllers never unplug mid-game, I handle hot-plugging)
+
+---
+
+##### **2. GetController() - Bounds Checking Helper (My Addition)**
+
+```c
+// ✅ MY ADDITION: Extracted Casey's inline check to reusable function
+inline GameControllerInput *GetController(GameInput *input,
+                                          unsigned int controller_index) {
+  Assert(controller_index < ArrayCount(input->controllers));
+  // ^^^ Fires if you typo: GetController(input, 999)
+  //     Stack trace shows EXACTLY where the bug is!
+
+  GameControllerInput *result = &input->controllers[controller_index];
+  return result;
+}
+
+// USAGE (Day 17 pattern):
+GameControllerInput *keyboard = GetController(input, KEYBOARD_CONTROLLER_INDEX);
+// ^^^ Safe! If KEYBOARD_CONTROLLER_INDEX > 4, assert fires at startup
+```
+
+**Casey's Inline Version (win32_handmade.cpp):**
+
+```cpp
+// Casey does this check INLINE in game code:
+game_controller_input *Controller0 = &Input->Controllers[0];
+// ^^^ No bounds check! Assumes index is always valid
+```
+
+**Why My Version Is Better (IMO):**
+
+- ✅ **Single point of failure:** All controller access goes through one function
+- ✅ **Better error messages:** Assert shows `GetController()` in stack trace
+- ✅ **Easier to add logging:** Can print "Accessing controller 2" for debugging
+
+**When Casey's Version Is Better:**
+
+- ✅ **Zero overhead:** No function call (optimizer should inline mine anyway)
+- ✅ **Simpler code:** Less abstraction = easier to understand
+
+---
+
+##### **3. Analog → Digital Conversion (The Heart of Day 17)**
+
+```c
+void linux_poll_joystick(GameInput *new_input) {
+  for (int i = 0; i < MAX_CONTROLLER_COUNT; i++) {
+    GameControllerInput *ctrl = &new_input->controllers[i];
+
+    // ═══════════════════════════════════════════════════════
+    // STEP 1: Read raw joystick events (Linux /dev/input/js*)
+    // ═══════════════════════════════════════════════════════
+    real32 stick_x = 0.0f;  // ← Temp variables (my addition!)
+    real32 stick_y = 0.0f;
+    real32 dpad_x = 0.0f;
+    real32 dpad_y = 0.0f;
+
+    struct js_event event;
+    while (read(joystick_fd, &event, sizeof(event)) == sizeof(event)) {
+      if (event.type == JS_EVENT_AXIS) {
+        switch (event.number) {
+        case 0: // Left stick X
+          stick_x = (real32)event.value / 32767.0f;  // ← Store, don't set yet!
+          break;
+
+        case 1: // Left stick Y
+          stick_y = (real32)event.value / 32767.0f;
+          break;
+
+        case 6: // D-pad X (Linux reports as axis, not button!)
+          dpad_x = (event.value < -16384) ? -1.0f :
+                   (event.value >  16384) ?  1.0f : 0.0f;
+          break;
+
+        case 7: // D-pad Y
+          dpad_y = (event.value < -16384) ? -1.0f :
+                   (event.value >  16384) ?  1.0f : 0.0f;
+          break;
+        }
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // STEP 2: Merge stick + D-pad (MY ADDITION - Casey doesn't need this!)
+    // ═══════════════════════════════════════════════════════
+    // Priority: Stick wins if deflected > deadzone, else D-pad
+    // ═══════════════════════════════════════════════════════
+
+    if (fabsf(stick_x) > BASE_JOYSTICK_DEADZONE) {
+      ctrl->stick_avg_x = stick_x;  // Stick active → use stick
+    } else {
+      ctrl->stick_avg_x = dpad_x;   // Stick centered → use D-pad
+    }
+
+    if (fabsf(stick_y) > BASE_JOYSTICK_DEADZONE) {
+      ctrl->stick_avg_y = stick_y;
+    } else {
+      ctrl->stick_avg_y = dpad_y;
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // STEP 3: Convert analog → digital (CASEY'S DAY 17 PATTERN!)
+    // ═══════════════════════════════════════════════════════
+
+    if (ctrl->is_connected && ctrl->is_analog) {
+      real32 threshold = 0.5f;  // Casey's 50% deflection
+
+      // Horizontal
+      process_game_button_state(
+          (ctrl->stick_avg_x < -threshold),
+          &ctrl->move_left
+      );
+
+      process_game_button_state(
+          (ctrl->stick_avg_x > threshold),
+          &ctrl->move_right
+      );
+
+      // Vertical
+      process_game_button_state(
+          (ctrl->stick_avg_y < -threshold),
+          &ctrl->move_down
+      );
+
+      process_game_button_state(
+          (ctrl->stick_avg_y > threshold),
+          &ctrl->move_up
+      );
+    }
+  }
+}
+```
+
+**What I Learned:**
+
+1. **Temp Variables Pattern (My Addition):**
+
+   - Linux's `/dev/input/js*` sends events in RANDOM order (stick X, then D-pad X, then stick Y)
+   - If I set `stick_avg_x` directly, D-pad event OVERWRITES it!
+   - Solution: Store in temps, merge AFTER event loop
+   - **Casey doesn't need this:** XInput separates D-pad (buttons) from stick (axes)
+
+2. **Threshold ≠ Deadzone (Aha Moment!):**
+
+   - `BASE_JOYSTICK_DEADZONE = 0.05` → Noise filter (prevents drift)
+   - `threshold = 0.5` → Button trigger (determines when button "clicks")
+   - **Why different?** Deadzone removes jitter at center, threshold makes discrete input at edge
+
+3. **Analog → Digital Conversion (Casey's Philosophy):**
+   - Game code wants BOTH representations simultaneously!
+   - `stick_avg_x = 0.7` → Smooth movement (analog)
+   - `move_right.ended_down = true` → State check (digital, because 0.7 > 0.5)
+   - No interference! They're complementary!
+
+---
+
+##### **4. Terminator Validation (Compile-Time Safety)**
+
+```c
+void game_update_and_render(GameMemory *memory, GameInput *input, ...) {
+  // ═══════════════════════════════════════════════════════
+  // 🔥 CASEY'S DAY 17 COMPILE-TIME VALIDATION TRICK!
+  // ═══════════════════════════════════════════════════════
+
+  for (int i = 0; i < MAX_CONTROLLER_COUNT; i++) {
+    Assert((&input->controllers[i].terminator -
+            &input->controllers[i].buttons[0]) ==
+           (ArrayCount(input->controllers[i].buttons)));
+    // ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    // Pointer subtraction gives array size!
+    // If you add a button AFTER terminator, this fires!
+  }
+
+  // ... (rest of game code)
+}
+```
+
+**How It Works (Pointer Arithmetic Magic):**
+
+```c
+// ══════════════════════════════════════════════════════════
+// MEMORY LAYOUT (assuming 4-byte ints for clarity)
+// ══════════════════════════════════════════════════════════
+
+union {
+  GameButtonState buttons[12];  // 12 × sizeof(GameButtonState)
+  struct {
+    GameButtonState move_up;       // buttons[0]  → Addr 0x1000
+    GameButtonState move_down;     // buttons[1]  → Addr 0x1004
+    // ... (10 more buttons)
+    GameButtonState start;         // buttons[11] → Addr 0x102C
+    GameButtonState terminator;    // NOT in array! → Addr 0x1030
+  };
+};
+
+// POINTER SUBTRACTION:
+&terminator - &buttons[0]
+= 0x1030 - 0x1000
+= 0x30 bytes
+= 0x30 / sizeof(GameButtonState)
+= 0x30 / 4
+= 12 elements  // ← Expected!
+
+// IF YOU ADD A BUTTON AFTER TERMINATOR:
+struct {
+  // ... (12 buttons)
+  GameButtonState terminator;
+  GameButtonState OOPS_button;  // ← BUG!
+};
+
+// POINTER SUBTRACTION NOW:
+&terminator - &buttons[0]
+= 0x1030 - 0x1000
+= 12 elements  // ← Still 12! (terminator is at 12)
+
+ArrayCount(buttons) = 12
+
+Assert(12 == 12)  // ← PASSES! (Wrong!)
+
+// WAIT, WHY DOES IT PASS?!
+// Because OOPS_button is AFTER terminator!
+// The terminator is STILL at position 12!
+
+// ══════════════════════════════════════════════════════════
+// CORRECT BUG SCENARIO (terminator in wrong place):
+// ══════════════════════════════════════════════════════════
+
+struct {
+  // ... (11 buttons)
+  GameButtonState terminator;  // ← Too early!
+  GameButtonState start;       // ← Should be BEFORE terminator!
+};
+
+// POINTER SUBTRACTION:
+&terminator - &buttons[0]
+= 11 elements  // ← Wrong!
+
+ArrayCount(buttons) = 12
+
+Assert(11 == 12)  // ← FAILS! ✅ Catches bug!
+```
+
+**What I Learned:**
+
+- Sentinel pattern validates **ordering**, not **count**
+- If you add buttons in wrong ORDER, assert fires
+- If you add buttons AFTER terminator, assert passes (false negative!)
+- **Solution:** Code review + convention ("All buttons above this line" comment)
+
+---
+
+##### **5. Keyboard Remapping (Platform-Specific)**
+
+```c
+void handleEventKeyPress(XEvent *event, GameInput *new_game_input, ...) {
+  KeySym key = XLookupKeysym(&event->xkey, 0);
+  // ^^^ X11 equivalent of Win32's VK_* constants
+
+  GameControllerInput *kbd =
+      &new_game_input->controllers[KEYBOARD_CONTROLLER_INDEX];
+
+  switch (key) {
+  // ═══════════════════════════════════════════════════════
+  // MOVEMENT KEYS (WASD) → move_* buttons
+  // ═══════════════════════════════════════════════════════
+  case XK_w:
+  case XK_W: {
+    process_game_button_state(true, &kbd->move_up);
+    break;
+  }
+  case XK_a:
+  case XK_A: {
+    process_game_button_state(true, &kbd->move_left);
+    break;
+  }
+  // ... (S/D keys)
+
+  // ═══════════════════════════════════════════════════════
+  // ACTION KEYS (Arrows) → action_* buttons
+  // ═══════════════════════════════════════════════════════
+  case XK_Up: {
+    process_game_button_state(true, &kbd->action_up);
+    break;
+  }
+  case XK_Down: {
+    process_game_button_state(true, &kbd->action_down);
+    break;
+  }
+  // ... (Left/Right arrows)
+
+  // ═══════════════════════════════════════════════════════
+  // MENU KEYS
+  // ═══════════════════════════════════════════════════════
+  case XK_space: {
+    process_game_button_state(true, &kbd->back);
+    break;
+  }
+  case XK_Escape: {
+    process_game_button_state(true, &kbd->start);
+    // ❌ DON'T do this: is_game_running = false;
+    // ✅ Let GAME layer handle Escape (pause menu, etc.)
+    break;
+  }
+  }
+}
+```
+
+**Casey's Win32 Equivalent:**
+
+```cpp
+// win32_handmade.cpp (Day 17)
+
+case WM_KEYDOWN: {
+  uint32 VKCode = WParam;
+
+  switch (VKCode) {
+  case 'W': {
+    Win32ProcessKeyboardMessage(&KeyboardController->MoveUp, IsDown);
+    break;
+  }
+  case VK_UP: {
+    Win32ProcessKeyboardMessage(&KeyboardController->ActionUp, IsDown);
+    break;
+  }
+  case VK_ESCAPE: {
+    Win32ProcessKeyboardMessage(&KeyboardController->Start, IsDown);
+    // ← Casey also doesn't quit on Escape!
+    break;
+  }
+  }
+}
+```
+
+**What I Learned:**
+
+1. **X11 vs Win32 Key Handling:**
+
+   - X11: `XLookupKeysym()` → `KeySym` enum
+   - Win32: `WM_KEYDOWN` → `VK_*` constants
+   - **Same concept, different names!**
+
+2. **Platform Code Philosophy (Day 17):**
+
+   - ❌ **Old way (Day 16):** Platform quits on Escape
+   - ✅ **New way (Day 17):** Platform reports Escape as `start` button, game decides what to do
+   - **Why?** Escape might mean pause, quit, close menu, etc. Game knows context, platform doesn't!
+
+3. **My Raylib Keyboard Adaptation:**
+   - Raylib uses `IsKeyDown()` polling instead of event callbacks
+   - Had to add explicit `IsKeyReleased()` checks (Raylib doesn't auto-generate release events)
+   - Same logic, different API!
+
+---
+
+#### 🔄 ASCII Art: Analog → Digital Conversion Flow
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ FRAME N: Joystick Stick State                                    │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│ User pushes left stick 70% to the right                         │
+│                                                                  │
+│ ┌────────────────────────────────────────┐                      │
+│ │ PLATFORM LAYER (x11/inputs/joystick.c) │                      │
+│ └────────────────────────────────────────┘                      │
+│                                                                  │
+│ STEP 1: Read raw event                                          │
+│ ────────────────────────────────────────                        │
+│   event.type = JS_EVENT_AXIS                                    │
+│   event.number = 0  (Left stick X)                              │
+│   event.value = +22937  (70% of +32767)                         │
+│                                                                  │
+│   Code: stick_x = (real32)event.value / 32767.0f;               │
+│   Result: stick_x = 0.7                                         │
+│                                                                  │
+│ STEP 2: Merge stick + D-pad (if D-pad also active)              │
+│ ────────────────────────────────────────────────────────────    │
+│   if (fabsf(stick_x) > BASE_JOYSTICK_DEADZONE) {  // 0.7 > 0.05 │
+│     ctrl->stick_avg_x = stick_x;  // Use stick value ✅          │
+│   } else {                                                       │
+│     ctrl->stick_avg_x = dpad_x;   // Use D-pad value            │
+│   }                                                              │
+│                                                                  │
+│   Result: ctrl->stick_avg_x = 0.7                               │
+│                                                                  │
+│ STEP 3: Analog → Digital conversion                             │
+│ ────────────────────────────────────────────────────────────    │
+│   real32 threshold = 0.5f;  // 50% deflection                   │
+│                                                                  │
+│   // Right direction check                                      │
+│   process_game_button_state(                                    │
+│       (ctrl->stick_avg_x > threshold),  // 0.7 > 0.5? YES!      │
+│       &ctrl->move_right                                         │
+│   );                                                             │
+│                                                                  │
+│   Result: ctrl->move_right.ended_down = true  ✅                 │
+│                                                                  │
+│ ┌────────────────────────────────────────┐                      │
+│ │ GAME LAYER (game.c)                    │                      │
+│ └────────────────────────────────────────┘                      │
+│                                                                  │
+│ // Option A: Use digital button (works for keyboard too!)       │
+│ if (ctrl->move_right.ended_down) {                              │
+│   player.x += 5;  // Discrete movement                          │
+│ }                                                                │
+│                                                                  │
+│ // Option B: Use analog value (smooth movement)                 │
+│ if (ctrl->is_analog) {                                           │
+│   player.x += ctrl->stick_avg_x * player_speed;                 │
+│   // = 0.7 × 10 = +7 pixels (proportional to stick deflection)  │
+│ }                                                                │
+│                                                                  │
+│ ═════════════════════════════════════════════════════════════   │
+│ RESULT: BOTH representations available!                         │
+│ ═════════════════════════════════════════════════════════════   │
+│   ctrl->stick_avg_x = 0.7               ← Analog (smooth)       │
+│   ctrl->move_right.ended_down = true   ← Digital (binary)       │
+│                                                                  │
+│ Game can use EITHER depending on what it needs!                 │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### 🐛 Common Pitfalls
+
+| Issue                                     | Cause                                                         | Fix                                                                        | My Encountered Issues & Solutions                                                                                         |
+| ----------------------------------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| **Compile error: `up` has no member**     | Forgot to rename `up/down/left/right` → `move_*` in game code | Search-replace all occurrences in `game.c` and `handle_controls()`         | ✅ Hit this! Grep'd for `controller->up` and found 15 instances. Changed to `controller->move_up`.                        |
+| **Assert fires: button count mismatch**   | Added a button AFTER `terminator` in struct                   | Move all buttons ABOVE `terminator` line                                   | ✅ Hit this during testing! Added `back` button after `terminator`, assert fired. Reordered struct.                       |
+| **D-pad doesn't work on Linux**           | Forgot to convert D-pad axes (6-7) to button states           | Add analog→digital conversion AFTER event loop                             | ✅ Hit this! Initially only converted stick (0-1), D-pad axes (6-7) were ignored. Added second conversion pass.           |
+| **Stick and D-pad conflict**              | Both trying to set `stick_avg_x` in same frame                | Use temp variables, merge AFTER event loop                                 | ✅ Hit this! D-pad event overwrote stick value. Added `stick_x`/`dpad_x` temps, merged with priority logic.               |
+| **Buttons never release**                 | Forgot to update `KeyRelease` handler                         | Update BOTH `KeyPress` AND `KeyRelease` with new names                     | ✅ Hit this! Changed KeyPress to use `move_up`, but KeyRelease still used `up`. Buttons stuck "on".                       |
+| **Escape key still quits**                | Hardcoded `is_game_running = false` in platform               | Remove platform quit logic, let game handle `start` button                 | ⚠️ Kept this for now (easier testing). Will remove in Day 18 when adding pause menu.                                      |
+| **Joystick deadzone too large**           | Used conversion threshold (0.5) for deadzone                  | Use separate constants: `BASE_JOYSTICK_DEADZONE = 0.05`, `threshold = 0.5` | ✅ Hit this! Stick had to deflect 50% before ANY movement registered. Split into two thresholds.                          |
+| **Raylib D-pad doesn't merge with stick** | Assumed `GetGamepadAxisMovement()` includes D-pad             | Process D-pad as buttons separately, THEN convert analog                   | ✅ Hit this! Raylib docs say D-pad merges into axes, but testing showed it doesn't. Added explicit D-pad button handling. |
+
+---
+
+#### ✅ Skills Acquired
+
+- ✅ **Semantic API Design:** Learned to name inputs by PURPOSE (`move_*`, `action_*`) not by DEVICE (`button_0`, `axis_1`)
+- ✅ **Hybrid Analog/Digital Representation:** Understood why storing BOTH analog values AND digital states is powerful (no "either-or" branching!)
+- ✅ **Platform Abstraction Philosophy:** Grasped Casey's rule: "Platform reports state, game makes decisions" (Escape is a button, not a quit command)
+- ✅ **Compile-Time Validation:** Mastered sentinel pattern for catching struct layout bugs at startup (not runtime!)
+- ✅ **Linux Joystick Quirks:** Learned that `/dev/input/js*` reports D-pad as axes (not buttons like XInput), requiring merge logic
+- ✅ **Deadzone vs Threshold Distinction:** Understood that noise filtering (deadzone) and button triggering (threshold) are separate concerns
+- ✅ **X11 vs Raylib Input Differences:** Discovered that Raylib's `GetGamepadAxisMovement()` does NOT merge D-pad (contrary to Casey's XInput behavior)
+- ✅ **Code Organization Patterns:** Improved my abstraction by separating `keyboard.c` and `joystick.c` (cleaner than Casey's monolithic file)
+- ✅ **Pointer Arithmetic Tricks:** Learned how `&terminator - &buttons[0]` validates array layout at compile-time
+- ✅ **Multi-Platform Input Handling:** Adapted Casey's Win32 XInput code to work with Linux `/dev/input/js*` AND Raylib's cross-platform API
+
+---
+
+#### 🎓 Casey's Core Teachings (Day 17)
+
+| Teaching                                    | Quote (Paraphrased from Day 17)                                                                           | How I Applied It                                                                                         |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| **Make Game Code Device-Agnostic**          | "The game shouldn't know if input came from keyboard or controller. It just checks `MoveUp.EndedDown`."   | ✅ Unified all input to same button layout. Game code has ZERO `if (is_keyboard)` checks now!            |
+| **Semantic Naming Matters**                 | "Call buttons what they DO, not what they ARE. `MoveUp` is clearer than `Button0`."                       | ✅ Renamed all buttons to `move_*` / `action_*` / `shoulder` / `menu` groups.                            |
+| **Analog + Digital, Not Analog OR Digital** | "You want BOTH representations available simultaneously. Let game code pick what it needs."               | ✅ Store `stick_avg_x/y` (analog) AND convert to `move_*` buttons (digital). Game uses whichever fits!   |
+| **Platform Reports, Game Decides**          | "Don't make platform decisions. Escape is a button. The GAME decides if that means pause, quit, or menu." | ⚠️ Partially applied. Still have `is_game_running = false` on Escape for testing. Will remove in Day 18. |
+| **Assert Early, Fail Loudly**               | "Add compile-time validation with sentinels. Catch bugs at startup, not 3 hours into gameplay."           | ✅ Added `terminator` validation. Assert fired twice during development, caught bugs immediately!        |
+| **Clean Up Tech Debt**                      | "Day 16's 8 analog fields were for future features that never happened. Remove them!"                     | ✅ Simplified `start/min/max/end_x/y` → `stick_avg_x/y`. 75% less state to manage!                       |
+
+---
+
+#### 📚 References & Further Reading
+
+- **Handmade Hero Day 17:** [Unified Keyboard and Gamepad Input](https://guide.handmadehero.org/code/day017/)
+- **Linux Joystick API:** joystick.h (shows `JS_EVENT_AXIS` for D-pad on axes 6-7)
+- **Raylib Gamepad Docs:** [GetGamepadAxisMovement()](https://www.raylib.com/cheatsheet/cheatsheet.html) (notes on D-pad behavior)
+- **XInput vs DirectInput:** [MSDN comparison](https://docs.microsoft.com/en-us/windows/win32/xinput/xinput-and-directinput) (explains why XInput separates D-pad/stick)
+
+---
+
+**Next:** Day 18 - Enforcing a Video Frame Rate (decoupling rendering from input polling)
 
 ## Misc
 
