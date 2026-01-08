@@ -3,7 +3,9 @@
 inline void process_game_button_state(bool is_down,
                                       GameButtonState *new_state) {
   new_state->ended_down = is_down;
-  ++new_state->half_transition_count;
+  if (new_state->ended_down != is_down) {
+    ++new_state->half_transition_count;
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -27,12 +29,8 @@ void prepare_input_frame(GameInput *old_input, GameInput *new_input) {
     new_ctrl->controller_index = old_ctrl->controller_index;
 
     // Preserve analog stick state
-    new_ctrl->start_x = old_ctrl->end_x;
-    new_ctrl->start_y = old_ctrl->end_y;
-    new_ctrl->end_x = old_ctrl->end_x;
-    new_ctrl->end_y = old_ctrl->end_y;
-    new_ctrl->min_x = new_ctrl->max_x = new_ctrl->end_x;
-    new_ctrl->min_y = new_ctrl->max_y = new_ctrl->end_y;
+    new_ctrl->stick_avg_x = old_ctrl->stick_avg_x;
+    new_ctrl->stick_avg_y = old_ctrl->stick_avg_y;
 
     static int new_ctrl_btns_size = (int)ArraySize(new_ctrl->buttons);
 

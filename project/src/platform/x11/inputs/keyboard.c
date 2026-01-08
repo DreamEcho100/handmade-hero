@@ -16,63 +16,76 @@ void handleEventKeyPress(XEvent *event, GameInput *new_game_input,
       &new_game_input->controllers[KEYBOARD_CONTROLLER_INDEX];
 
   switch (key) {
-  case XK_F1: {
-    printf("F1 pressed - showing audio debug\n");
-    linux_debug_audio_latency(sound_output);
-    break;
-  }
   case (XK_w):
-  case (XK_W):
-  case (XK_Up): {
-    // W/Up = Move up = positive Y
-    new_controller1->end_y = +1.0f;
-    new_controller1->min_y = new_controller1->max_y = new_controller1->end_y;
-    new_controller1->is_analog = false;
-
-    // Also set button state for backward compatibility
-    process_game_button_state(true, &new_controller1->up);
+  case (XK_W): {
+    process_game_button_state(true, &new_controller1->move_up);
     break;
   }
   case (XK_a):
-  case (XK_A):
-  case (XK_Left): {
-    // A/Left = Move left = negative X
-    new_controller1->end_x = -1.0f;
-    new_controller1->min_x = new_controller1->max_x = new_controller1->end_x;
-    new_controller1->is_analog = false;
-
-    process_game_button_state(true, &new_controller1->left);
+  case (XK_A): {
+    process_game_button_state(true, &new_controller1->move_left);
     break;
   }
   case (XK_s):
-  case (XK_S):
-  case (XK_Down): {
-    // S/Down = Move down = negative Y
-    new_controller1->end_y = -1.0f;
-    new_controller1->min_y = new_controller1->max_y = new_controller1->end_y;
-    new_controller1->is_analog = false;
-
-    process_game_button_state(true, &new_controller1->down);
+  case (XK_S): {
+    process_game_button_state(true, &new_controller1->move_down);
     break;
   }
   case (XK_d):
-  case (XK_D):
-  case (XK_Right): {
-    // D/Right = Move right = positive X
-    new_controller1->end_x = +1.0f;
-    new_controller1->min_x = new_controller1->max_x = new_controller1->end_x;
-    new_controller1->is_analog = false;
-
-    process_game_button_state(true, &new_controller1->right);
+  case (XK_D): {
+    process_game_button_state(true, &new_controller1->move_right);
     break;
   }
+
+  case (XK_q):
+  case (XK_Q): {
+    process_game_button_state(true, &new_controller1->left_shoulder);
+    break;
+  }
+  case (XK_e):
+  case (XK_E): {
+    process_game_button_state(true, &new_controller1->right_shoulder);
+    break;
+  }
+
+  case (XK_Up): {
+    process_game_button_state(true, &new_controller1->action_up);
+    break;
+  }
+  case (XK_Left): {
+    process_game_button_state(true, &new_controller1->action_left);
+    break;
+  }
+  case (XK_Down): {
+    process_game_button_state(true, &new_controller1->action_down);
+    break;
+  }
+  case (XK_Right): {
+    process_game_button_state(true, &new_controller1->action_right);
+    break;
+  }
+
   case (XK_space): {
-    printf("SPACE pressed\n");
+    process_game_button_state(true, &new_controller1->start);
     break;
   }
   case (XK_Escape): {
-    printf("ESCAPE pressed - exiting\n");
-    is_game_running = false;
+    process_game_button_state(true, &new_controller1->back);
+    break;
+  }
+
+  // Alt+F4 quits (OS-level, not game-level)
+  case (XK_F4): {
+    if (event->xkey.state & Mod1Mask) {
+      printf("ALT+F4 released - exiting\n");
+      is_game_running = false;
+    }
+    break;
+  }
+
+  case XK_F1: {
+    printf("F1 pressed - showing audio debug\n");
+    linux_debug_audio_latency(sound_output);
     break;
   }
   }
@@ -86,48 +99,60 @@ void handleEventKeyRelease(XEvent *event, GameInput *new_game_input) {
 
   switch (key) {
   case (XK_w):
-  case (XK_W):
-  case (XK_Up): {
-    new_controller1->end_y = 0.0f;
-    new_controller1->min_y = new_controller1->max_y = 0.0f;
-    new_controller1->is_analog = false;
-    process_game_button_state(false, &new_controller1->up);
+  case (XK_W): {
+    process_game_button_state(false, &new_controller1->move_up);
     break;
   }
   case (XK_a):
-  case (XK_A):
-  case (XK_Left): {
-    new_controller1->end_x = 0.0f;
-    new_controller1->min_x = new_controller1->max_x = 0.0f;
-    new_controller1->is_analog = false;
-    process_game_button_state(false, &new_controller1->left);
+  case (XK_A): {
+    process_game_button_state(false, &new_controller1->move_left);
     break;
   }
   case (XK_s):
-  case (XK_S):
-  case (XK_Down): {
-    new_controller1->end_y = 0.0f;
-    new_controller1->min_y = new_controller1->max_y = 0.0f;
-    new_controller1->is_analog = false;
-    process_game_button_state(false, &new_controller1->down);
+  case (XK_S): {
+    process_game_button_state(false, &new_controller1->move_down);
     break;
   }
   case (XK_d):
-  case (XK_D):
+  case (XK_D): {
+    process_game_button_state(false, &new_controller1->move_right);
+    break;
+  }
+
+  case (XK_q):
+  case (XK_Q): {
+    process_game_button_state(false, &new_controller1->left_shoulder);
+    break;
+  }
+  case (XK_e):
+  case (XK_E): {
+    process_game_button_state(false, &new_controller1->right_shoulder);
+    break;
+  }
+
+  case (XK_Up): {
+    process_game_button_state(false, &new_controller1->action_up);
+    break;
+  }
+  case (XK_Left): {
+    process_game_button_state(false, &new_controller1->action_left);
+    break;
+  }
+  case (XK_Down): {
+    process_game_button_state(false, &new_controller1->action_down);
+    break;
+  }
   case (XK_Right): {
-    new_controller1->end_x = 0.0f;
-    new_controller1->min_x = new_controller1->max_x = 0.0f;
-    new_controller1->is_analog = false;
-    process_game_button_state(false, &new_controller1->right);
+    process_game_button_state(false, &new_controller1->action_right);
     break;
   }
-  case (XK_space): {
-    printf("SPACE released\n");
+
+  case (XK_braceright): {
+    process_game_button_state(false, &new_controller1->start);
     break;
   }
-  case (XK_Escape): {
-    printf("ESCAPE released - exiting\n");
-    is_game_running = false;
+  case (XK_braceleft): {
+    process_game_button_state(false, &new_controller1->back);
     break;
   }
   }

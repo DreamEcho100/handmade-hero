@@ -3,6 +3,8 @@
 #include "../../base.h"
 #include "../../game.h"
 
+#define BASE_JOYSTICK_DEADZONE 0.4
+
 // ═══════════════════════════════════════════════════════════════
 // TODO(Mazen) (Future Self - Engine Refactor):
 // ═══════════════════════════════════════════════════════════════

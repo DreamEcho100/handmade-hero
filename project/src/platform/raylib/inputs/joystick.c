@@ -1,6 +1,7 @@
 #include "../../../base.h"
 #include "../../../game.h"
 #include "../../_common/input.h"
+#include <math.h>
 #include <raylib.h>
 #include <stdio.h>
 #include <string.h>
@@ -74,25 +75,18 @@ void raylib_init_gamepad(GameControllerInput *controller_old_input,
   }
 }
 
-void raylib_poll_gamepad(GameInput *old_input, GameInput *new_input) {
-
+void raylib_poll_gamepad(GameInput *new_input) {
   for (int controller_index = MAX_KEYBOARD_COUNT;
        controller_index < MAX_CONTROLLER_COUNT; controller_index++) {
-
-    // Get controller state
-    GameControllerInput *old_controller =
-        &old_input->controllers[controller_index];
     GameControllerInput *new_controller =
         &new_input->controllers[controller_index];
 
     int g_joysticks_index = controller_index - MAX_KEYBOARD_COUNT;
     if (g_joysticks_index < 0 || g_joysticks_index >= MAX_JOYSTICK_COUNT) {
-      // Skip keyboard (index 0)
       continue;
     }
     RaylibJoystickState *joystick_state = &g_joysticks[g_joysticks_index];
 
-    // Check if gamepad is still connected
     if (joystick_state->gamepad_id < 0 ||
         !IsGamepadAvailable(joystick_state->gamepad_id)) {
       continue;
@@ -101,184 +95,135 @@ void raylib_poll_gamepad(GameInput *old_input, GameInput *new_input) {
     int gamepad = joystick_state->gamepad_id;
 
     // ═══════════════════════════════════════════════════════════
-    // 🎮 BUTTON EVENTS (Raylib maps to standard layout)
-    // ═══════════════════════════════════════════════════════════
-    // Raylib uses SDL2 button mapping (works across all controllers!)
-    // - PlayStation: X=A, O=B, □=X, △=Y
-    // - Xbox: A=A, B=B, X=X, Y=Y
-    // - Nintendo: B=A, A=B, Y=X, X=Y
-
-    // // Face buttons
-    // game_state->controls.a_button =
-    //     IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_RIGHT_FACE_DOWN);
-    // game_state->controls.b_button =
-    //     IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT);
-    // game_state->controls.x_button =
-    //     IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_RIGHT_FACE_LEFT);
-    // game_state->controls.y_button =
-    //     IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_RIGHT_FACE_UP);
-
-    // // Shoulder buttons
-    // game_state->controls.left_shoulder =
-    //     IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_LEFT_TRIGGER_1);
-    // game_state->controls.right_shoulder =
-    //     IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_RIGHT_TRIGGER_1);
-
-    // // Menu buttons
-    // game_state->controls.back =
-    //     IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_MIDDLE_LEFT); //
-    //     Share/Back
-    // game_state->controls.start = IsGamepadButtonDown(
-    //     gamepad, GAMEPAD_BUTTON_MIDDLE_RIGHT); // Options/Start
-
-    // ═══════════════════════════════════════════════════════════
-    // 🎮 D-PAD (works on ALL controllers!)
-    // ═══════════════════════════════════════════════════════════
-    // Raylib treats D-pad as buttons (digital), not axes (analog).
-    // We must convert button states to analog values for game layer.
+    // 🎮 FACE BUTTONS (action_* buttons)
     // ═══════════════════════════════════════════════════════════
 
-    // ✅ Update start position BEFORE reading buttons
-    new_controller->start_x = old_controller->end_x;
-    new_controller->start_y = old_controller->end_y;
+    process_game_button_state(
+        IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_RIGHT_FACE_UP),
+        &new_controller->action_up);
 
-    // ─────────────────────────────────────────────────────────
-    // D-PAD UP/DOWN (Y-axis)
-    // ─────────────────────────────────────────────────────────
-    bool dpad_up = IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_LEFT_FACE_UP);
-    bool dpad_down =
-        IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_LEFT_FACE_DOWN);
+    process_game_button_state(
+        IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_RIGHT_FACE_DOWN),
+        &new_controller->action_down);
 
-    if (dpad_up && !dpad_down) {
-      // Only UP pressed
-      new_controller->end_y = +1.0f;
-      process_game_button_state(true, &new_controller->up);
-      process_game_button_state(false, &new_controller->down);
+    process_game_button_state(
+        IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_RIGHT_FACE_LEFT),
+        &new_controller->action_left);
 
-    } else if (dpad_down && !dpad_up) {
-      // Only DOWN pressed
-      new_controller->end_y = -1.0f;
-      process_game_button_state(true, &new_controller->down);
-      process_game_button_state(false, &new_controller->up);
-
-    } else if (dpad_up && dpad_down) {
-      // Both pressed (cancel out)
-      new_controller->end_y = 0.0f;
-      process_game_button_state(true, &new_controller->up);
-      process_game_button_state(true, &new_controller->down);
-
-    } else {
-      // Neither pressed
-      new_controller->end_y = 0.0f;
-      process_game_button_state(false, &new_controller->up);
-      process_game_button_state(false, &new_controller->down);
-    }
-
-    // ─────────────────────────────────────────────────────────
-    // D-PAD LEFT/RIGHT (X-axis)
-    // ─────────────────────────────────────────────────────────
-    bool dpad_left =
-        IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_LEFT_FACE_LEFT);
-    bool dpad_right =
-        IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_LEFT_FACE_RIGHT);
-
-    if (dpad_left && !dpad_right) {
-      // Only LEFT pressed
-      new_controller->end_x = -1.0f;
-      process_game_button_state(true, &new_controller->left);
-      process_game_button_state(false, &new_controller->right);
-
-    } else if (dpad_right && !dpad_left) {
-      // Only RIGHT pressed
-      new_controller->end_x = +1.0f;
-      process_game_button_state(true, &new_controller->right);
-      process_game_button_state(false, &new_controller->left);
-
-    } else if (dpad_left && dpad_right) {
-      // Both pressed (cancel out)
-      new_controller->end_x = 0.0f;
-      process_game_button_state(true, &new_controller->left);
-      process_game_button_state(true, &new_controller->right);
-
-    } else {
-      // Neither pressed
-      new_controller->end_x = 0.0f;
-      process_game_button_state(false, &new_controller->left);
-      process_game_button_state(false, &new_controller->right);
-    }
-
-    // Update min/max (Day 13 pattern)
-    new_controller->min_x = new_controller->max_x = new_controller->end_x;
-    new_controller->min_y = new_controller->max_y = new_controller->end_y;
+    process_game_button_state(
+        IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT),
+        &new_controller->action_right);
 
     // ═══════════════════════════════════════════════════════════
-    // 🎮 ANALOG STICKS (normalized -1.0 to +1.0)
+    // 🎮 SHOULDER BUTTONS
     // ═══════════════════════════════════════════════════════════
-    // Platform layer reports RAW values (no filtering!)
-    //
-    // Raylib automatically:
-    // - Normalizes to -1.0 to +1.0 range
-    // - Applies small internal deadzone (~0.05)
-    // - Handles platform differences (Windows/Linux/Mac)
-    //
-    // We just pass the values through!
+
+    process_game_button_state(
+        IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_LEFT_TRIGGER_1),
+        &new_controller->left_shoulder);
+
+    process_game_button_state(
+        IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_RIGHT_TRIGGER_1),
+        &new_controller->right_shoulder);
+
+    // ═══════════════════════════════════════════════════════════
+    // 🎮 MENU BUTTONS
+    // ═══════════════════════════════════════════════════════════
+
+    process_game_button_state(
+        IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_MIDDLE_LEFT),
+        &new_controller->back);
+
+    process_game_button_state(
+        IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_MIDDLE_RIGHT),
+        &new_controller->start);
+
+    // ═══════════════════════════════════════════════════════════
+    // 🎮 ANALOG STICKS (ALWAYS store values!)
     // ═══════════════════════════════════════════════════════════
 
     real32 left_stick_x = GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_LEFT_X);
     real32 left_stick_y = GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_LEFT_Y);
 
-    // Must set is_analog EVERY FRAME because:
-    // 1. Raylib always returns a value (even 0.0)
-    // 2. prepare_input_frame() preserves old value
-    // 3. We need to mark "this frame used joystick, not keyboard"
-    new_controller->is_analog = true;
+    // ✅ ALWAYS update analog values (even if 0.0!)
+    new_controller->stick_avg_x = left_stick_x;
+    new_controller->stick_avg_y = left_stick_y;
 
-    // Update start position (for movement tracking)
-    new_controller->start_x = old_controller->end_x;
-    new_controller->start_y = old_controller->end_y;
-
-    // Store RAW values (game layer will apply deadzone!)
-    new_controller->end_x = left_stick_x;
-    new_controller->end_y = left_stick_y;
-
-    // Day 13: Just set min/max to current value
-    // Day 14+: These will track actual min/max during frame
-    new_controller->min_x = left_stick_x;
-    new_controller->max_x = left_stick_x;
-    new_controller->min_y = left_stick_y;
-    new_controller->max_y = left_stick_y;
-
-    // game_state->controls.right_stick_x =
-    //     (int16_t)(GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_RIGHT_X) *
-    //               32767.0f);
-    // game_state->controls.right_stick_y =
-    //     (int16_t)(GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_RIGHT_Y) *
-    //               32767.0f);
-
-    // // Triggers (also normalized 0.0 to +1.0)
-    // game_state->controls.left_trigger =
-    //     (int16_t)(GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_LEFT_TRIGGER)
-    //     *
-    //               32767.0f);
-    // game_state->controls.right_trigger =
-    //     (int16_t)(GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_RIGHT_TRIGGER)
-    //     *
-    //               32767.0f);
-
-    // Debug output for button presses (only print on state change)
-    if (IsGamepadButtonPressed(gamepad, GAMEPAD_BUTTON_RIGHT_FACE_DOWN)) {
-      printf("Button A pressed\n");
+    // Determine if controller is using analog input
+    if (fabsf(left_stick_x) > BASE_JOYSTICK_DEADZONE ||
+        fabsf(left_stick_y) > BASE_JOYSTICK_DEADZONE) {
+      new_controller->is_analog = true;
+    } else {
+      new_controller->is_analog = false;
     }
-    if (IsGamepadButtonPressed(gamepad, GAMEPAD_BUTTON_MIDDLE_RIGHT)) {
-      printf("Button Start pressed\n");
+
+    // ═══════════════════════════════════════════════════════════
+    // 🎮 D-PAD BUTTONS (ALWAYS processed, not guarded!)
+    // ═══════════════════════════════════════════════════════════
+    // NOTE: These buttons are SEPARATE from stick values!
+    // User can press D-pad even while stick is deflected.
+    // ═══════════════════════════════════════════════════════════
+
+    process_game_button_state(
+        IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_LEFT_FACE_UP),
+        &new_controller->move_up);
+
+    process_game_button_state(
+        IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_LEFT_FACE_DOWN),
+        &new_controller->move_down);
+
+    process_game_button_state(
+        IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_LEFT_FACE_LEFT),
+        &new_controller->move_left);
+
+    process_game_button_state(
+        IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_LEFT_FACE_RIGHT),
+        &new_controller->move_right);
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // 🆕 DAY 17: ANALOG → DIGITAL CONVERSION (AFTER ALL CONTROLLERS!)
+  // ═══════════════════════════════════════════════════════════
+  // This runs ONCE per controller, converting analog to buttons.
+  // Uses a SEPARATE threshold (0.5) vs deadzone (0.05)!
+  // ═══════════════════════════════════════════════════════════
+
+  for (int controller_index = MAX_KEYBOARD_COUNT;
+       controller_index < MAX_CONTROLLER_COUNT; controller_index++) {
+    GameControllerInput *new_controller =
+        &new_input->controllers[controller_index];
+
+    if (!new_controller->is_connected || !new_controller->is_analog) {
+      continue;
     }
+
+    // ✅ IMPORTANT: These process_game_button_state() calls will
+    //    OVERRIDE D-pad button states if stick is deflected!
+    //    This is INTENTIONAL - stick takes priority over D-pad.
+    //    (User can still use D-pad when stick is centered.)
+
+    process_game_button_state(
+        (new_controller->stick_avg_x < -BASE_JOYSTICK_DEADZONE),
+        &new_controller->move_left);
+
+    process_game_button_state(
+        (new_controller->stick_avg_x > BASE_JOYSTICK_DEADZONE),
+        &new_controller->move_right);
+
+    process_game_button_state(
+        (new_controller->stick_avg_y < -BASE_JOYSTICK_DEADZONE),
+        &new_controller->move_down);
+
+    process_game_button_state(
+        (new_controller->stick_avg_y > BASE_JOYSTICK_DEADZONE),
+        &new_controller->move_up);
   }
 }
 
-void debug_joystick_state(GameInput *old_game_input) {
+void debug_joystick_state(GameInput *game_input) {
   printf("\n🎮 Controller States:\n");
   for (int i = 0; i < MAX_CONTROLLER_COUNT; i++) {
-    GameControllerInput *c = &old_game_input->controllers[i];
+    GameControllerInput *c = &game_input->controllers[i];
     // LinuxJoystickState *joystick_state = NULL;
     // if (i > 0 && i - 1 < MAX_JOYSTICK_COUNT) {
     //   joystick_state = &g_joysticks[i - 1];
@@ -287,10 +232,10 @@ void debug_joystick_state(GameInput *old_game_input) {
     if (i > 0 && i - 1 < MAX_JOYSTICK_COUNT) {
       joystick_state = &g_joysticks[i - 1];
     }
-    printf("  [%d] connected=%d analog=%d gamepad_id=%d end_x=%.2f "
-           "end_y=%.2f\n",
+    printf("  [%d] connected=%d analog=%d gamepad_id=%d stick_avg_x=%.2f "
+           "stick_avg_y=%.2f\n",
            i, c->is_connected, c->is_analog,
-           joystick_state ? joystick_state->gamepad_id : -1, c->end_x,
-           c->end_y);
+           joystick_state ? joystick_state->gamepad_id : -1, c->stick_avg_x,
+           c->stick_avg_y);
   }
 }

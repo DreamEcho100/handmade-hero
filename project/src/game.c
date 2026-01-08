@@ -29,10 +29,11 @@ file_scoped_global_var inline real32 apply_deadzone(real32 value) {
 
 file_scoped_global_var inline bool
 controller_has_input(GameControllerInput *controller) {
-  return (fabsf(controller->end_x) > CONTROLLER_DEADZONE ||
-          fabsf(controller->end_y) > CONTROLLER_DEADZONE ||
-          controller->up.ended_down || controller->down.ended_down ||
-          controller->left.ended_down || controller->right.ended_down);
+  return (fabsf(controller->stick_avg_x) > CONTROLLER_DEADZONE ||
+          fabsf(controller->stick_avg_y) > CONTROLLER_DEADZONE ||
+          controller->move_up.ended_down || controller->move_down.ended_down ||
+          controller->move_left.ended_down ||
+          controller->move_right.ended_down);
 }
 
 void render_weird_gradient(GameOffscreenBuffer *buffer, GameState *game_state) {
@@ -90,11 +91,11 @@ void handle_controls(GameControllerInput *input, GameSoundOutput *sound_output,
     //   BlueOffset += (int)(4.0f * Input0->EndX);
     //   ToneHz = 256 + (int)(128.0f * Input0->EndY);
     //
-    // end_x/end_y are NORMALIZED (-1.0 to +1.0)!
+    // stick_avg_x/stick_avg_y are NORMALIZED (-1.0 to +1.0)!
     // ═════════════════════════════════════════════════════════
 
-    real32 x = apply_deadzone(input->end_x);
-    real32 y = apply_deadzone(input->end_y);
+    real32 x = apply_deadzone(input->stick_avg_x);
+    real32 y = apply_deadzone(input->stick_avg_y);
 
     // Horizontal stick controls blue offset
     game_state->gradient_state.offset_x -= (int)(4.0f * x);
@@ -104,34 +105,19 @@ void handle_controls(GameControllerInput *input, GameSoundOutput *sound_output,
     // NOTE: `tone_hz` is moved to the game layer, but initilized by the
     // platform layer
     sound_output->tone_hz = 256 + (int)(128.0f * y);
-
   } else {
-    // ═════════════════════════════════════════════════════════
-    // DIGITAL MOVEMENT (Keyboard only)
-    // ═════════════════════════════════════════════════════════
-    // Option A: Use button states (discrete, snappy)
-    if (input->up.ended_down) {
+    if (input->move_up.ended_down) {
       game_state->gradient_state.offset_y += game_state->speed;
     }
-    if (input->down.ended_down) {
+    if (input->move_down.ended_down) {
       game_state->gradient_state.offset_y -= game_state->speed;
     }
-    if (input->left.ended_down) {
+    if (input->move_left.ended_down) {
       game_state->gradient_state.offset_x += game_state->speed;
     }
-    if (input->right.ended_down) {
+    if (input->move_right.ended_down) {
       game_state->gradient_state.offset_x -= game_state->speed;
     }
-
-    // OR Option B: Use analog values (same formula as joystick)
-    // game_state->gradient_state.offset_x += (int)(4.0f * controller->end_x);
-    // game_state->gradient_state.offset_y += (int)(4.0f * controller->end_y);
-
-    // Pick ONE, not both!
-
-    // game_state->gradient_state.offset_x += (int)(4.0f * controller->end_x);
-    // game_state->gradient_state.offset_y += (int)(4.0f * controller->end_y);
-    // sound_output->tone_hz = 256 + (int)(128.0f * controller->end_y);
   }
 
   // Clamp tone
@@ -181,6 +167,11 @@ void game_update_and_render(GameMemory *memory, GameInput *input,
 
   // Priority 1: Check for active joystick input (controllers 1-4)
   for (int i = 0; i < MAX_CONTROLLER_COUNT; i++) {
+
+    Assert((&input->controllers[i].terminator -
+            &input->controllers[i].buttons[i]) ==
+           (ArraySize(input->controllers[i].buttons)));
+
     if (i == KEYBOARD_CONTROLLER_INDEX)
       continue;
 
@@ -194,43 +185,35 @@ void game_update_and_render(GameMemory *memory, GameInput *input,
     }
   }
 
-  // Priority 2: Check keyboard if no joystick input
-  if (!active_controller) {
-    GameControllerInput *keyboard =
-        &input->controllers[KEYBOARD_CONTROLLER_INDEX];
-    bool has_input = (keyboard->up.ended_down || keyboard->down.ended_down ||
-                      keyboard->left.ended_down || keyboard->right.ended_down);
-    if (has_input) {
-      active_controller = keyboard;
-    }
-  }
-
   // Fallback: Always use keyboard (controller[0]) if nothing else
   if (!active_controller) {
     active_controller = &input->controllers[KEYBOARD_CONTROLLER_INDEX];
   }
 
+#if HANDMADE_INTERNAL
   if (frame % 60 == 0) {
     printf("Frame %d: active_controller=%p\n", frame,
            (void *)active_controller);
     if (active_controller) {
-      printf("  is_analog=%d end_x=%.2f end_y=%.2f\n",
-             active_controller->is_analog, active_controller->end_x,
-             active_controller->end_y);
+      printf("  is_analog=%d stick_avg_x=%.2f stick_avg_y=%.2f\n",
+             active_controller->is_analog, active_controller->stick_avg_x,
+             active_controller->stick_avg_y);
       printf("  up=%d down=%d left=%d right=%d\n",
-             active_controller->up.ended_down,
-             active_controller->down.ended_down,
-             active_controller->left.ended_down,
-             active_controller->right.ended_down);
-      printf("Frame %d: is_analog=%d end_x=%.2f end_y=%.2f "
+             active_controller->move_up.ended_down,
+             active_controller->move_down.ended_down,
+             active_controller->move_left.ended_down,
+             active_controller->move_right.ended_down);
+      printf("Frame %d: is_analog=%d stick_avg_x=%.2f stick_avg_y=%.2f "
              "up=%d down=%d left=%d right=%d\n",
-             frame, active_controller->is_analog, active_controller->end_x,
-             active_controller->end_y, active_controller->up.ended_down,
-             active_controller->down.ended_down,
-             active_controller->left.ended_down,
-             active_controller->right.ended_down);
+             frame, active_controller->is_analog,
+             active_controller->stick_avg_x, active_controller->stick_avg_y,
+             active_controller->move_up.ended_down,
+             active_controller->move_down.ended_down,
+             active_controller->move_left.ended_down,
+             active_controller->move_right.ended_down);
     }
   }
+#endif
 
   handle_controls(active_controller, sound_buffer, game_state);
 

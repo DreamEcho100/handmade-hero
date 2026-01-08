@@ -784,7 +784,7 @@ int platform_main() {
         handle_event(&game_buffer, &g_buffer_info, display, window, gc, &event,
                      &game_sound_output, old_game_input, new_game_input);
       }
-      linux_poll_joystick(old_game_input, new_game_input);
+      linux_poll_joystick(new_game_input);
       // printf("new_game_input->controllers[1].is_analog: %d\n",
       //        new_game_input->controllers[1].is_analog);
 

@@ -1,6 +1,8 @@
 #include "../../../game.h"
 #include "../../_common/input.h"
 #include "../audio.h"
+#include <linux/input-event-codes.h>
+#include <raylib.h>
 #include <stdio.h>
 
 void handle_keyboard_inputs(GameSoundOutput *sound_output,
@@ -8,77 +10,59 @@ void handle_keyboard_inputs(GameSoundOutput *sound_output,
   GameControllerInput *new_controller1 =
       &new_game_input->controllers[KEYBOARD_CONTROLLER_INDEX];
 
-  int upDown = IsKeyDown(KEY_W) || IsKeyDown(KEY_UP);
-  if (upDown) {
-    // W/Up = Move up = positive Y
-    new_controller1->end_y = +1.0f;
-    new_controller1->min_y = new_controller1->max_y = new_controller1->end_y;
-    new_controller1->is_analog = false;
-
-    // Also set button state for backward compatibility
-    process_game_button_state(true, &new_controller1->up);
+  if (IsKeyDown(KEY_W)) {
+    process_game_button_state(true, &new_controller1->move_up);
   }
-  int upReleased = IsKeyReleased(KEY_W) || IsKeyReleased(KEY_UP);
-  if (upReleased) {
-    new_controller1->end_y = 0.0f;
-    new_controller1->min_y = new_controller1->max_y = 0.0f;
-    new_controller1->is_analog = false;
-    process_game_button_state(false, &new_controller1->up);
+  if (IsKeyReleased(KEY_W)) {
+    process_game_button_state(false, &new_controller1->move_up);
   }
 
-  int left = IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT);
-  if (left) {
-    // A/Left = Move left = negative X
-    new_controller1->end_x = -1.0f;
-    new_controller1->min_x = new_controller1->max_x = new_controller1->end_x;
-    new_controller1->is_analog = false;
-
-    process_game_button_state(true, &new_controller1->left);
+  if (IsKeyDown(KEY_A)) {
+    process_game_button_state(true, &new_controller1->move_left);
   }
-  int leftReleased = IsKeyReleased(KEY_A) || IsKeyReleased(KEY_LEFT);
-  if (leftReleased) {
-    new_controller1->end_x = 0.0f;
-    new_controller1->min_x = new_controller1->max_x = 0.0f;
-    new_controller1->is_analog = false;
-    process_game_button_state(false, &new_controller1->left);
+  if (IsKeyReleased(KEY_A)) {
+    process_game_button_state(false, &new_controller1->move_left);
   }
 
-  int down = IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN);
-  if (down) {
-    // S/Down = Move down = negative Y
-    new_controller1->end_y = -1.0f;
-    new_controller1->min_y = new_controller1->max_y = new_controller1->end_y;
-    new_controller1->is_analog = false;
-
-    process_game_button_state(true, &new_controller1->down);
+  if (IsKeyDown(KEY_S)) {
+    process_game_button_state(true, &new_controller1->move_down);
   }
-  int downReleased = IsKeyReleased(KEY_S) || IsKeyReleased(KEY_DOWN);
-  if (downReleased) {
-    new_controller1->end_y = 0.0f;
-    new_controller1->min_y = new_controller1->max_y = 0.0f;
-    new_controller1->is_analog = false;
-    process_game_button_state(false, &new_controller1->down);
+  if (IsKeyReleased(KEY_S)) {
+    process_game_button_state(false, &new_controller1->move_down);
   }
 
-  int right = IsKeyDown(KEY_D) || IsKeyDown(KEY_RIGHT);
-  if (right) {
-    // D/Right = Move right = positive X
-    new_controller1->end_x = +1.0f;
-    new_controller1->min_x = new_controller1->max_x = new_controller1->end_x;
-    new_controller1->is_analog = false;
-
-    process_game_button_state(true, &new_controller1->right);
+  if (IsKeyDown(KEY_D)) {
+    process_game_button_state(true, &new_controller1->move_right);
   }
-  int rightReleased = IsKeyReleased(KEY_D) || IsKeyReleased(KEY_RIGHT);
-  if (rightReleased) {
-    new_controller1->end_x = 0.0f;
-    new_controller1->min_x = new_controller1->max_x = 0.0f;
-    new_controller1->is_analog = false;
-    process_game_button_state(false, &new_controller1->right);
+  if (IsKeyReleased(KEY_D)) {
+    process_game_button_state(false, &new_controller1->move_right);
   }
 
-  if (IsKeyPressed(KEY_ESCAPE)) {
-    printf("ESCAPE pressed - exiting\n");
+  if (IsKeyDown(KEY_Q)) {
+    process_game_button_state(true, &new_controller1->left_shoulder);
+  }
+  if (IsKeyReleased(KEY_Q)) {
+    process_game_button_state(false, &new_controller1->left_shoulder);
+  }
+
+  if (IsKeyDown(KEY_E)) {
+    process_game_button_state(true, &new_controller1->right_shoulder);
+  }
+  if (IsKeyReleased(KEY_E)) {
+    process_game_button_state(false, &new_controller1->right_shoulder);
+  }
+
+  if (IsKeyDown(KEY_SPACE)) {
+    process_game_button_state(true, &new_controller1->start);
+  }
+  if (IsKeyDown(KEY_ESCAPE)) {
+    process_game_button_state(false, &new_controller1->back);
+  }
+
+  // Alt+F4 quits (OS-level, not game-level)
+  if (IsKeyReleased(KEY_F4) &&
+      (IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT))) {
+    printf("ALT+F4 released - exiting\n");
     is_game_running = false;
   }
 
