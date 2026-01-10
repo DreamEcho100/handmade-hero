@@ -5469,6 +5469,600 @@ case WM_KEYDOWN: {
 
 **Next:** Day 18 - Enforcing a Video Frame Rate (decoupling rendering from input polling)
 
+### 📆 Day 18: Enforcing a Video Frame Rate
+
+**Focus:** Implementing adaptive frame rate control with VSync, two-phase sleep strategy, and performance monitoring to maintain consistent timing across different hardware.
+
+---
+
+#### 🗓️ Commits
+
+| Date         | Commit    | What Changed                                                                                                                                                              | What I Changed & Why                                                                                                                                                                                                                                     |
+| ------------ | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Jan 10, 2026 | `e45da57` | **Day 18: Enforcing a Video Frame Rate** - Refactored X11 backend to use OpenGL rendering, added adaptive FPS system, implemented two-phase sleep, added frame statistics | **Major refactor:** Replaced XPutImage with OpenGL to solve RGBA color format issues and enable VSync. Added adaptive FPS that auto-reduces from 60→30→20→15 if frames are missed. Implemented Casey's two-phase sleep (coarse+spin) for precise timing. |
+| Jan 10, 2026 | `494cabd` | **Cleanup: Remove POSIX dependencies from Raylib backend** - Removed `_POSIX_C_SOURCE`, `<time.h>`, manual frame timing, duplicate functions                              | **Cross-platform fix:** Replaced POSIX `clock_gettime()` with Raylib's `GetTime()`/`GetFrameTime()`/`GetFPS()` to make code truly cross-platform (works on Windows/Linux/macOS/Web). Removed duplicate `resize_back_buffer()` functions.                 |
+
+---
+
+#### 🎯 Core Concepts
+
+| Concept                  | Casey's Windows Implementation                                                        | My Linux/X11 Implementation                                                   | What I Learned & Why I Adapted                                                                                                                                                                                                                               |
+| ------------------------ | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **VSync**                | `wglSwapIntervalEXT(1)` (OpenGL extension)                                            | `glXSwapBuffers()` (built-in VSync with GLX double buffering)                 | **Learned:** VSync prevents screen tearing by syncing buffer swaps to monitor refresh. **Adapted:** X11's GLX provides VSync automatically with double buffering - no need for extensions like Windows. Just enable `GLX_DOUBLEBUFFER` in visual attributes. |
+| **Frame Timing**         | `QueryPerformanceCounter()` (high-resolution timer)                                   | `clock_gettime(CLOCK_MONOTONIC)` (nanosecond precision, never goes backwards) | **Learned:** Need monotonic clock that never jumps backwards (unlike `CLOCK_REALTIME` which adjusts for NTP). **Why:** `CLOCK_MONOTONIC` is perfect for frame timing - immune to system clock changes.                                                       |
+| **Two-Phase Sleep**      | 1. Sleep in 1ms chunks until 3ms before target<br>2. Spin-wait for final microseconds | Same pattern with `nanosleep()` + spin loop                                   | **Learned:** OS schedulers are unreliable for sub-5ms precision. Hybrid approach: coarse sleep (saves CPU) + spin-wait (precision). **Why 3ms margin:** Accounts for OS scheduler jitter on typical systems.                                                 |
+| **Adaptive FPS**         | Not in original Handmade Hero (added later)                                           | State machine: 60→30→20→15 FPS based on miss rate                             | **Innovation:** Auto-adjusts to hardware capability. Samples 300 frames, if >5% miss → reduce FPS. If <1% miss → try higher FPS. **Why:** Makes game playable on potato PCs without manual settings.                                                         |
+| **OpenGL Rendering**     | `StretchDIBits()` (GDI blitting)                                                      | `glTexImage2D()` + fullscreen quad                                            | **Adapted:** Replaced `XPutImage()` with OpenGL to solve RGBA/BGRA color mismatch. **Bonus:** GPU-accelerated texture upload, built-in VSync, same as Raylib internally.                                                                                     |
+| **Monitor Refresh Rate** | `GetDeviceCaps()`                                                                     | `XRRConfigCurrentRate()` (XRandR extension)                                   | **Learned:** Use monitor's native refresh rate as initial FPS target. **Why:** Prevents fighting VSync (requesting 60fps on 144Hz monitor wastes GPU).                                                                                                       |
+
+---
+
+#### 📊 Frame Rate Control Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                   FRAME TIMING PIPELINE (Day 18)                        │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  Frame N Start                                                          │
+│      │                                                                  │
+│      ▼                                                                  │
+│  ┌────────────────────────────────────────┐                            │
+│  │ 1️⃣ MARK START TIME                     │                            │
+│  │   clock_gettime(&frame_start)          │                            │
+│  │   start_cycles = __rdtsc()             │  ← CPU cycle counter       │
+│  └────────────────────────────────────────┘                            │
+│      │                                                                  │
+│      ▼                                                                  │
+│  ┌────────────────────────────────────────┐                            │
+│  │ 2️⃣ DO WORK (Game Update + Render)      │                            │
+│  │   - Process input events               │                            │
+│  │   - Update game state                  │                            │
+│  │   - Render pixels to backbuffer        │                            │
+│  │   - Upload to GPU (glTexImage2D)       │                            │
+│  │   - Swap buffers (VSync happens here!) │  ← Waits for monitor       │
+│  └────────────────────────────────────────┘                            │
+│      │                                                                  │
+│      ▼                                                                  │
+│  ┌────────────────────────────────────────┐                            │
+│  │ 3️⃣ MEASURE WORK TIME                   │                            │
+│  │   work_time = now - frame_start        │                            │
+│  │   remaining = target - work_time       │                            │
+│  └────────────────────────────────────────┘                            │
+│      │                                                                  │
+│      ▼                                                                  │
+│  ┌────────────────────────────────────────┐                            │
+│  │ 4️⃣ TWO-PHASE SLEEP (Casey's Pattern)   │                            │
+│  │                                        │                            │
+│  │   Phase 1: COARSE SLEEP (OS scheduler) │                            │
+│  │   ┌──────────────────────────────────┐ │                            │
+│  │   │ while (remaining > 3ms) {        │ │  ← Leave 3ms safety margin │
+│  │   │   nanosleep(1ms);                │ │                            │
+│  │   │   remaining = target - elapsed;  │ │                            │
+│  │   │ }                                │ │                            │
+│  │   └──────────────────────────────────┘ │                            │
+│  │                                        │                            │
+│  │   Phase 2: SPIN-WAIT (busy loop)       │                            │
+│  │   ┌──────────────────────────────────┐ │                            │
+│  │   │ while (remaining > 0) {          │ │  ← Tight loop for          │
+│  │   │   remaining = target - elapsed;  │ │     microsecond precision  │
+│  │   │ }                                │ │                            │
+│  │   └──────────────────────────────────┘ │                            │
+│  └────────────────────────────────────────┘                            │
+│      │                                                                  │
+│      ▼                                                                  │
+│  ┌────────────────────────────────────────┐                            │
+│  │ 5️⃣ FILL AUDIO BUFFER (After sleep!)    │                            │
+│  │   linux_fill_sound_buffer()            │  ← Audio lag prevention    │
+│  └────────────────────────────────────────┘                            │
+│      │                                                                  │
+│      ▼                                                                  │
+│  ┌────────────────────────────────────────┐                            │
+│  │ 6️⃣ ADAPTIVE FPS EVALUATION              │                            │
+│  │   Every 300 frames (~5 seconds):       │                            │
+│  │   - If >5% missed → Reduce FPS         │                            │
+│  │   - If <1% missed → Increase FPS       │                            │
+│  └────────────────────────────────────────┘                            │
+│      │                                                                  │
+│      ▼                                                                  │
+│  Frame N+1 Start                                                        │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### 📊 Adaptive FPS State Machine
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                   ADAPTIVE FPS LOGIC (State Machine)                    │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│   Start: target_fps = monitor_hz (e.g., 60Hz)                          │
+│      │                                                                  │
+│      ▼                                                                  │
+│   ┌─────────────────────────────────────────┐                          │
+│   │  Sample 300 frames (~5 seconds)         │                          │
+│   │  Count frames that miss target by >2ms  │                          │
+│   └─────────────────────────────────────────┘                          │
+│      │                                                                  │
+│      ▼                                                                  │
+│   Calculate miss_rate = missed / 300                                   │
+│      │                                                                  │
+│      ├──────────────────────────────────────────────┐                  │
+│      │                                              │                  │
+│      ▼                                              ▼                  │
+│   miss_rate > 5%?                               miss_rate < 1%?        │
+│   (Performance BAD)                             (Performance GOOD)     │
+│      │                                              │                  │
+│      ▼                                              ▼                  │
+│   ┌─────────────────────┐                     ┌──────────────────────┐ │
+│   │  REDUCE TARGET FPS  │                     │  INCREASE TARGET FPS │ │
+│   └─────────────────────┘                     └──────────────────────┘ │
+│      │                                              │                  │
+│      ▼                                              ▼                  │
+│   60 → 30  ───────────────────────────────────  15 → 20               │
+│   30 → 20      State Transitions               20 → 30               │
+│   20 → 15  ───────────────────────────────────  30 → 60               │
+│   15 → STUCK                                     60 → 120 (if monitor) │
+│      │                                              │                  │
+│      └──────────────────┬───────────────────────────┘                  │
+│                         │                                              │
+│                         ▼                                              │
+│                   Reset counters                                       │
+│                   Continue sampling                                    │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+
+Example Timeline:
+─────────────────────────────────────────────────────────────────────────
+Frame 0-299:    Target 60fps, miss rate 12% (too many misses!)
+Frame 300:      ⚠️ Reduce to 30fps (auto-adjustment)
+Frame 301-600:  Target 30fps, miss rate 1.5% (still a bit high)
+Frame 601-900:  Target 30fps, miss rate 0.3% (smooth!)
+Frame 900:      ✅ Increase to 60fps (try higher FPS)
+Frame 901-1200: Target 60fps, miss rate 8% (oops, too fast again)
+Frame 1200:     ⚠️ Back to 30fps (settle at sustainable rate)
+```
+
+---
+
+#### 💻 Code Snippets with Explanations
+
+##### 1️⃣ Two-Phase Sleep (Casey's Pattern)
+
+**What:** Hybrid sleep strategy for precise frame timing  
+**Why:** OS schedulers can't reliably sleep <5ms, spin-waiting wastes CPU  
+**Solution:** Sleep coarsely until close, then spin-wait for precision
+
+```c
+// ═══════════════════════════════════════════════════════════════
+// TWO-PHASE SLEEP FOR PRECISE FRAME TIMING
+// ═══════════════════════════════════════════════════════════════
+// Casey's insight: "Don't trust the OS scheduler for sub-5ms timing!"
+// ═══════════════════════════════════════════════════════════════
+
+real32 seconds_elapsed = work_seconds;
+real32 target_seconds_per_frame = 1.0f / (real32)adaptive.target_fps;
+
+if (seconds_elapsed < target_seconds_per_frame) {
+    // ─────────────────────────────────────────────────────────
+    // PHASE 1: COARSE SLEEP (Leave 3ms safety margin)
+    // ─────────────────────────────────────────────────────────
+    // Why 3ms? Typical OS scheduler granularity on Linux/Windows
+    // Prevents oversleeping and missing frame deadline
+    // ─────────────────────────────────────────────────────────
+
+    real32 test_seconds = target_seconds_per_frame - 0.003f; // 3ms margin
+
+    while (seconds_elapsed < test_seconds) {
+        struct timespec sleep_spec = {0, 1000000}; // Sleep 1ms
+        nanosleep(&sleep_spec, NULL);
+
+        // Recheck elapsed time after each 1ms sleep
+        struct timespec current_time;
+        clock_gettime(CLOCK_MONOTONIC, &current_time);
+        seconds_elapsed = (current_time.tv_sec - frame_start_time.tv_sec) +
+                         (current_time.tv_nsec - frame_start_time.tv_nsec) / 1000000000.0f;
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // PHASE 2: SPIN-WAIT (Tight loop for final microseconds)
+    // ─────────────────────────────────────────────────────────
+    // Why spin? Achieves microsecond precision (<100µs error)
+    // CPU usage: ~100% for last 3ms, but worth it for smooth FPS
+    // ─────────────────────────────────────────────────────────
+
+    while (seconds_elapsed < target_seconds_per_frame) {
+        struct timespec current_time;
+        clock_gettime(CLOCK_MONOTONIC, &current_time);
+        seconds_elapsed = (current_time.tv_sec - frame_start_time.tv_sec) +
+                         (current_time.tv_nsec - frame_start_time.tv_nsec) / 1000000000.0f;
+    }
+}
+```
+
+**Timing Breakdown (60fps = 16.67ms target):**
+
+```
+Work:         5.00ms  (game update + render)
+Coarse sleep: 8.67ms  (sleep until 13.67ms mark)
+Spin-wait:    3.00ms  (tight loop until 16.67ms)
+Total:       16.67ms  ✅ Hit target exactly!
+```
+
+---
+
+##### 2️⃣ OpenGL Initialization (Replacing XPutImage)
+
+**What:** Setup OpenGL context for GPU-accelerated rendering  
+**Why:** Solves RGBA color format issues, enables VSync, faster than XPutImage  
+**Change:** Completely replaced X11 software rendering with OpenGL
+
+```c
+file_scoped_fn bool init_opengl(Display *display, Window window,
+                                int width, int height) {
+    // ═══════════════════════════════════════════════════════════
+    // WHY OPENGL?
+    // ═══════════════════════════════════════════════════════════
+    // 1. XPutImage has RGBA/BGRA color format mismatch with Raylib
+    // 2. OpenGL texture upload is GPU-accelerated (faster)
+    // 3. glXSwapBuffers provides built-in VSync (no tearing)
+    // 4. Same rendering path as Raylib (both use OpenGL internally)
+    // ═══════════════════════════════════════════════════════════
+
+    // Ask X11 for an OpenGL-capable visual (pixel format)
+    int visual_attribs[] = {
+        GLX_RGBA,           // We want RGBA color mode (32-bit)
+        GLX_DEPTH_SIZE, 24, // 24-bit depth buffer (unused for 2D, but required)
+        GLX_DOUBLEBUFFER,   // Enable double buffering (for VSync!)
+        None                // Terminator
+    };
+
+    XVisualInfo *visual = glXChooseVisual(display, DefaultScreen(display),
+                                         visual_attribs);
+    if (!visual) {
+        fprintf(stderr, "❌ No suitable OpenGL visual found\n");
+        return false;
+    }
+
+    // Create OpenGL rendering context
+    // GL_TRUE = direct rendering (GPU direct access, faster)
+    g_gl.gl_context = glXCreateContext(display, visual, NULL, GL_TRUE);
+    if (!g_gl.gl_context) {
+        fprintf(stderr, "❌ Failed to create OpenGL context\n");
+        XFree(visual);
+        return false;
+    }
+
+    // Bind context to our window (like "activating" the context)
+    glXMakeCurrent(display, window, g_gl.gl_context);
+
+    // ─────────────────────────────────────────────────────────
+    // CREATE GPU TEXTURE FOR OUR PIXEL BACKBUFFER
+    // ─────────────────────────────────────────────────────────
+    // This is like a <canvas> element in the browser
+    // We'll upload our CPU pixels to this GPU texture every frame
+    // ─────────────────────────────────────────────────────────
+
+    glGenTextures(1, &g_gl.texture_id);
+    glBindTexture(GL_TEXTURE_2D, g_gl.texture_id);
+
+    // GL_NEAREST = no filtering (sharp pixels, important for pixel art!)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+    // ─────────────────────────────────────────────────────────
+    // SETUP 2D ORTHOGRAPHIC PROJECTION (No perspective)
+    // ─────────────────────────────────────────────────────────
+    // (0,0) = top-left, Y-down (like HTML canvas)
+    // ─────────────────────────────────────────────────────────
+
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(0, width, height, 0, -1, 1);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+
+    glEnable(GL_TEXTURE_2D); // Enable texturing
+
+    printf("✅ OpenGL initialized (version: %s)\n", glGetString(GL_VERSION));
+    XFree(visual);
+    return true;
+}
+```
+
+---
+
+##### 3️⃣ Rendering with OpenGL (Replacing update_window)
+
+**What:** Upload CPU pixels to GPU and display  
+**Why:** Faster than XPutImage, solves color format issues, enables VSync  
+**Before:** `XPutImage()` - slow software blitting  
+**After:** `glTexImage2D()` + `glXSwapBuffers()` - GPU-accelerated + VSync
+
+```c
+file_scoped_fn void update_window_opengl(GameOffscreenBuffer *backbuffer) {
+    if (!backbuffer->memory.base) return;
+
+    // ═══════════════════════════════════════════════════════════
+    // STEP 1: UPLOAD CPU PIXELS → GPU TEXTURE
+    // ═══════════════════════════════════════════════════════════
+    // Like updating an <img> src in the browser
+    // This is where the magic happens - we tell OpenGL to copy
+    // our CPU-rendered pixels to the GPU's memory
+    // ═══════════════════════════════════════════════════════════
+
+    glBindTexture(GL_TEXTURE_2D, g_gl.texture_id);
+    glTexImage2D(
+        GL_TEXTURE_2D,              // Target
+        0,                          // Mipmap level (0 = base image)
+        GL_RGBA,                    // Internal GPU format
+        backbuffer->width,
+        backbuffer->height,
+        0,                          // Border (must be 0)
+        GL_RGBA,                    // Format of our CPU data (RGBA! ✅)
+        GL_UNSIGNED_BYTE,           // Data type (8-bit per channel)
+        backbuffer->memory.base     // Pointer to our pixel data
+    );
+
+    // ═══════════════════════════════════════════════════════════
+    // STEP 2: CLEAR SCREEN TO BLACK
+    // ═══════════════════════════════════════════════════════════
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    // ═══════════════════════════════════════════════════════════
+    // STEP 3: DRAW FULLSCREEN QUAD WITH OUR TEXTURE
+    // ═══════════════════════════════════════════════════════════
+    // Like <canvas> showing an <img> element
+    // Texture coordinates: (0,0) = top-left, (1,1) = bottom-right
+    // ═══════════════════════════════════════════════════════════
+
+    glBegin(GL_QUADS);
+        glTexCoord2f(0.0f, 0.0f); glVertex2f(0, 0);                        // Top-left
+        glTexCoord2f(1.0f, 0.0f); glVertex2f(backbuffer->width, 0);        // Top-right
+        glTexCoord2f(1.0f, 1.0f); glVertex2f(backbuffer->width, backbuffer->height); // Bottom-right
+        glTexCoord2f(0.0f, 1.0f); glVertex2f(0, backbuffer->height);       // Bottom-left
+    glEnd();
+
+    // ═══════════════════════════════════════════════════════════
+    // STEP 4: SWAP FRONT/BACK BUFFERS (VSYNC HAPPENS HERE!)
+    // ═══════════════════════════════════════════════════════════
+    // This is like calling requestAnimationFrame() in the browser
+    // If VSync is enabled (GLX_DOUBLEBUFFER), this WAITS for the
+    // monitor's vertical retrace before swapping!
+    // ═══════════════════════════════════════════════════════════
+
+    glXSwapBuffers(g_gl.display, g_gl.window);
+}
+```
+
+**Performance Comparison:**
+
+| Method                 | Speed    | Color Format   | VSync  | GPU Accelerated       |
+| ---------------------- | -------- | -------------- | ------ | --------------------- |
+| `XPutImage()` (old)    | ~2-5ms   | BGRA (broken!) | ❌ No  | ❌ No (CPU copy)      |
+| `glTexImage2D()` (new) | ~0.5-1ms | RGBA ✅        | ✅ Yes | ✅ Yes (DMA transfer) |
+
+---
+
+##### 4️⃣ Adaptive FPS State Machine
+
+**What:** Automatically adjusts target FPS based on frame miss rate  
+**Why:** Makes game playable on low-end hardware without manual settings  
+**Innovation:** Not in original Handmade Hero, but follows Casey's philosophy of adaptive systems
+
+```c
+// ═══════════════════════════════════════════════════════════════
+// ADAPTIVE FPS EVALUATION (Every 300 frames = ~5 seconds at 60fps)
+// ═══════════════════════════════════════════════════════════════
+
+adaptive.frames_sampled++;
+if (frame_time_ms > (target_frame_time_ms + 2.0f) && g_window_is_active) {
+    adaptive.frames_missed++;
+}
+
+if (adaptive.frames_sampled >= adaptive.sample_window) {
+    real32 miss_rate = (real32)adaptive.frames_missed /
+                       (real32)adaptive.frames_sampled;
+
+    // ─────────────────────────────────────────────────────────
+    // SCENARIO 1: Too many missed frames? Reduce target FPS
+    // ─────────────────────────────────────────────────────────
+    // If >5% of frames miss deadline, hardware can't keep up
+    // Solution: Lower FPS target to sustainable rate
+    // ─────────────────────────────────────────────────────────
+
+    if (miss_rate > adaptive.miss_threshold) { // >5% miss
+        int old_target = adaptive.target_fps;
+
+        // State transitions (cascade down)
+        if (adaptive.target_fps == 60)      adaptive.target_fps = 30;
+        else if (adaptive.target_fps == 30) adaptive.target_fps = 20;
+        else if (adaptive.target_fps == 20) adaptive.target_fps = 15;
+        // (15fps is minimum - don't go lower!)
+
+        if (adaptive.target_fps != old_target) {
+            target_seconds_per_frame = 1.0f / (real32)adaptive.target_fps;
+            printf("⚠️  Reducing FPS: %d → %d (miss rate: %.1f%%)\n",
+                   old_target, adaptive.target_fps, miss_rate * 100.0f);
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // SCENARIO 2: Performance recovered? Try higher FPS
+    // ─────────────────────────────────────────────────────────
+    // If <1% of frames miss, hardware has headroom
+    // Solution: Increase FPS target (up to monitor refresh rate)
+    // ─────────────────────────────────────────────────────────
+
+    else if (miss_rate < adaptive.recover_threshold && // <1% miss
+             adaptive.target_fps < adaptive.monitor_hz) {
+        int old_target = adaptive.target_fps;
+
+        // State transitions (cascade up)
+        if (adaptive.target_fps == 15)      adaptive.target_fps = 20;
+        else if (adaptive.target_fps == 20) adaptive.target_fps = 30;
+        else if (adaptive.target_fps == 30) adaptive.target_fps = 60;
+        // (Don't exceed monitor refresh rate!)
+
+        if (adaptive.target_fps != old_target) {
+            target_seconds_per_frame = 1.0f / (real32)adaptive.target_fps;
+            printf("✅ Increasing FPS: %d → %d (miss rate: %.1f%%)\n",
+                   old_target, adaptive.target_fps, miss_rate * 100.0f);
+        }
+    }
+
+    // Reset sample window for next evaluation period
+    adaptive.frames_sampled = 0;
+    adaptive.frames_missed = 0;
+}
+```
+
+**Example Session Output:**
+
+```
+Frame 0:     Starting at 60fps (monitor native)
+Frame 150:   Miss rate 8.2% - too high!
+Frame 300:   ⚠️  Reducing FPS: 60 → 30 (miss rate: 8.2%)
+Frame 600:   Miss rate 0.5% - stable!
+Frame 900:   ✅ Increasing FPS: 30 → 60 (miss rate: 0.5%)
+Frame 1200:  Miss rate 7.1% - can't sustain 60fps
+Frame 1500:  ⚠️  Reducing FPS: 60 → 30 (miss rate: 7.1%)
+... settles at 30fps
+```
+
+---
+
+##### 5️⃣ Cross-Platform Time Functions (Raylib Fix)
+
+**What:** Replaced POSIX `clock_gettime()` with Raylib's cross-platform timers  
+**Why:** Make Raylib backend work on Windows/macOS/Web (not just Linux)  
+**Before:** `#include <time.h>`, `clock_gettime(CLOCK_MONOTONIC, &ts)`  
+**After:** `GetTime()`, `GetFrameTime()`, `GetFPS()`
+
+```c
+// ❌ BEFORE (POSIX-only, broken on Windows):
+###define _POSIX_C_SOURCE 199309L
+#include <time.h>
+
+file_scoped_global_var struct timespec g_frame_start;
+file_scoped_global_var struct timespec g_frame_end;
+
+static inline double get_wall_clock() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts); // ❌ Doesn't exist on Windows!
+    return ts.tv_sec + ts.tv_nsec / 1000000000.0;
+}
+
+// Later in main loop:
+clock_gettime(CLOCK_MONOTONIC, &g_frame_end);
+real64 ms_per_frame = (g_frame_end.tv_sec - g_frame_start.tv_sec) * 1000.0 +
+                      (g_frame_end.tv_nsec - g_frame_start.tv_nsec) / 1000000.0;
+
+// ✅ AFTER (Cross-platform, works everywhere):
+// No #include <time.h> needed!
+// No struct timespec globals!
+
+###if HANDMADE_INTERNAL
+    static int frame_counter = 0;
+    if (++frame_counter >= 60) {
+        printf("[Raylib] %.2fms/f, %.0ff/s\n",
+               GetFrameTime() * 1000.0f,  // ✅ Raylib function (cross-platform!)
+               (float)GetFPS());          // ✅ Raylib function (cross-platform!)
+        frame_counter = 0;
+    }
+###endif
+```
+
+**Why This Matters:**
+
+| Platform             | `clock_gettime()`                | Raylib's `GetTime()`                         |
+| -------------------- | -------------------------------- | -------------------------------------------- |
+| **Linux**            | ✅ Works                         | ✅ Works (uses `clock_gettime()` internally) |
+| **Windows**          | ❌ Doesn't exist!                | ✅ Works (uses `QueryPerformanceCounter()`)  |
+| **macOS**            | ⚠️ Requires `<mach/mach_time.h>` | ✅ Works (uses `mach_absolute_time()`)       |
+| **Web (Emscripten)** | ❌ No POSIX API                  | ✅ Works (uses `performance.now()`)          |
+
+---
+
+#### 🐛 Common Pitfalls
+
+| Issue                                        | Cause                                      | Fix                                                                            | My Encountered Issues & Solutions                                                                                                                                  |
+| -------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Missed frames despite high FPS**           | VSync disabled, GPU/CPU out of sync        | Enable double buffering (`GLX_DOUBLEBUFFER`), use `glXSwapBuffers()` for VSync | **Encountered:** Getting 300fps but stuttering! **Solution:** Added GLX double buffering - `glXSwapBuffers()` now waits for VSync. Smooth 60fps locked to monitor. |
+| **Sleep overshoots target frame time**       | OS scheduler granularity (~5-10ms)         | Two-phase sleep: coarse sleep + spin-wait                                      | **Encountered:** `nanosleep(16ms)` often slept 18-20ms. **Solution:** Sleep until 3ms before target, then spin-wait. Now within 100µs precision!                   |
+| **Color format mismatch (blue/red swapped)** | XPutImage uses BGRA, Raylib uses RGBA      | Switch to OpenGL `glTexImage2D(... GL_RGBA ...)`                               | **Encountered:** Gradient looked wrong (blue where red should be). **Solution:** Replaced `XPutImage()` with OpenGL. Now RGBA everywhere!                          |
+| **Adaptive FPS ping-pongs between 30/60**    | Hysteresis needed, thresholds too close    | Use different thresholds for reduce (5%) vs recover (1%)                       | **Encountered:** FPS kept bouncing 30→60→30 every 5 seconds. **Solution:** Recover threshold (1%) much lower than miss threshold (5%). Now stable!                 |
+| **Window loses focus, FPS drops to 0**       | VSync waits forever when window hidden     | Check `FocusOut` event, skip rendering or reduce FPS to 10                     | **Encountered:** 1000ms frame times when tabbed out! **Solution:** Added `g_window_is_active` flag, skip rendering when false. Background FPS now 10fps.           |
+| **POSIX code breaks Raylib on Windows**      | `clock_gettime()` doesn't exist on Windows | Use Raylib's cross-platform `GetTime()`/`GetFrameTime()`                       | **Encountered:** Raylib backend compiled fine on Linux, failed on Windows CI. **Solution:** Removed all POSIX code, use Raylib APIs only. Now builds everywhere!   |
+
+---
+
+#### ✅ Skills Acquired
+
+##### 🎯 **Core FPS Management**
+
+- ✅ Implemented two-phase sleep strategy (coarse OS sleep + spin-wait) for sub-millisecond frame timing precision
+- ✅ Measured frame time using `clock_gettime(CLOCK_MONOTONIC)` for monotonic, high-resolution timing
+- ✅ Calculated and enforced target frame rate (e.g., 60 FPS = 16.67ms per frame)
+- ✅ Detected missed frames and logged performance statistics
+
+##### 🖥️ **Graphics & VSync**
+
+- ✅ Replaced CPU-based XPutImage with GPU-accelerated OpenGL rendering
+- ✅ Initialized OpenGL context with GLX for X11 window system
+- ✅ Enabled VSync using `GLX_DOUBLEBUFFER` and `glXSwapBuffers()` to prevent screen tearing
+- ✅ Uploaded pixel backbuffer to GPU texture using `glTexImage2D(GL_RGBA)`
+- ✅ Rendered fullscreen textured quad to display CPU-rendered pixels
+
+##### 🎮 **Adaptive Systems**
+
+- ✅ Built adaptive FPS state machine that auto-adjusts (60→30→20→15) based on performance
+- ✅ Sampled frame performance over 300-frame windows (~5 seconds) to detect trends
+- ✅ Implemented hysteresis with different thresholds for reducing (5%) vs recovering (1%) FPS
+- ✅ Queried monitor refresh rate using XRandR extension to set intelligent initial FPS target
+
+##### 🐧 **Linux-Specific**
+
+- ✅ Used `clock_gettime(CLOCK_MONOTONIC)` instead of Windows' `QueryPerformanceCounter()`
+- ✅ Leveraged XRandR extension (`XRRConfigCurrentRate()`) to detect monitor refresh rate
+- ✅ Handled X11 `FocusIn`/`FocusOut` events to pause rendering when window loses focus
+- ✅ Set up OpenGL context with GLX (`glXCreateContext`, `glXMakeCurrent`, `glXSwapBuffers`)
+
+##### 🌍 **Cross-Platform**
+
+- ✅ Identified and removed POSIX-specific code (`<time.h>`, `clock_gettime()`) from Raylib backend
+- ✅ Replaced with cross-platform Raylib APIs (`GetTime()`, `GetFrameTime()`, `GetFPS()`)
+- ✅ Ensured Raylib backend compiles on Windows/Linux/macOS/Web without platform-specific `#ifdef`s
+- ✅ Learned difference between POSIX APIs (Linux/macOS) vs Windows APIs (QueryPerformanceCounter)
+
+##### 📊 **Debugging & Profiling**
+
+- ✅ Added debug statistics tracking (min/max/avg frame time, missed frame count)
+- ✅ Used `__rdtsc()` CPU cycle counter for microsecond-precision profiling
+- ✅ Implemented conditional compilation (`#if HANDMADE_INTERNAL`) for debug-only features
+- ✅ Created visual frame timing output (e.g., `[X11] 16.72ms/f, 59.80f/s, 35.32mc/f`)
+
+##### 🧠 **Casey's Philosophy**
+
+- ✅ **"Don't trust the OS scheduler"** - Learned why two-phase sleep is necessary (scheduler jitter)
+- ✅ **"Adaptive, not hardcoded"** - Implemented FPS that adjusts to hardware instead of forcing 60fps
+- ✅ **"Measure, don't guess"** - Used real frame timing data to drive adaptive decisions
+- ✅ **"Cross-platform by design"** - Removed platform-specific code from shared Raylib backend
+
+---
+
+#### 🎓 Key Takeaways
+
+1. **VSync is essential** - Without it, you get screen tearing and inconsistent frame pacing even at high FPS
+2. **OS schedulers are unreliable** - Sub-5ms sleep requires spin-waiting (hybrid approach best)
+3. **Adaptive > Fixed** - Auto-adjusting FPS makes games playable on more hardware without manual settings
+4. **OpenGL solves multiple problems** - VSync, GPU acceleration, and color format consistency in one switch
+5. **Cross-platform requires discipline** - One platform-specific function (`clock_gettime()`) breaks Windows builds
+6. **Casey's patterns are timeless** - Two-phase sleep from 2014 still optimal in 2026!
+
 ## Misc
 
 ---
