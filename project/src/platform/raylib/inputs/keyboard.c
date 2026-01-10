@@ -1,7 +1,6 @@
 #include "../../../game.h"
 #include "../../_common/input.h"
 #include "../audio.h"
-#include <linux/input-event-codes.h>
 #include <raylib.h>
 #include <stdio.h>
 
