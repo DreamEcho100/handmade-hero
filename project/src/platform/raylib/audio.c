@@ -5,9 +5,9 @@
 
 #include "../../game.h"
 
-#ifndef M_double_PI
-#define M_double_PI (2.f * M_PI)
-#endif // M_double_PI
+#ifndef M_PI_DOUBLED
+#define M_PI_DOUBLED (2.f * M_PI)
+#endif // M_PI_DOUBLED
 
 // ═══════════════════════════════════════════════════════════════
 // 🔊 AUDIO STATE (Day 7-9)
@@ -108,7 +108,7 @@ void raylib_init_audio(GameSoundOutput *sound_output) {
   // ═══════════════════════════════════════════════════════════
   // Step 2: Set audio parameters (Day 7-9)
   // ═══════════════════════════════════════════════════════════
-  sound_output->samples_per_second = 48000;
+  sound_output->samples_per_second = 24000;
   sound_output->bytes_per_sample = sizeof(int16_t) * 2; // 16-bit stereo
 
   // Day 8: Sound generation parameters

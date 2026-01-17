@@ -6,10 +6,10 @@
 #include <string.h>
 
 uint32_t safe_truncate_uint64(long value) {
-  Assert(value >= 0); // Negative = error!
+  ASSERT(value >= 0); // Negative = error!
 
   // TODO: Defines for maximum values UInt32Max
-  Assert(value <= 0xFFFFFFFF); // Too large for uint32
+  ASSERT(value <= 0xFFFFFFFF); // Too large for uint32
 
   uint32_t result = (uint32_t)value;
   return (result);

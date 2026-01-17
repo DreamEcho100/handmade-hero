@@ -66,7 +66,7 @@ if [ "$HANDMADE_SANITIZE_WAVE_1_MEMORY" = "1" ]; then
 fi
 
 # Source files
-SRC="src/main.c src/platform/_common/input.c src/platform/_common/backbuffer.c src/platform/_common/memory.c src/platform/_common/debug-file-io.c src/game.c"
+SRC="src/main.c src/platform/_common/backbuffer.c src/platform/_common/debug.c src/platform/_common/input.c src/platform/_common/memory.c src/platform/_common/debug-file-io.c src/game.c"
 
 # Backend-specific flags
 if [ "$BACKEND" = "x11" ]; then

@@ -1,4 +1,3 @@
-
 #ifndef X11_AUDIO_H
 #define X11_AUDIO_H
 
@@ -11,140 +10,85 @@
 // ═══════════════════════════════════════════════════════════════
 // 🔊 ALSA AUDIO DYNAMIC LOADING (Casey's DirectSound Pattern)
 // ═══════════════════════════════════════════════════════════════
-//
-// Casey dynamically loads dsound.dll using LoadLibrary/GetProcAddress.
-// We do the same with dlopen/dlsym for libasound.so.
-//
-// WHY DYNAMIC LOADING?
-// 1. Program doesn't crash if ALSA isn't installed
-// 2. We can gracefully fall back to no audio
-// 3. No compile-time dependency on -lasound
-// 4. Exactly mirrors Casey's Win32 approach
-//
-// ═══════════════════════════════════════════════════════════════
 
-// ───────────────────────────────────────────────────────────────
-// ALSA Type Definitions (from <alsa/asoundlib.h>)
-// ───────────────────────────────────────────────────────────────
-// We define these ourselves so we don't need the ALSA headers!
-// This is how Casey avoids needing DirectSound headers.
-
+// ALSA Type Definitions
 typedef struct _snd_pcm snd_pcm_t;
 typedef struct _snd_pcm_hw_params snd_pcm_hw_params_t;
-typedef long
-    snd_pcm_sframes_t; // Signed frame count (can be negative for errors)
+typedef long snd_pcm_sframes_t;
+typedef unsigned long snd_pcm_uframes_t;
 
-// ALSA format enum (we only need S16_LE = signed 16-bit little-endian)
 typedef enum {
-  LINUX_SND_PCM_FORMAT_S16_LE = 2 // Signed 16-bit Little Endian
+  LINUX_SND_PCM_FORMAT_S16_LE = 2
 } linux_snd_pcm_format_t;
 
-// ALSA access enum (we only need interleaved = L-R-L-R)
 typedef enum {
-  LINUX_SND_PCM_ACCESS_RW_INTERLEAVED = 3 //
+  LINUX_SND_PCM_ACCESS_RW_INTERLEAVED = 3
 } linux_snd_pcm_access_t;
 
-// ALSA stream direction (playback = output)
 typedef enum {
-  LINUX_SND_PCM_STREAM_PLAYBACK = 0 //
+  LINUX_SND_PCM_STREAM_PLAYBACK = 0
 } linux_snd_pcm_stream_t;
 
-// ───────────────────────────────────────────────────────────────
-// ALSA Function Signatures (Casey's macro pattern)
-// ───────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+// ALSA Function Signatures
+// ═══════════════════════════════════════════════════════════════
 
 #define SND_PCM_NONBLOCK 0x00000001
-// snd_pcm_open - Opens a PCM device
-#define ALSA_SND_PCM_OPEN(name)                                                \
+
+#define ALSA_SND_PCM_OPEN(name) \
   int name(snd_pcm_t **pcm, const char *device, int stream, int mode)
 typedef ALSA_SND_PCM_OPEN(alsa_snd_pcm_open);
 
-// snd_pcm_set_params - Sets all parameters in one call
-#define ALSA_SND_PCM_SET_PARAMS(name)                                          \
-  int name(snd_pcm_t *pcm, int format, int access, unsigned int channels,      \
+#define ALSA_SND_PCM_SET_PARAMS(name) \
+  int name(snd_pcm_t *pcm, int format, int access, unsigned int channels, \
            unsigned int rate, int soft_resample, unsigned int latency)
 typedef ALSA_SND_PCM_SET_PARAMS(alsa_snd_pcm_set_params);
 
-// snd_pcm_writei - Write interleaved samples
-#define ALSA_SND_PCM_WRITEI(name)                                              \
-  long name(snd_pcm_t *pcm, const void *backbuffer, unsigned long frames)
+#define ALSA_SND_PCM_WRITEI(name) \
+  long name(snd_pcm_t *pcm, const void *buffer, unsigned long frames)
 typedef ALSA_SND_PCM_WRITEI(alsa_snd_pcm_writei);
 
-// snd_pcm_prepare - Prepare PCM for use
 #define ALSA_SND_PCM_PREPARE(name) int name(snd_pcm_t *pcm)
 typedef ALSA_SND_PCM_PREPARE(alsa_snd_pcm_prepare);
 
-// snd_pcm_close - Close PCM device
 #define ALSA_SND_PCM_CLOSE(name) int name(snd_pcm_t *pcm)
 typedef ALSA_SND_PCM_CLOSE(alsa_snd_pcm_close);
 
-// snd_strerror - Get error string
 #define ALSA_SND_STRERROR(name) const char *name(int errnum)
 typedef ALSA_SND_STRERROR(alsa_snd_strerror);
 
-// snd_pcm_avail - Get available frames in backbuffer
 #define ALSA_SND_PCM_AVAIL(name) long name(snd_pcm_t *pcm)
 typedef ALSA_SND_PCM_AVAIL(alsa_snd_pcm_avail);
 
-// snd_pcm_recover - Recover from errors (underrun, etc.)
 #define ALSA_SND_PCM_RECOVER(name) int name(snd_pcm_t *pcm, int err, int silent)
 typedef ALSA_SND_PCM_RECOVER(alsa_snd_pcm_recover);
 
-#define ALSA_SND_PCM_DELAY(name)                                               \
+#define ALSA_SND_PCM_DELAY(name) \
   int name(snd_pcm_t *pcm, snd_pcm_sframes_t *delayp)
 typedef ALSA_SND_PCM_DELAY(alsa_snd_pcm_delay);
 
-// ───────────────────────────────────────────────────────────────
-// Stub Implementations (used when ALSA not available)
-// ───────────────────────────────────────────────────────────────
+#define ALSA_SND_PCM_GET_PARAMS(name) \
+  int name(snd_pcm_t *pcm, snd_pcm_uframes_t *buffer_size, \
+           snd_pcm_uframes_t *period_size)
+typedef ALSA_SND_PCM_GET_PARAMS(alsa_snd_pcm_get_params);
 
+#define ALSA_SND_PCM_START(name) int name(snd_pcm_t *pcm)
+typedef ALSA_SND_PCM_START(alsa_snd_pcm_start);
+
+// Stub declarations
 ALSA_SND_PCM_OPEN(AlsaSndPcmOpenStub);
-
 ALSA_SND_PCM_SET_PARAMS(AlsaSndPcmSetParamsStub);
-
 ALSA_SND_PCM_WRITEI(AlsaSndPcmWriteiStub);
-
 ALSA_SND_PCM_PREPARE(AlsaSndPcmPrepareStub);
-
 ALSA_SND_PCM_CLOSE(AlsaSndPcmCloseStub);
-
 ALSA_SND_STRERROR(AlsaSndStrerrorStub);
-
 ALSA_SND_PCM_AVAIL(AlsaSndPcmAvailStub);
-
 ALSA_SND_PCM_RECOVER(AlsaSndPcmRecoverStub);
-
-// Stub implementation (used when ALSA not loaded)
 ALSA_SND_PCM_DELAY(AlsaSndPcmDelayStub);
+ALSA_SND_PCM_GET_PARAMS(AlsaSndPcmGetParamsStub);
+ALSA_SND_PCM_START(AlsaSndPcmStartStub);
 
-/*
- * The keyword 'extern' is used here to declare a variable or function that is
- * defined elsewhere, typically in a corresponding .c (or .cpp) file. This tells
- * the compiler that the actual storage and initialization of the
- * variable/function is not in this header, but will be provided at link time.
- *
- * Why not use 'static'?
- * - 'static' gives the variable/function internal linkage, meaning it is only
- * visible within the file where it is defined. If you use 'static' in a header,
- * each source file including the header gets its own private copy, which is
- * usually not what you want for shared variables/functions.
- *
- * How does the definition work in both .c and .h files?
- * - In the header (.h), you use 'extern' to declare the existence of the
- * variable/function.
- * - In one source (.c) file, you provide the actual definition (without
- * 'extern'). Example:
- *     // In audio.h
- *     extern int audioVolume;
- *
- *     // In audio.c
- *     int audioVolume = 100;
- *
- * This way, all files including audio.h know about 'audioVolume', but only
- * audio.c allocates storage.
- *
- * 'extern' works in both C and C++ for this purpose.
- */
+// Global function pointers
 extern alsa_snd_pcm_open *SndPcmOpen_;
 extern alsa_snd_pcm_set_params *SndPcmSetParams_;
 extern alsa_snd_pcm_writei *SndPcmWritei_;
@@ -153,10 +97,11 @@ extern alsa_snd_pcm_close *SndPcmClose_;
 extern alsa_snd_strerror *SndStrerror_;
 extern alsa_snd_pcm_avail *SndPcmAvail_;
 extern alsa_snd_pcm_recover *SndPcmRecover_;
-// Global function pointer (initially points to stub)
 extern alsa_snd_pcm_delay *SndPcmDelay_;
+extern alsa_snd_pcm_get_params *SndPcmGetParams_;
+extern alsa_snd_pcm_start *SndPcmStart_;
 
-// Redefine names for clean API (Casey's pattern)
+// Clean API names
 #define SndPcmOpen SndPcmOpen_
 #define SndPcmSetParams SndPcmSetParams_
 #define SndPcmWritei SndPcmWritei_
@@ -165,76 +110,94 @@ extern alsa_snd_pcm_delay *SndPcmDelay_;
 #define SndStrerror SndStrerror_
 #define SndPcmAvail SndPcmAvail_
 #define SndPcmRecover SndPcmRecover_
-// Clean API name (Casey's pattern)
 #define SndPcmDelay SndPcmDelay_
+#define SndPcmGetParams SndPcmGetParams_
+#define SndPcmStart SndPcmStart_
 
-// ───────────────────────────────────────────────────────────────
-// Sound Output State
-// ───────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+// 🔊 LINUX SOUND OUTPUT STATE
+// ═══════════════════════════════════════════════════════════════
+
 typedef struct {
-  snd_pcm_t *handle;          // ALSA PCM handle
-  void *alsa_library;         // dlopen handle (for cleanup if needed)
-
-  uint32_t buffer_size;       // Secondary backbuffer size in bytes
-
-  // Day 8: Audio sample backbuffer (Casey's secondary backbuffer equivalent)
+  snd_pcm_t *handle;
+  void *alsa_library;
+  
+  uint32_t buffer_size;
+  
   PlatformMemoryBlock sample_buffer;
   uint32_t sample_buffer_size;
-  // int half_wave_period;
-
-  // DAY 19: Latency now calculated from frame rate
-  int32_t latency_sample_count;  // Samples of latency (= frames * samples_per_frame)
-  int32_t latency_microseconds;   // ALSA wants microseconds, so we store both
-
+  
+  int32_t latency_sample_count;
+  int32_t latency_microseconds;
 } LinuxSoundOutput;
 
 extern LinuxSoundOutput g_linux_sound_output;
 
+// ═══════════════════════════════════════════════════════════════
+// 📊 DAY 20: DEBUG AUDIO MARKER (FIXED VERSION)
+// ═══════════════════════════════════════════════════════════════
+
 #if HANDMADE_INTERNAL
-// ═══════════════════════════════════════════════════════════════
-// 📊 DAY 19: DEBUG AUDIO CURSOR TRACKING
-// ═══════════════════════════════════════════════════════════════
-// Casey's Day 19 addition: Track audio buffer state per frame
-//
-// Windows has PlayCursor/WriteCursor (byte positions in ring buffer)
-// Linux/ALSA has:
-// - snd_pcm_delay(): Frames until current sample is played
-// - snd_pcm_avail(): Frames available to write
-//
-// We'll store both to visualize audio buffer state
-// ═══════════════════════════════════════════════════════════════
 
 typedef struct {
-  snd_pcm_sframes_t delay_frames;  // How many frames queued for playback
-  snd_pcm_sframes_t avail_frames;  // How many frames we can write
+  // ══════════════════════════════════════════════════════════
+  // CAPTURED BEFORE AUDIO WRITE (Output State)
+  // ══════════════════════════════════════════════════════════
+  uint32_t output_play_cursor;      // Virtual play cursor (RSI - delay)
+  uint32_t output_write_cursor;     // Safe write boundary (RSI + safety)
+  uint32_t output_location;         // Where we started writing (RSI)
+  uint32_t output_sample_count;     // How many samples we wrote
+  
+  // ══════════════════════════════════════════════════════════
+  // PREDICTION
+  // ══════════════════════════════════════════════════════════
+  uint32_t expected_flip_play_cursor;  // Predicted play cursor at flip
+  
+  // ══════════════════════════════════════════════════════════
+  // CAPTURED AFTER SCREEN FLIP (Flip State)
+  // ══════════════════════════════════════════════════════════
+  uint32_t flip_play_cursor;        // Actual play cursor after flip
+  uint32_t flip_write_cursor;       // Actual write cursor after flip
 
-  // Derived values (for easier visualization):
-  int64_t play_cursor_sample;   // Virtual "play cursor" position
-  int64_t write_cursor_sample;  // Virtual "write cursor" position
+  // ══════════════════════════════════════════════════════════
+  // VALIDITY FLAG
+  // ══════════════════════════════════════════════════════════
+  bool is_valid;                    // True if this marker has data  
 } LinuxDebugAudioMarker;
 
 #define MAX_DEBUG_AUDIO_MARKERS 30
+
 extern LinuxDebugAudioMarker g_debug_audio_markers[MAX_DEBUG_AUDIO_MARKERS];
 extern int g_debug_marker_index;
 
-void linux_debug_sync_display(GameOffscreenBuffer *buffer,
-                                             GameSoundOutput *sound_output,
-                                             LinuxDebugAudioMarker *markers,
-                                             int marker_count);
+// Debug function declarations
+void linux_debug_capture_flip_state(GameSoundOutput *sound_output);
+
+void linux_debug_sync_display(
+    GameOffscreenBuffer *buffer,
+    GameSoundOutput *sound_output,
+    LinuxDebugAudioMarker *markers,
+    int marker_count,
+    int current_marker_index);
 
 #endif // HANDMADE_INTERNAL
 
 // ═══════════════════════════════════════════════════════════════
-// 🔊 Function Declarations
+// 🔊 PUBLIC FUNCTION DECLARATIONS
 // ═══════════════════════════════════════════════════════════════
 
 void linux_load_alsa(void);
-bool linux_init_sound(GameSoundOutput *sound_output, int32_t samples_per_second, int32_t buffer_size_bytes, int32_t game_update_hz);
 
-// Day 8: Fill backbuffer with square wave and write to ALSA
+bool linux_init_sound(
+    GameSoundOutput *sound_output,
+    int32_t samples_per_second,
+    int32_t buffer_size_bytes,
+    int32_t game_update_hz);
+
 void linux_fill_sound_buffer(GameSoundOutput *sound_output);
 
 void linux_debug_audio_latency(GameSoundOutput *sound_output);
+
 void linux_unload_alsa(GameSoundOutput *sound_output);
 
 #endif // X11_AUDIO_H

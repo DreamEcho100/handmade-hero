@@ -15,7 +15,9 @@
 
 // Convenience macros for common targets
 #define FPS_30  30
+#define FPS_45  45
 #define FPS_60  60
+#define FPS_90  90
 #define FPS_120 120
 #define FPS_144 144
 #define FPS_UNLIMITED 0  // No frame limiting (for benchmarking)
@@ -24,9 +26,9 @@
 #define M_PI 3.14159265358979323846
 #endif // M_PI
 
-#ifndef M_double_PI
-#define M_double_PI (2.f * M_PI)
-#endif // M_double_PI
+#ifndef M_PI_DOUBLED
+#define M_PI_DOUBLED (2.0f * M_PI)
+#endif // M_PI_DOUBLED
 
 #ifndef ArraySize
 #define ArraySize(Array) (sizeof(Array) / sizeof((Array)[0]))
@@ -45,12 +47,12 @@
     *(volatile int *)0 = 0;                                                    \
   }
 #endif
-#define Assert(expression)                                                     \
+#define ASSERT(expression)                                                     \
   if (!(expression)) {                                                         \
     DebugTrap();                                                               \
   }
 #else
-#define Assert(expression)
+#define ASSERT(expression)
 #endif
 
 #define KILOBYTES(value) ((value) * 1024LL)
@@ -61,12 +63,7 @@
 // ═══════════════════════════════════════════════════════════════
 // 🎯 FRAME RATE CONFIGURATION (Day 18)
 // ═══════════════════════════════════════════════════════════════
-
-// Note: not needed since we have an adaptive FPS system
-// #ifndef HANDMADE_TARGET_FPS
-//   #define HANDMADE_TARGET_FPS 60  // Default to 60 FPS
-// #endif
-
+// 
 // Convenience macros for common targets
 #define FPS_30  30
 #define FPS_60  60

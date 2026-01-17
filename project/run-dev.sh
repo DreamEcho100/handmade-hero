@@ -27,6 +27,6 @@ FLAGS="--backend=$BACKEND --HANDMADE_SANITIZE_WAVE_1_MEMORY=$HANDMADE_SANITIZE_W
 
 echo "Running with FLAGS: $FLAGS"
 
-mkdir -p build
+mkdir -p build out
 
 ./build.sh $FLAGS && ./build/game

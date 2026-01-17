@@ -1176,8 +1176,8 @@ inline void set_tone_frequency(int hz) {
 #define M_PI 3.14159265358979323846
 #endif
 
-#ifndef M_double_PI
-#define M_double_PI (2.0f * M_PI)
+#ifndef M_PI_DOUBLED
+#define M_PI_DOUBLED (2.0f * M_PI)
 #endif
 
 void linux_fill_sound_buffer(void) {
@@ -1216,11 +1216,11 @@ void linux_fill_sound_buffer(void) {
         //    This ADDS to t_sine, making it grow over time
         //    Result: sin(0), sin(0.0335), sin(0.067), ... → wave! 🔊
         // ═══════════════════════════════════════════════════════════
-        g_sound_output.t_sine += M_double_PI / (float)g_sound_output.wave_period;
+        g_sound_output.t_sine += M_PI_DOUBLED / (float)g_sound_output.wave_period;
 
         // Optional: Wrap to [0, 2π) range to prevent overflow
-        if (g_sound_output.t_sine >= M_double_PI) {
-            g_sound_output.t_sine -= M_double_PI;
+        if (g_sound_output.t_sine >= M_PI_DOUBLED) {
+            g_sound_output.t_sine -= M_PI_DOUBLED;
         }
 
         g_sound_output.running_sample_index++;
@@ -1334,11 +1334,11 @@ void raylib_audio_callback(void *buffer, unsigned int frames) {
         *sample_out++ = (sample_value * right_gain) / 200;  // Right
 
         // Increment phase accumulator
-        g_sound_output.t_sine += M_double_PI / (real32)g_sound_output.wave_period;
+        g_sound_output.t_sine += M_PI_DOUBLED / (real32)g_sound_output.wave_period;
 
         // Wrap to prevent overflow
-        if (g_sound_output.t_sine >= M_double_PI) {
-            g_sound_output.t_sine -= M_double_PI;
+        if (g_sound_output.t_sine >= M_PI_DOUBLED) {
+            g_sound_output.t_sine -= M_PI_DOUBLED;
         }
 
         g_sound_output.running_sample_index++;
@@ -1784,10 +1784,10 @@ void linux_fill_sound_buffer(void) {
         *sample_out++ = (sample_value * right_gain) / 200;  // Right channel
 
         // Increment phase
-        g_sound_output.t_sine += M_double_PI / g_sound_output.wave_period;
+        g_sound_output.t_sine += M_PI_DOUBLED / g_sound_output.wave_period;
 
-        if (g_sound_output.t_sine >= M_double_PI) {
-            g_sound_output.t_sine -= M_double_PI;
+        if (g_sound_output.t_sine >= M_PI_DOUBLED) {
+            g_sound_output.t_sine -= M_PI_DOUBLED;
         }
 
         g_sound_output.running_sample_index++;

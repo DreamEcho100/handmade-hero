@@ -166,9 +166,9 @@ int platform_main() {
   uint64_t transient_storage_size = GIGABYTES(1);
 
   // Allocate permanent storage (survives across levels)
-  PlatformMemoryBlock permanent_storage = platform_allocate_memory(
-      base_address, permanent_storage_size,
-      PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE | PLATFORM_MEMORY_ZEROED);
+  PlatformMemoryBlock permanent_storage =
+      platform_allocate_memory(base_address, permanent_storage_size,
+                               PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE);
 
   if (!permanent_storage.base) {
     fprintf(stderr, "❌ ERROR: Could not allocate permanent storage\n");
@@ -178,9 +178,9 @@ int platform_main() {
   // Allocate transient storage (cleared between levels)
   void *transient_base =
       (uint8_t *)permanent_storage.base + permanent_storage.size;
-  PlatformMemoryBlock transient_storage = platform_allocate_memory(
-      transient_base, transient_storage_size,
-      PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE | PLATFORM_MEMORY_ZEROED);
+  PlatformMemoryBlock transient_storage =
+      platform_allocate_memory(transient_base, transient_storage_size,
+                               PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE);
 
   if (!transient_storage.base) {
     fprintf(stderr, "❌ ERROR: Could not allocate transient storage\n");

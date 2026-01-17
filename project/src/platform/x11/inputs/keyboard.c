@@ -1,11 +1,9 @@
+#include "../../../game.h"
+#include "../../_common/input.h"
+#include "../audio.h"
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <stdio.h>
-// #include "../../../base.h"
-#include "../../../game.h"
-// #include "../../_common/backbuffer.h"
-#include "../../_common/input.h"
-#include "../audio.h"
 
 void handleEventKeyPress(XEvent *event, GameInput *new_game_input,
                          GameSoundOutput *sound_output) {

@@ -148,7 +148,7 @@ void game_update_and_render(GameMemory *memory, GameInput *input,
 
     DebugReadFileResult file = debug_platform_read_entire_file(Filename);
     if (file.contents.base) {
-      debug_platform_write_entire_file("test.out", file.size,
+      debug_platform_write_entire_file("out/test.out", file.size,
                                        file.contents.base);
       debug_platform_free_file_memory(&file.contents);
       printf("Wrote test.out\n");
@@ -168,7 +168,7 @@ void game_update_and_render(GameMemory *memory, GameInput *input,
   // Priority 1: Check for active joystick input (controllers 1-4)
   for (int i = 0; i < MAX_CONTROLLER_COUNT; i++) {
 
-    Assert((&input->controllers[i].terminator -
+    ASSERT((&input->controllers[i].terminator -
             &input->controllers[i].buttons[i]) ==
            (ArraySize(input->controllers[i].buttons)));
 
@@ -223,11 +223,3 @@ void game_update_and_render(GameMemory *memory, GameInput *input,
 
   testPixelAnimation(buffer, game_state);
 }
-
-// #ifdef PLATFORM_X11
-// // On X11, define colors in BGRA directly
-// #define GAME_RED 0x0000FFFF
-// #else
-// // On Raylib/other, use RGBA
-// #define GAME_RED 0xFF0000FF
-// #endif

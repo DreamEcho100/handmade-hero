@@ -1,4 +1,5 @@
 #include "memory.h"
+#include "../../base.h"
 #include <stdint.h>
 
 #if defined(_WIN32)
@@ -147,21 +148,23 @@ PlatformMemoryBlock platform_allocate_memory(void *base_hint, size_t size,
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // 🔍 OPTIMIZATION NOTE:
+  // 🔍 VERIFICATION NOTE:
   // ═══════════════════════════════════════════════════════════════
-  // On Linux, mmap() with MAP_ANONYMOUS already returns zero-initialized
-  // pages (guaranteed by POSIX). The OS uses copy-on-write zero pages,
-  // so we don't need to manually memset() here.
-  //
-  // Casey doesn't need this on Windows either because VirtualAlloc()
-  // with MEM_COMMIT also returns zero-initialized memory.
-  //
-  // However, we keep the flag for API compatibility and future platforms
-  // that might not guarantee zeroed memory.
+  // On Linux, mmap() with MAP_ANONYMOUS guarantees zero-initialized pages.
+  // In debug builds, we verify this assumption with spot checks.
   // ═══════════════════════════════════════════════════════════════
+#if HANDMADE_SLOW // HANDMADE_INTERNAL
   // if (flags & PLATFORM_MEMORY_ZEROED) {
-  //   memset((uint8_t *)reserved + page_size, 0, aligned_size);
+  // Quick spot check: verify a few random locations
+  uint8_t *base = (uint8_t *)reserved + page_size;
+  size_t offsets[] = {0, aligned_size / 4, aligned_size / 2,
+                      3 * aligned_size / 4, aligned_size - 1};
+
+  for (size_t i = 0; i < sizeof(offsets) / sizeof(offsets[0]); ++i) {
+    ASSERT(base[offsets[i]] == 0);
+  }
   // }
+#endif
   // ═══════════════════════════════════════════════════════════════
 
   return (PlatformMemoryBlock){.base = (uint8_t *)reserved + page_size,

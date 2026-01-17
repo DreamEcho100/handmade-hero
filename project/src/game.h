@@ -93,7 +93,11 @@ typedef struct {
   int tone_hz;         // Frequency of tone to generate
   int16_t tone_volume; // Volume of tone to generate
   int pan_position;    // -100 (left) to +100 (right)
-  int32_t game_update_hz; 
+  int32_t game_update_hz;
+  
+
+  // Day 20 safety margin
+  int32_t safety_sample_count;  // Samples of safety buffer (~1/3 frame)
 } GameSoundOutput;
 
 /**
