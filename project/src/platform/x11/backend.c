@@ -553,9 +553,13 @@ int platform_main() {
 
       if (loop_count <= 10 ||
           game_sound_output.running_sample_index != loop_last_rsi) {
-        printf("[LOOP #%d] RSI=%ld (changed by %ld)\n", loop_count,
-               (long)game_sound_output.running_sample_index,
-               (long)(game_sound_output.running_sample_index - loop_last_rsi));
+        // Only print first 10 frames for debugging
+        if (loop_count <= 10) {
+          printf(
+              "[LOOP #%d] RSI=%ld (changed by %ld)\n", loop_count,
+              (long)game_sound_output.running_sample_index,
+              (long)(game_sound_output.running_sample_index - loop_last_rsi));
+        }
         loop_last_rsi = game_sound_output.running_sample_index;
       }
     }
@@ -610,8 +614,7 @@ int platform_main() {
 
       // Only draw if we have valid data
       if (g_debug_audio_markers[draw_index].flip_play_cursor >= 0) {
-        linux_debug_sync_display(&game_buffer,
-                                 &game_sound_output,
+        linux_debug_sync_display(&game_buffer, &game_sound_output,
                                  g_debug_audio_markers, MAX_DEBUG_AUDIO_MARKERS,
                                  draw_index);
       }

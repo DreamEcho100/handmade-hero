@@ -286,7 +286,7 @@ bool linux_init_sound(GameSoundOutput *sound_output, int32_t samples_per_second,
   }
 
 #if HANDMADE_INTERNAL
-  for (int i = 0; i < 5; i++) {
+  for (int i = 0; i < MAX_DEBUG_AUDIO_MARKERS; i++) {
     g_debug_audio_markers[i].flip_play_cursor = -1;  // Invalid marker
     g_debug_audio_markers[i].flip_write_cursor = -1; // Invalid marker
   }
@@ -676,13 +676,24 @@ void linux_debug_sync_display(GameOffscreenBuffer *buffer,
     int flip_write_x = sample_to_screen_x(
         marker->flip_write_cursor, buffer_size_samples, buffer->width, pad_x);
 
+    // Skip if invalid coordinates
+    if (flip_play_x < 0 || flip_write_x < 0) {
+      continue;
+    }
+
     debug_draw_vertical_line(buffer, flip_play_x, tier1_top, tier1_bottom,
                              play_color);
     debug_draw_vertical_line(buffer, flip_write_x, tier1_top, tier1_bottom,
                              write_color);
 
-    // Draw play window (480 samples after play cursor, like Casey)
-    int play_window_samples = 480;
+    // // Draw play window (480 samples after play cursor, like Casey)
+    // int play_window_samples = 480;
+    // Use ALSA's actual period size instead of hardcoded 480
+    snd_pcm_uframes_t period_size = 0;
+    snd_pcm_uframes_t buffer_size = 0;
+    SndPcmGetParams(g_linux_sound_output.handle, &buffer_size, &period_size);
+
+    int play_window_samples = (int)period_size; // Use actual ALSA period!
     int play_window_x =
         sample_to_screen_x(marker->flip_play_cursor + play_window_samples,
                            buffer_size_samples, buffer->width, pad_x);
@@ -807,11 +818,11 @@ void linux_debug_capture_flip_state(GameSoundOutput *sound_output) {
     if (++comparison_count <= 10 || comparison_count % 300 == 0) {
       int64_t prediction_error =
           flip_play_cursor - marker->expected_flip_play_cursor;
-      printf("[FLIP #%d] Expected=%u, Actual=%ld, Error=%ld samples (%.2fms)\n",
-             comparison_count, marker->expected_flip_play_cursor,
-             flip_play_cursor, prediction_error,
-             (float)prediction_error / sound_output->samples_per_second *
-                 1000.0f);
+      printf(
+          "[FLIP #%d] Expected=%ld, Actual=%ld, Error=%ld samples (%.2fms)\n",
+          comparison_count, marker->expected_flip_play_cursor, flip_play_cursor,
+          prediction_error,
+          (float)prediction_error / sound_output->samples_per_second * 1000.0f);
     }
   } else {
     // Query failed, mark as invalid
@@ -1173,16 +1184,17 @@ void linux_fill_sound_buffer(GameSoundOutput *sound_output) {
   static int frame_count = 0;
   frame_count++;
   if (frame_count % (sound_output->game_update_hz * 5) == 0) {
-    printf("[AUDIO] RSI=%u, wrote=%ld/%ld, play=%ld, delay=%ld, avail=%ld\n",
+    printf("[AUDIO] RSI=%ld, wrote=%ld/%ld, play=%ld, delay=%ld, avail=%ld\n",
            sound_output->running_sample_index, (long)frames_written,
            samples_to_write, play_cursor, (long)delay_frames,
            (long)avail_frames);
   }
-#endif
 
-  // Add this in linux_fill_sound_buffer after writing:
-  printf("[RSI] Before=%ld, After=%u, Wrote=%ld\n", running_sample_index,
-         sound_output->running_sample_index, frames_written);
+  if (FRAME_LOG_EVERY_ONE_SECONDS_CHECK) {
+    printf("[RSI] Before=%ld, After=%ld, Wrote=%ld\n", running_sample_index,
+           sound_output->running_sample_index, frames_written);
+  }
+#endif
 }
 
 // Debug helper: Print current audio latency (Day 10)

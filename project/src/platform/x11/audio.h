@@ -143,26 +143,21 @@ typedef struct {
   // ══════════════════════════════════════════════════════════
   // CAPTURED BEFORE AUDIO WRITE (Output State)
   // ══════════════════════════════════════════════════════════
-  uint32_t output_play_cursor;      // Virtual play cursor (RSI - delay)
-  uint32_t output_write_cursor;     // Safe write boundary (RSI + safety)
-  uint32_t output_location;         // Where we started writing (RSI)
-  uint32_t output_sample_count;     // How many samples we wrote
+  int64_t output_play_cursor;      // Virtual play cursor (RSI - delay)
+  int64_t output_write_cursor;     // Safe write boundary (RSI + safety)
+  int64_t output_location;         // Where we started writing (RSI)
+  int64_t output_sample_count;     // How many samples we wrote
   
   // ══════════════════════════════════════════════════════════
   // PREDICTION
   // ══════════════════════════════════════════════════════════
-  uint32_t expected_flip_play_cursor;  // Predicted play cursor at flip
+  int64_t expected_flip_play_cursor;  // Predicted play cursor at flip
   
   // ══════════════════════════════════════════════════════════
   // CAPTURED AFTER SCREEN FLIP (Flip State)
   // ══════════════════════════════════════════════════════════
-  uint32_t flip_play_cursor;        // Actual play cursor after flip
-  uint32_t flip_write_cursor;       // Actual write cursor after flip
-
-  // ══════════════════════════════════════════════════════════
-  // VALIDITY FLAG
-  // ══════════════════════════════════════════════════════════
-  bool is_valid;                    // True if this marker has data  
+  int64_t flip_play_cursor;        // Actual play cursor after flip
+  int64_t flip_write_cursor;       // Actual write cursor after flip
 } LinuxDebugAudioMarker;
 
 #define MAX_DEBUG_AUDIO_MARKERS 30

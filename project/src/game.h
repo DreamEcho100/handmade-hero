@@ -82,7 +82,7 @@ typedef struct {
   // ═════════════════════════════════════════════════════════
   // AUDIO GENERATION STATE (Platform Layer Uses)
   // ═════════════════════════════════════════════════════════
-  uint32_t running_sample_index; // Sample counter (for waveform)
+  int64_t running_sample_index; // Sample counter (for waveform)
   int wave_period;               // Samples per wave (cached calculation)
   real32 t_sine;                 // Phase accumulator (0 to 2π)
   int latency_sample_count;      // Target latency in samples
