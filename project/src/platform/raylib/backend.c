@@ -269,7 +269,7 @@ int platform_main() {
     // ─────────────────────────────────────────────────────────
 #if HANDMADE_INTERNAL
     static int debug_counter = 0;
-    if (++debug_counter % 300 == 5) {
+    if (FRAME_LOG_EVERY_FIVE_SECONDS_CHECK) {
       debug_joystick_state(old_game_input);
     }
 #endif
@@ -326,7 +326,7 @@ int platform_main() {
     // ─────────────────────────────────────────────────────────
 #if HANDMADE_INTERNAL
     static int frame_counter = 0;
-    if (++frame_counter >= 60) {
+    if (FRAME_LOG_EVERY_FIVE_SECONDS_CHECK) {
       printf("[Raylib] %.2fms/f, %.0ff/s\n",
              GetFrameTime() * 1000.0f, // ✅ Raylib's cross-platform timer
              (float)GetFPS());         // ✅ Raylib's FPS counter

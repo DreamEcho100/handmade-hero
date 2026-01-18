@@ -259,6 +259,7 @@ GameControllerInput *GetController(GameInput *Input,
 extern int KEYBOARD_CONTROLLER_INDEX;
 // extern GameState g_game_state;
 extern bool is_game_running;
+extern bool g_game_is_paused;
 
 typedef struct {
   int offset_x;

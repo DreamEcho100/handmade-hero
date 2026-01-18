@@ -16,6 +16,7 @@
 // GameOffscreenBuffer g_backbuffer = {0};
 // GameSoundOutput sound_output = {0};
 bool is_game_running = true;
+bool g_game_is_paused = false;
 
 // CONFIGURATION (could be const)
 int KEYBOARD_CONTROLLER_INDEX = 0;

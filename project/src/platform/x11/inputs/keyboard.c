@@ -86,6 +86,12 @@ void handleEventKeyPress(XEvent *event, GameInput *new_game_input,
     linux_debug_audio_latency(sound_output);
     break;
   }
+  // ← ADD THIS: Pause key (P key)
+  case (XK_p):
+  case (XK_P): {
+    g_game_is_paused = !g_game_is_paused;
+    printf("🎮 Game %s\n", g_game_is_paused ? "PAUSED" : "RESUMED");
+  }
   }
 }
 

@@ -74,6 +74,8 @@ typedef ALSA_SND_PCM_GET_PARAMS(alsa_snd_pcm_get_params);
 
 #define ALSA_SND_PCM_START(name) int name(snd_pcm_t *pcm)
 typedef ALSA_SND_PCM_START(alsa_snd_pcm_start);
+#define ALSA_SND_PCM_DROP(name) int name(snd_pcm_t *pcm)
+typedef ALSA_SND_PCM_DROP(alsa_snd_pcm_drop);
 
 // Stub declarations
 ALSA_SND_PCM_OPEN(AlsaSndPcmOpenStub);
@@ -87,6 +89,7 @@ ALSA_SND_PCM_RECOVER(AlsaSndPcmRecoverStub);
 ALSA_SND_PCM_DELAY(AlsaSndPcmDelayStub);
 ALSA_SND_PCM_GET_PARAMS(AlsaSndPcmGetParamsStub);
 ALSA_SND_PCM_START(AlsaSndPcmStartStub);
+ALSA_SND_PCM_DROP(AlsaSndPcmDropStub);
 
 // Global function pointers
 extern alsa_snd_pcm_open *SndPcmOpen_;
@@ -100,6 +103,7 @@ extern alsa_snd_pcm_recover *SndPcmRecover_;
 extern alsa_snd_pcm_delay *SndPcmDelay_;
 extern alsa_snd_pcm_get_params *SndPcmGetParams_;
 extern alsa_snd_pcm_start *SndPcmStart_;
+extern alsa_snd_pcm_drop *SndPcmDrop_;
 
 // Clean API names
 #define SndPcmOpen SndPcmOpen_
@@ -113,6 +117,7 @@ extern alsa_snd_pcm_start *SndPcmStart_;
 #define SndPcmDelay SndPcmDelay_
 #define SndPcmGetParams SndPcmGetParams_
 #define SndPcmStart SndPcmStart_
+#define SndPcmDrop SndPcmDrop_
 
 // ═══════════════════════════════════════════════════════════════
 // 🔊 LINUX SOUND OUTPUT STATE
@@ -129,45 +134,80 @@ typedef struct {
   
   int32_t latency_sample_count;
   int32_t latency_microseconds;
+
+  // Day 20DirectSound has SafetyBytes:
+  // - Accounts for frame timing variance
+  // - Prevents audio underruns
+  // - Calculated as: (SamplesPerSecond * BytesPerSample / GameUpdateHz) / 3
+
+  // ALSA needs safety_sample_count:
+  // - Same purpose
+  // - Same calculation (but in samples, not bytes)
+  // - Formula: (samples_per_second / game_update_hz) / 3
+  int32_t safety_sample_count;  // Safety margin (1/3 frame worth of samples)
 } LinuxSoundOutput;
 
 extern LinuxSoundOutput g_linux_sound_output;
 
 // ═══════════════════════════════════════════════════════════════
-// 📊 DAY 20: DEBUG AUDIO MARKER (FIXED VERSION)
+// 📊 DAY 20: DEBUG AUDIO MARKER (X11/ALSA VERSION)
+// ═══════════════════════════════════════════════════════════════
+// This structure records audio timing data for visualization
+// Equivalent to win32_debug_time_marker but adapted for ALSA
 // ═══════════════════════════════════════════════════════════════
 
 #if HANDMADE_INTERNAL
 
 typedef struct {
-  // ══════════════════════════════════════════════════════════
-  // CAPTURED BEFORE AUDIO WRITE (Output State)
-  // ══════════════════════════════════════════════════════════
-  int64_t output_play_cursor;      // Virtual play cursor (RSI - delay)
-  int64_t output_write_cursor;     // Safe write boundary (RSI + safety)
-  int64_t output_location;         // Where we started writing (RSI)
-  int64_t output_sample_count;     // How many samples we wrote
-  
-  // ══════════════════════════════════════════════════════════
-  // PREDICTION
-  // ══════════════════════════════════════════════════════════
-  int64_t expected_flip_play_cursor;  // Predicted play cursor at flip
-  
-  // ══════════════════════════════════════════════════════════
-  // CAPTURED AFTER SCREEN FLIP (Flip State)
-  // ══════════════════════════════════════════════════════════
-  int64_t flip_play_cursor;        // Actual play cursor after flip
-  int64_t flip_write_cursor;       // Actual write cursor after flip
+    // ══════════════════════════════════════════════════════════
+    // CAPTURED BEFORE AUDIO WRITE (Output State)
+    // ══════════════════════════════════════════════════════════
+    // These are "virtual cursors" calculated from ALSA state
+    // Unlike DirectSound, ALSA doesn't give us cursors directly
+    // We calculate them from running_sample_index and delay
+    
+    int64_t output_play_cursor;      // Virtual play cursor (RSI - delay)
+    int64_t output_write_cursor;     // This is now the ACTUAL write cursor
+    int64_t output_location;         // Where we started writing (RSI)
+    int64_t output_sample_count;     // How many samples we wrote
+    
+    // ══════════════════════════════════════════════════════════
+    // PREDICTION
+    // ══════════════════════════════════════════════════════════
+    // Where we PREDICT the play cursor will be at frame flip
+    int64_t expected_flip_play_cursor;
+    
+    // ══════════════════════════════════════════════════════════
+    // CAPTURED AFTER SCREEN FLIP (Flip State)
+    // ══════════════════════════════════════════════════════════
+    // Actual cursor positions after frame display
+    int64_t flip_play_cursor;        // Actual play cursor after flip
+    int64_t flip_write_cursor;       // Actual write cursor after flip
+    
+    // ══════════════════════════════════════════════════════════
+    // ALSA-SPECIFIC DATA (for debugging ALSA behavior)
+    // ══════════════════════════════════════════════════════════
+    snd_pcm_sframes_t output_delay_frames;  // ALSA delay at output time
+    snd_pcm_sframes_t output_avail_frames;  // ALSA avail at output time
+    snd_pcm_sframes_t flip_delay_frames;    // ALSA delay at flip time
+    snd_pcm_sframes_t flip_avail_frames;    // ALSA avail at flip time
+                                            // 
+    // ✅ NEW: Store safe write cursor for reference
+    int64_t output_safe_write_cursor;  // ← ADD THIS
+    
 } LinuxDebugAudioMarker;
 
-#define MAX_DEBUG_AUDIO_MARKERS 30
+// How many frames of history to keep (0.5 seconds at 30 FPS)
+#define MAX_DEBUG_AUDIO_MARKERS 15
 
+// Global debug marker array
 extern LinuxDebugAudioMarker g_debug_audio_markers[MAX_DEBUG_AUDIO_MARKERS];
 extern int g_debug_marker_index;
 
-// Debug function declarations
+// Capture flip state (called after frame display)
 void linux_debug_capture_flip_state(GameSoundOutput *sound_output);
 
+// Draw debug visualization (called every frame)
 void linux_debug_sync_display(
     GameOffscreenBuffer *buffer,
     GameSoundOutput *sound_output,
@@ -190,9 +230,8 @@ bool linux_init_sound(
     int32_t game_update_hz);
 
 void linux_fill_sound_buffer(GameSoundOutput *sound_output);
-
 void linux_debug_audio_latency(GameSoundOutput *sound_output);
-
 void linux_unload_alsa(GameSoundOutput *sound_output);
+void linux_audio_fps_change_handling(GameSoundOutput *sound_output);
 
 #endif // X11_AUDIO_H

@@ -1,33 +1,98 @@
-// ═══════════════════════════════════════════════════════════════
-// 🔊 HANDMADE HERO - AUDIO SYSTEM (Days 7-19)
-// ═══════════════════════════════════════════════════════════════
-//
-// WHAT THIS FILE DOES:
-// - Dynamically loads ALSA (Linux audio library)
-// - Initializes audio output at 48kHz, 16-bit stereo
-// - Generates sine wave test audio
-// - Handles audio buffer synchronization (Day 19)
-// - Provides debug visualization of audio timing
-//
-// WHY WE USE ALSA:
-// - Linux equivalent of DirectSound (Windows audio API)
-// - We load it dynamically (dlopen) so the game doesn't crash if audio fails
-// - ALSA manages the ring buffer for us (simpler than DirectSound)
-//
-// KEY CONCEPTS:
-// - Sample Rate: 48000 samples/second (like FPS but for audio)
-// - Ring Buffer: Circular buffer that wraps around when full
-// - Latency: Delay between writing audio and hearing it (~66ms)
-// - Frame-Aligned: Audio writes sync with game logic (30 FPS)
-//
-// CASEY'S PATTERN:
-// - Audio runs at FIXED rate (30 FPS game logic)
-// - Rendering can adapt (30-120 FPS)
-// - Humans tolerate visual stutter, but hate audio clicks!
-// ═══════════════════════════════════════════════════════════════
+/**
+ * @file audio.c
+ * @brief ALSA Audio System for Linux (Handmade Hero Days 7-20)
+ *
+ * This file implements the Linux audio subsystem using ALSA (Advanced Linux
+ * Sound Architecture), following Casey Muratori's Handmade Hero architecture.
+ *
+ * @section overview Overview
+ *
+ * The audio system provides low-latency sound output synchronized with game
+ * logic. Unlike DirectSound on Windows which exposes play/write cursors
+ * directly, ALSA uses a different model where we query delay and available
+ * space, then calculate virtual cursor positions.
+ *
+ * @section architecture Architecture
+ *
+ * **Dynamic Loading (Day 7 pattern):**
+ * ALSA is loaded at runtime via dlopen/dlsym, mirroring Casey's LoadLibrary
+ * pattern for DirectSound. This allows graceful degradation if audio fails.
+ *
+ * **Ring Buffer Model:**
+ * - ALSA manages a 2-second circular buffer (96000 samples at 48kHz)
+ * - We write ahead of playback to prevent underruns
+ * - Virtual cursors are calculated from running_sample_index and delay
+ *
+ * **Frame-Aligned Audio (Day 19-20):**
+ * - Audio writes sync with game update rate (not render rate)
+ * - Target: maintain 2 frames + safety margin buffered ahead
+ * - Safety margin = 1/3 frame (~533 samples at 30Hz)
+ *
+ * @section cursors Virtual Cursor Calculation
+ *
+ * DirectSound provides GetCurrentPosition() returning play/write cursors.
+ * ALSA provides snd_pcm_delay() and snd_pcm_avail() instead:
+ *
+ * ```
+ * play_cursor  = running_sample_index - delay_frames
+ * write_cursor = running_sample_index
+ * avail_frames = how much space available for writing
+ * ```
+ *
+ * @section debug Debug Visualization (Day 20)
+ *
+ * The debug system records 15 frames of audio timing data:
+ * - Output cursors: captured before each audio write
+ * - Flip cursors: captured after frame display
+ * - Allows comparing predicted vs actual playback position
+ *
+ * @section differences Key Differences from DirectSound
+ *
+ * | DirectSound                  | ALSA                              |
+ * |------------------------------|-----------------------------------|
+ * | Lock/Unlock buffer regions   | Single snd_pcm_writei() call      |
+ * | GetCurrentPosition()         | Calculate from delay + avail      |
+ * | Explicit ring buffer math    | ALSA handles wrap-around          |
+ * | DSBCAPS_GETCURRENTPOSITION2  | snd_pcm_delay() for latency       |
+ *
+ * @section gotchas GOTCHAS & LESSONS LEARNED
+ *
+ * **1. Buffer Reallocation Bug:**
+ * DO NOT call platform_allocate_memory() twice for the same buffer!
+ * The second call replaces the pointer, causing the original large buffer
+ * to be lost. If the second allocation is smaller, you get buffer overflow.
+ * FIX: Allocate once with correct size, use memset() to zero portions.
+ *
+ * **2. Debug Marker Index Management:**
+ * g_debug_marker_index points to the NEXT slot to fill, not the current one.
+ * When displaying, use (g_debug_marker_index - 1 + MAX) % MAX to get the
+ * most recently filled marker. Casey does this in Win32DebugSyncDisplay.
+ *
+ * **3. Audio Rate vs Render Rate:**
+ * Audio should run at a FIXED rate (e.g., 30Hz) independent of rendering FPS.
+ * When adaptive FPS changes, DON'T reset the audio buffer - just adjust
+ * samples_per_frame calculation. Resetting causes audio clicks.
+ *
+ * **4. Power Save Mode Variance:**
+ * Laptops in power save can have 25-80ms frame times instead of 16ms.
+ * Solution: Buffer 100ms+ of audio to absorb jitter, not just 2 frames.
+ *
+ * **5. ALSA Blocking vs Non-Blocking:**
+ * DON'T use SND_PCM_NONBLOCK - it causes random -EAGAIN errors.
+ * Use blocking mode (0) for reliable writes.
+ *
+ * **6. Linux mmap() Already Zeros Memory:**
+ * MAP_ANONYMOUS guarantees zero-initialized pages on Linux.
+ * PLATFORM_MEMORY_ZEROED flag is mainly for documentation/Windows compat.
+ *
+ * @see _ignore/handmade_hero/.../handmade_hero_day_020_source/ for reference
+ * @see https://www.alsa-project.org/alsa-doc/alsa-lib/pcm.html
+ */
+
 #include "audio.h"
 #include "../../base.h"
 #include "../../game.h"
+// #include <cstddef>
 #include <dlfcn.h> // For dlopen, dlsym, dlclose (Casey's LoadLibrary equivalent)
 #include <errno.h>
 #include <math.h>
@@ -40,6 +105,14 @@
 
 #if HANDMADE_INTERNAL
 #include "../_common/debug.h"
+#endif
+
+#if HANDMADE_INTERNAL
+// ═══════════════════════════════════════════════════════════════
+// 📊 DEBUG AUDIO MARKER TRACKING
+// ═══════════════════════════════════════════════════════════════
+LinuxDebugAudioMarker g_debug_audio_markers[MAX_DEBUG_AUDIO_MARKERS] = {0};
+int g_debug_marker_index = 0;
 #endif
 
 // #if HANDMADE_INTERNAL
@@ -138,6 +211,11 @@ ALSA_SND_PCM_START(AlsaSndPcmStartStub) {
   return -1;
 }
 
+ALSA_SND_PCM_DROP(AlsaSndPcmDropStub) {
+  (void)pcm;
+  return -1;
+}
+
 // Global function pointers (start as stubs, replaced if ALSA loads
 // successfully)
 
@@ -152,6 +230,7 @@ alsa_snd_pcm_recover *SndPcmRecover_ = AlsaSndPcmRecoverStub;
 alsa_snd_pcm_delay *SndPcmDelay_ = AlsaSndPcmDelayStub;
 alsa_snd_pcm_get_params *SndPcmGetParams_ = AlsaSndPcmGetParamsStub;
 alsa_snd_pcm_start *SndPcmStart_ = AlsaSndPcmStartStub;
+alsa_snd_pcm_drop *SndPcmDrop_ = AlsaSndPcmDropStub;
 
 // Global audio state (ALSA handle, buffers, latency params)
 LinuxSoundOutput g_linux_sound_output = {0};
@@ -208,6 +287,7 @@ void linux_load_alsa(void) {
   LOAD_ALSA_FN(SndPcmDelay_, "snd_pcm_delay", alsa_snd_pcm_delay);
   LOAD_ALSA_FN(SndPcmGetParams_, "snd_pcm_get_params", alsa_snd_pcm_get_params);
   LOAD_ALSA_FN(SndPcmStart_, "snd_pcm_start", alsa_snd_pcm_start);
+  LOAD_ALSA_FN(SndPcmDrop_, "snd_pcm_drop", alsa_snd_pcm_drop);
 #undef LOAD_ALSA_FN
 
   // Sanity check: did we get the core functions?
@@ -275,22 +355,34 @@ bool linux_init_sound(GameSoundOutput *sound_output, int32_t samples_per_second,
   }
 
   sound_output->game_update_hz = game_update_hz;
-
   int32_t samples_per_frame = samples_per_second / sound_output->game_update_hz;
 
   // ═══════════════════════════════════════════════════════════════
-  // 🛡️ DAY 20: SAFETY MARGIN
+  // 🛡️ DAY 20: SAFETY MARGIN CALCULATION
   // ═══════════════════════════════════════════════════════════════
-  // This is the buffer we stay ahead of the play cursor by
-  // Casey uses 1/3 of a frame as safety margin
-  sound_output->safety_sample_count = samples_per_frame / 3;
+  // Calculate safety margin (1/3 of a frame worth of samples)
+  // This accounts for frame timing variance
+  //
+  // Example at 30 FPS, 48000 Hz:
+  // - samples_per_frame = 48000 / 30 = 1600 samples
+  // - safety_sample_count = 1600 / 3 = 533 samples
+  // - This gives us ~11ms of safety margin
+  //
+  // Why 1/3 frame?
+  // - Frame timing can vary by ±10% (30ms → 27-33ms)
+  // - 1/3 frame = 33% extra buffer
+  // - Covers variance with plenty of headroom
+  // ═══════════════════════════════════════════════════════════════
+
+  g_linux_sound_output.safety_sample_count = samples_per_frame / 3;
+  sound_output->safety_sample_count = g_linux_sound_output.safety_sample_count;
 
   printf("[AUDIO INIT] Safety margin: %d samples (%.1f ms)\n",
-         sound_output->safety_sample_count,
-         (float)sound_output->safety_sample_count / samples_per_second *
+         g_linux_sound_output.safety_sample_count,
+         (float)g_linux_sound_output.safety_sample_count / samples_per_second *
              1000.0f);
 
-  // ═══════════════════════════════════════════════════════════════
+  // ═════════════════════════════════════════════════════════════════
   // 🎵 BUFFER SIZE: Use 2 seconds like Casey's DirectSound
   // ═══════════════════════════════════════════════════════════════
   // DirectSound uses 2 seconds = 192KB at 48kHz stereo
@@ -407,15 +499,15 @@ bool linux_init_sound(GameSoundOutput *sound_output, int32_t samples_per_second,
   // ═══════════════════════════════════════════════════════════════
   // 📦 ALLOCATE SAMPLE BUFFER
   // ═══════════════════════════════════════════════════════════════
-  // This is our CPU-side buffer for generating audio before sending to ALSA
-  // Size matches ALSA's buffer size (not our original request!)
   g_linux_sound_output.sample_buffer_size =
       g_linux_sound_output.latency_sample_count;
   int sample_buffer_bytes =
       g_linux_sound_output.sample_buffer_size * sound_output->bytes_per_sample;
 
+  // ✅ Add PLATFORM_MEMORY_ZEROED here if you want it pre-zeroed
   g_linux_sound_output.sample_buffer = platform_allocate_memory(
-      NULL, sample_buffer_bytes, PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE);
+      NULL, sample_buffer_bytes,
+      PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE | PLATFORM_MEMORY_ZEROED);
 
   if (!g_linux_sound_output.sample_buffer.base) {
     fprintf(stderr, "❌ Sound: Cannot allocate sample buffer\n");
@@ -445,40 +537,33 @@ bool linux_init_sound(GameSoundOutput *sound_output, int32_t samples_per_second,
   printf("   Pan:        center (0)\n");
 
   // 🚀 PRE-FILL BUFFER TO START PLAYBACK
-  // Mirror Casey's DirectSound prefill: Fill 1/8 of actual buffer with silence
+  // Use a SMALLER prefill - just enough to start playback
   {
     printf("🔊 Sound: Pre-filling buffer...\n");
 
-    // Prepare the PCM device (like DirectSound buffer start)
     int prep_err = SndPcmPrepare(g_linux_sound_output.handle);
     if (prep_err < 0) {
       printf("⚠️  snd_pcm_prepare failed: %s (continuing anyway)\n",
              SndStrerror(prep_err));
     }
 
-    // Use actual buffer size for prefill (ALSA-specific: don't assume requested
-    // size)
-    int prefill_frames = g_linux_sound_output.latency_sample_count * 0.125;
+    // FIXED: Use 2 frames worth of samples, not 12.5% of buffer!
+    // At 60 FPS, 48kHz: 2 * 800 = 1600 samples
+    int32_t samples_per_frame_init = samples_per_second / game_update_hz;
+    int prefill_frames = samples_per_frame_init * 2;
+
     if (prefill_frames > (int)g_linux_sound_output.sample_buffer_size) {
       prefill_frames = (int)g_linux_sound_output.sample_buffer_size;
     }
 
-    // Generate silence (zeros) - Use allocated buffer
-    PlatformMemoryBlock samples_block = g_linux_sound_output.sample_buffer;
-
-    // Write silence to ALSA (blocking mode ensures it waits)
-    long written = SndPcmWritei(g_linux_sound_output.handle, samples_block.base,
-                                prefill_frames);
+    long written =
+        SndPcmWritei(g_linux_sound_output.handle,
+                     g_linux_sound_output.sample_buffer.base, prefill_frames);
 
     if (written > 0) {
       sound_output->running_sample_index = written;
       printf("✅ Sound: Pre-filled %ld frames of silence\n", written);
-      printf("   Buffer position: %ld / %d (%.1f%%)\n", written,
-             g_linux_sound_output.latency_sample_count,
-             (float)written / g_linux_sound_output.latency_sample_count *
-                 100.0f);
 
-      // Explicitly start playback (ALSA-specific: some devices need this)
       int start_err = SndPcmStart(g_linux_sound_output.handle);
       if (start_err < 0 && start_err != -EBADFD) {
         printf("⚠️  snd_pcm_start: %s (continuing anyway)\n",
@@ -487,10 +572,8 @@ bool linux_init_sound(GameSoundOutput *sound_output, int32_t samples_per_second,
         printf("✅ Sound: Playback started\n");
       }
     } else if (written < 0) {
-      // ALSA-specific: Recover from errors during prefill
       printf("⚠️  Pre-fill write failed: %s\n", SndStrerror((int)written));
       SndPcmRecover(g_linux_sound_output.handle, (int)written, 1);
-      printf("    Audio may not start immediately\n");
     }
   }
 
@@ -517,232 +600,205 @@ bool linux_init_sound(GameSoundOutput *sound_output, int32_t samples_per_second,
   return true;
 }
 
+void linux_audio_fps_change_handling(GameSoundOutput *sound_output) {
+  // ═══════════════════════════════════════════════════════════════
+  // IMPORTANT: Audio rate should NOT change with rendering FPS!
+  // ═══════════════════════════════════════════════════════════════
+  //
+  // Casey's architecture:
+  // - game_update_hz = GAME LOGIC rate (fixed, e.g., 30 Hz)
+  // - Rendering FPS = adaptive (30-120 Hz)
+  // - Audio syncs to game logic, NOT rendering
+  //
+  // So when rendering FPS changes, we do NOTHING to audio!
+  // The audio system continues at its fixed rate.
+  //
+  // If you DO want to change audio rate (rare), just update the
+  // parameters without resetting the buffer:
+  // ═══════════════════════════════════════════════════════════════
+
+  if (!sound_output->is_initialized) {
+    return;
+  }
+
+  // Recalculate derived values based on new game_update_hz
+  int32_t samples_per_frame =
+      sound_output->samples_per_second / sound_output->game_update_hz;
+
+  g_linux_sound_output.safety_sample_count = samples_per_frame / 3;
+  sound_output->safety_sample_count = g_linux_sound_output.safety_sample_count;
+
+#if HANDMADE_INTERNAL
+  printf("[AUDIO] Rate updated: %d Hz, samples/frame=%d, safety=%d\n",
+         sound_output->game_update_hz, samples_per_frame,
+         sound_output->safety_sample_count);
+#endif
+
+  // NOTE: We do NOT call SndPcmDrop/SndPcmPrepare!
+  // That would cause audio clicks. The buffer continues playing
+  // and we just adjust how much we write each frame.
+}
+
 // Check if ALSA latency measurement is available (not all versions have it)
 file_scoped_fn inline bool linux_audio_has_latency_measurement(void) {
   return SndPcmDelay_ != AlsaSndPcmDelayStub;
 }
+
 // ═══════════════════════════════════════════════════════════════
-// 🔊 DAY 20: FILL SOUND BUFFER (Complete Rewrite)
+// 🔊 DAY 20: FILL SOUND BUFFER (CORRECTED VERSION)
 // ═══════════════════════════════════════════════════════════════
 //
-// This function implements Casey's Day 20 audio timing algorithm.
+// This implements Casey's Day 20 audio timing algorithm for ALSA.
 //
-// KEY CONCEPTS:
-// 1. We calculate WHERE the play cursor will be at next frame flip
-// 2. We determine if we're in "low latency" or "high latency" mode
-// 3. We write audio to stay ahead of the play cursor
-// 4. We capture debug markers for visualization
-//
-// ALSA TRANSLATION:
-// - DirectSound PlayCursor → running_sample_index - delay
-// - DirectSound WriteCursor → running_sample_index (our write position)
-// - DirectSound Lock/Unlock → snd_pcm_writei (ALSA handles internally)
+// KEY INSIGHT: We must write AT LEAST one frame's worth of audio
+// each game frame to keep up with playback!
 //
 // ═══════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════
+// 🔊 FIXED AUDIO UPDATE RATE
+// ═══════════════════════════════════════════════════════════════
+// Audio runs at a FIXED rate, independent of rendering FPS.
+// This is how professional game engines work:
+// - Unreal, Unity, Source all decouple audio from rendering
+// - Casey's Day 20 architecture assumes fixed game update rate
+//
+// WHY 30 Hz?
+// - Matches Casey's GameUpdateHz (MonitorRefreshHz / 2)
+// - 48000 samples/sec ÷ 30 Hz = 1600 samples per audio frame
+// - Gives us ~33ms of audio per write (plenty of buffer)
+// ═══════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════
+// 🔊 FILL SOUND BUFFER (Simplified - matches Casey's Day 19 approach)
+// ═══════════════════════════════════════════════════════════════
+//
+// Casey's approach in Day 19 is simpler than Day 20's prediction:
+// - Query how much space is available (avail)
+// - Write enough to stay ahead of playback
+// - Don't overthink the wrap-around math
+//
+// ═══════════════════════════════════════════════════════════════
 void linux_fill_sound_buffer(GameSoundOutput *sound_output) {
   if (!sound_output->is_initialized || !g_linux_sound_output.handle) {
     return;
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // 🔍 STEP 1: QUERY ALSA STATE
-  // ═══════════════════════════════════════════════════════════════
-  //
-  // ALSA gives us:
-  // - delay: How many frames are queued for playback
-  // - avail: How many frames we can write
-  //
-  // From these, we calculate "virtual cursors" like DirectSound:
-  // - PlayCursor = running_sample_index - delay
-  // - WriteCursor = running_sample_index (where we'll write next)
-  //
+  // STEP 1: QUERY ALSA STATE
   // ═══════════════════════════════════════════════════════════════
 
   snd_pcm_sframes_t delay_frames = 0;
-  snd_pcm_sframes_t avail_frames = 0;
-
   int delay_err = SndPcmDelay(g_linux_sound_output.handle, &delay_frames);
   if (delay_err < 0) {
-    // If delay query fails, assume no delay (conservative)
+    SndPcmRecover(g_linux_sound_output.handle, delay_err, 1);
     delay_frames = 0;
   }
 
-  avail_frames = SndPcmAvail(g_linux_sound_output.handle);
+  snd_pcm_sframes_t avail_frames = SndPcmAvail(g_linux_sound_output.handle);
   if (avail_frames < 0) {
-    // Handle ALSA errors (underrun, etc.)
-    int recover_err =
-        SndPcmRecover(g_linux_sound_output.handle, (int)avail_frames, 1);
-    if (recover_err < 0) {
-      // Recovery failed, try to continue anyway
+    SndPcmRecover(g_linux_sound_output.handle, (int)avail_frames, 1);
+    avail_frames = SndPcmAvail(g_linux_sound_output.handle);
+    if (avail_frames < 0) {
       avail_frames = 0;
-    } else {
-      // Recovery succeeded, query again
-      avail_frames = SndPcmAvail(g_linux_sound_output.handle);
-      if (avail_frames < 0) {
-        avail_frames = 0;
-      }
     }
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // 🔢 STEP 2: CALCULATE VIRTUAL CURSORS
-  // ═══════════════════════════════════════════════════════════════
-  //
-  // These are the ALSA equivalents of DirectSound's cursors.
-  //
-  // IMPORTANT: These are absolute sample positions, not buffer offsets!
-  // They grow forever (well, until int64 overflow in ~6 million years).
-  //
+  // STEP 2: CALCULATE PARAMETERS
   // ═══════════════════════════════════════════════════════════════
 
+  int32_t samples_per_second = sound_output->samples_per_second;
+  int32_t samples_per_frame = samples_per_second / sound_output->game_update_hz;
+  int32_t buffer_size = g_linux_sound_output.latency_sample_count;
+
+  // Virtual cursors
   int64_t running_sample_index = sound_output->running_sample_index;
-
-  // PlayCursor: Where hardware is currently playing
-  // If delay is 1000 and we've written 5000 samples, play cursor is at 4000
   int64_t play_cursor = running_sample_index - delay_frames;
-
-  // WriteCursor: Where we'll write next (our running index)
+  if (play_cursor < 0) {
+    play_cursor = 0;
+  }
   int64_t write_cursor = running_sample_index;
 
   // ═══════════════════════════════════════════════════════════════
-  // 🎯 STEP 3: CALCULATE FRAME TIMING
+  // STEP 3: POWER-SAVE TOLERANT WRITE CALCULATION
   // ═══════════════════════════════════════════════════════════════
   //
-  // Casey's algorithm needs to know:
-  // - How many samples per game frame
-  // - Where play cursor will be at next frame flip
+  // In power save mode, frames can take 25-80ms instead of 16-22ms.
+  // We need a LARGER buffer to absorb this variance.
   //
+  // Strategy: Always maintain at least 100ms of audio buffered.
+  // This is ~4800 samples at 48kHz.
   // ═══════════════════════════════════════════════════════════════
 
-  int32_t samples_per_frame =
-      sound_output->samples_per_second / sound_output->game_update_hz;
+  // Minimum buffer: 100ms worth of audio (handles power save jitter)
+  int32_t min_buffer_samples = samples_per_second / 10; // 4800 samples = 100ms
 
-  // Expected play cursor position at next frame flip
-  // (current play position + one frame's worth of samples)
-  int64_t expected_frame_boundary = play_cursor + samples_per_frame;
+  // Maximum buffer: 200ms (don't go crazy)
+  int32_t max_buffer_samples = samples_per_second / 5; // 9600 samples = 200ms
 
-  // ═══════════════════════════════════════════════════════════════
-  // 🛡️ STEP 4: CALCULATE SAFE WRITE CURSOR
-  // ═══════════════════════════════════════════════════════════════
-  //
-  // Casey adds a "safety margin" to the write cursor to account for
-  // timing variance in the game loop.
-  //
-  // SafeWriteCursor = WriteCursor + SafetyBytes
-  //
-  // If SafeWriteCursor < ExpectedFrameBoundary, we're in "low latency"
-  // mode and can achieve perfect sync.
-  //
-  // ═══════════════════════════════════════════════════════════════
+  // How much is currently buffered?
+  int64_t buffered_samples = delay_frames;
 
-  int64_t safe_write_cursor = write_cursor + sound_output->safety_sample_count;
+  // Target: keep at least min_buffer_samples buffered
+  int64_t samples_to_write = 0;
 
-  // Determine if we're in low latency mode
-  // Low latency = we have time to write audio that will play at frame flip
-  bool audio_card_is_low_latency =
-      (safe_write_cursor < expected_frame_boundary);
-
-  // ═══════════════════════════════════════════════════════════════
-  // 🎯 STEP 5: CALCULATE TARGET CURSOR
-  // ═══════════════════════════════════════════════════════════════
-  //
-  // This is WHERE we want to write audio TO.
-  //
-  // LOW LATENCY MODE:
-  //   Target = ExpectedFrameBoundary + one more frame
-  //   (We write audio for the NEXT frame, achieving perfect sync)
-  //
-  // HIGH LATENCY MODE:
-  //   Target = WriteCursor + one frame + safety margin
-  //   (We can't achieve perfect sync, so just stay ahead)
-  //
-  // ═══════════════════════════════════════════════════════════════
-
-  int64_t target_cursor;
-
-  if (audio_card_is_low_latency) {
-    // Perfect sync possible!
-    // Write audio that will play exactly when next frame displays
-    target_cursor = expected_frame_boundary + samples_per_frame;
-
-#if HANDMADE_INTERNAL
-    static int low_latency_count = 0;
-    if (++low_latency_count <= 5) {
-      printf("🎯 LOW LATENCY MODE: target=%ld (frame boundary + 1 frame)\n",
-             target_cursor);
-    }
-#endif
+  if (buffered_samples < min_buffer_samples) {
+    // We're running low - write enough to get back to target
+    samples_to_write =
+        min_buffer_samples - buffered_samples + samples_per_frame;
+  } else if (buffered_samples < max_buffer_samples) {
+    // Normal operation - write one frame's worth
+    samples_to_write = samples_per_frame;
   } else {
-    // Can't achieve perfect sync, just stay ahead
-    target_cursor =
-        write_cursor + samples_per_frame + sound_output->safety_sample_count;
-
-#if HANDMADE_INTERNAL
-    static int high_latency_count = 0;
-    if (++high_latency_count <= 5) {
-      printf("⚠️  HIGH LATENCY MODE: target=%ld (write + frame + safety)\n",
-             target_cursor);
-    }
-#endif
+    // Buffer is full enough - write minimum to keep phase
+    samples_to_write = samples_per_frame / 2;
   }
-
-  // ═══════════════════════════════════════════════════════════════
-  // 🔢 STEP 6: CALCULATE SAMPLES TO WRITE
-  // ═══════════════════════════════════════════════════════════════
-  //
-  // SamplesToWrite = TargetCursor - WriteCursor
-  //
-  // But we can't write more than ALSA has room for!
-  //
-  // ═══════════════════════════════════════════════════════════════
-
-  int64_t samples_to_write = target_cursor - write_cursor;
 
   // Clamp to available space
   if (samples_to_write > avail_frames) {
     samples_to_write = avail_frames;
   }
 
-  // Clamp to our buffer size
+  // Clamp to our sample buffer size
   if (samples_to_write > (int64_t)g_linux_sound_output.sample_buffer_size) {
     samples_to_write = g_linux_sound_output.sample_buffer_size;
   }
 
-  // Don't write negative samples!
-  if (samples_to_write <= 0) {
+  // Calculate cursors for debug
+  int64_t expected_flip_play_cursor = play_cursor + samples_per_frame;
+  int64_t safe_write_cursor = write_cursor + samples_to_write;
+
+  // Nothing to write?
+  if (samples_to_write <= 0 || avail_frames <= 0) {
 #if HANDMADE_INTERNAL
-    static int skip_count = 0;
-    if (++skip_count <= 5) {
-      printf("⏭️  Skipping write: samples_to_write=%ld, avail=%ld\n",
-             samples_to_write, (long)avail_frames);
-    }
+    LinuxDebugAudioMarker *marker =
+        &g_debug_audio_markers[g_debug_marker_index];
+    marker->output_play_cursor = play_cursor % buffer_size;
+    marker->output_write_cursor = write_cursor % buffer_size;
+    marker->output_safe_write_cursor = safe_write_cursor % buffer_size;
+    marker->output_location = write_cursor % buffer_size;
+    marker->output_sample_count = 0;
+    marker->expected_flip_play_cursor = expected_flip_play_cursor % buffer_size;
+    marker->output_delay_frames = delay_frames;
+    marker->output_avail_frames = avail_frames;
 #endif
     return;
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // 🎵 STEP 8: GENERATE AUDIO SAMPLES
-  // ═══════════════════════════════════════════════════════════════
-  //
-  // This is where we actually create the audio waveform.
-  // Currently a simple sine wave for testing.
-  //
-  // In a real game, this would call GameGetSoundSamples().
-  //
+  // STEP 4: GENERATE AUDIO SAMPLES
   // ═══════════════════════════════════════════════════════════════
 
   int16_t *sample_out = (int16_t *)g_linux_sound_output.sample_buffer.base;
 
   real32 samples_per_cycle =
-      (real32)sound_output->samples_per_second / (real32)sound_output->tone_hz;
+      (real32)samples_per_second / (real32)sound_output->tone_hz;
   real32 phase_increment = M_PI_DOUBLED / samples_per_cycle;
-
   for (int64_t i = 0; i < samples_to_write; ++i) {
     real32 sine_value = sinf(sound_output->t_sine);
     int16_t sample_value = (int16_t)(sine_value * sound_output->tone_volume);
 
-    // Apply panning
     int32_t left_gain = (100 - sound_output->pan_position);
     int32_t right_gain = (100 + sound_output->pan_position);
     int32_t left_sample = ((int32_t)sample_value * left_gain) / 200;
@@ -751,7 +807,6 @@ void linux_fill_sound_buffer(GameSoundOutput *sound_output) {
     *sample_out++ = (int16_t)left_sample;
     *sample_out++ = (int16_t)right_sample;
 
-    // Advance phase
     sound_output->t_sine += phase_increment;
     if (sound_output->t_sine >= M_PI_DOUBLED) {
       sound_output->t_sine -= M_PI_DOUBLED;
@@ -759,15 +814,7 @@ void linux_fill_sound_buffer(GameSoundOutput *sound_output) {
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // 🔊 STEP 9: WRITE TO ALSA
-  // ═══════════════════════════════════════════════════════════════
-  //
-  // snd_pcm_writei() is the ALSA equivalent of DirectSound's
-  // Lock/memcpy/Unlock pattern.
-  //
-  // ALSA handles the ring buffer internally - we just give it
-  // samples and it figures out where to put them.
-  //
+  // STEP 5: WRITE TO ALSA
   // ═══════════════════════════════════════════════════════════════
 
   snd_pcm_sframes_t frames_written = SndPcmWritei(
@@ -775,66 +822,84 @@ void linux_fill_sound_buffer(GameSoundOutput *sound_output) {
       (snd_pcm_uframes_t)samples_to_write);
 
   if (frames_written < 0) {
-    // Handle errors
     if (frames_written == -EPIPE) {
-      // Underrun! Buffer ran empty.
-      // This causes audio glitches (clicks/pops).
 #if HANDMADE_INTERNAL
-      printf("⚠️  AUDIO UNDERRUN at sample %ld\n", running_sample_index);
+      printf("⚠️  AUDIO UNDERRUN! Buffered was %ld, needed %d\n",
+             buffered_samples, min_buffer_samples);
 #endif
       SndPcmPrepare(g_linux_sound_output.handle);
-      // Try writing again
+
+      // After underrun, write a larger chunk to recover
+      int recovery_samples = min_buffer_samples;
+      if (recovery_samples > (int)g_linux_sound_output.sample_buffer_size) {
+        recovery_samples = g_linux_sound_output.sample_buffer_size;
+      }
+
+      // Generate recovery audio
+      sample_out = (int16_t *)g_linux_sound_output.sample_buffer.base;
+      for (int i = 0; i < recovery_samples; ++i) {
+        real32 sine_value = sinf(sound_output->t_sine);
+        int16_t sample_value =
+            (int16_t)(sine_value * sound_output->tone_volume);
+        *sample_out++ = sample_value;
+        *sample_out++ = sample_value;
+        sound_output->t_sine += phase_increment;
+        if (sound_output->t_sine >= M_PI_DOUBLED) {
+          sound_output->t_sine -= M_PI_DOUBLED;
+        }
+      }
+
       frames_written = SndPcmWritei(g_linux_sound_output.handle,
                                     g_linux_sound_output.sample_buffer.base,
-                                    (snd_pcm_uframes_t)samples_to_write);
-    } else if (frames_written == -EAGAIN) {
-      // Buffer full, try again later
-#if HANDMADE_INTERNAL
-      printf("⚠️  AUDIO EAGAIN at sample %ld\n", running_sample_index);
-#endif
-      frames_written = 0;
-    } else {
-      // Other error, try to recover
-      int recover_err =
-          SndPcmRecover(g_linux_sound_output.handle, (int)frames_written, 1);
-      if (recover_err < 0) {
-        fprintf(stderr, "❌ ALSA recovery failed: %s\n",
-                SndStrerror(recover_err));
-        return;
+                                    (snd_pcm_uframes_t)recovery_samples);
+
+      if (frames_written < 0) {
+        frames_written = 0;
       }
+    } else {
+      SndPcmRecover(g_linux_sound_output.handle, (int)frames_written, 1);
       frames_written = 0;
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // 📈 STEP 10: UPDATE RUNNING SAMPLE INDEX
-  // ═══════════════════════════════════════════════════════════════
-  //
-  // This is our "virtual write cursor" - it tracks how many
-  // samples we've written total.
-  //
-  // IMPORTANT: Only advance by what we ACTUALLY wrote!
-  //
-  // ═══════════════════════════════════════════════════════════════
-
+  // Update running index
   if (frames_written > 0) {
     sound_output->running_sample_index += frames_written;
   }
 
-#if HANDMADE_INTERNAL
-  // Debug logging (every 5 seconds)
-  static int frame_count = 0;
-  frame_count++;
-  if (frame_count % (sound_output->game_update_hz * 5) == 0) {
-    printf("[AUDIO] RSI=%ld, wrote=%ld/%ld, play=%ld, delay=%ld, avail=%ld\n",
-           sound_output->running_sample_index, (long)frames_written,
-           samples_to_write, play_cursor, (long)delay_frames,
-           (long)avail_frames);
-  }
+  // ═══════════════════════════════════════════════════════════════
+  // STEP 6: RECORD DEBUG MARKER
+  // ═══════════════════════════════════════════════════════════════
 
-  if (FRAME_LOG_EVERY_ONE_SECONDS_CHECK) {
-    printf("[RSI] Before=%ld, After=%ld, Wrote=%ld\n", running_sample_index,
-           sound_output->running_sample_index, frames_written);
+  // In linux_fill_sound_buffer, add bounds check before recording marker:
+
+#if HANDMADE_INTERNAL
+  {
+    // ✅ BOUNDS CHECK
+    if (g_debug_marker_index < 0 ||
+        g_debug_marker_index >= MAX_DEBUG_AUDIO_MARKERS) {
+      g_debug_marker_index = 0;
+    }
+
+    LinuxDebugAudioMarker *marker =
+        &g_debug_audio_markers[g_debug_marker_index];
+
+    marker->output_play_cursor = play_cursor % buffer_size;
+    marker->output_write_cursor = write_cursor % buffer_size;
+    marker->output_safe_write_cursor = safe_write_cursor % buffer_size;
+    marker->output_location = write_cursor % buffer_size;
+    marker->output_sample_count = frames_written;
+    marker->expected_flip_play_cursor = expected_flip_play_cursor % buffer_size;
+    marker->output_delay_frames = delay_frames;
+    marker->output_avail_frames = avail_frames;
+
+    // Debug logging every 5 seconds
+    if (g_frame_log_counter % (sound_output->game_update_hz * 5) == 0) {
+      printf(
+          "[AUDIO] buffered=%ld target=%d | wrote=%ld | delay=%ld avail=%ld\n",
+          buffered_samples, min_buffer_samples, (long)frames_written,
+          (long)delay_frames, (long)avail_frames);
+    }
   }
 #endif
 }
@@ -951,3 +1016,414 @@ void linux_unload_alsa(GameSoundOutput *sound_output) {
 
   printf("✅ ALSA audio unloaded.\n");
 }
+
+#if HANDMADE_INTERNAL
+// ═══════════════════════════════════════════════════════════════
+// 📊 CAPTURE FLIP STATE (Day 20)
+// ═══════════════════════════════════════════════════════════════
+//
+// Called AFTER frame display to record actual cursor positions.
+// This allows us to compare prediction vs reality.
+//
+// DirectSound equivalent: GetCurrentPosition() after flip
+// ALSA equivalent: Calculate virtual cursors from delay/avail
+//
+// ═══════════════════════════════════════════════════════════════
+
+void linux_debug_capture_flip_state(GameSoundOutput *sound_output) {
+  if (!sound_output->is_initialized || !g_linux_sound_output.handle) {
+    return;
+  }
+
+  int32_t buffer_size = g_linux_sound_output.latency_sample_count;
+  if (buffer_size <= 0) {
+    return;
+  }
+
+  // ✅ BOUNDS CHECK BEFORE accessing
+  if (g_debug_marker_index < 0 ||
+      g_debug_marker_index >= MAX_DEBUG_AUDIO_MARKERS) {
+    g_debug_marker_index = 0;
+  }
+
+  // Query ALSA state after flip
+  snd_pcm_sframes_t delay_frames = 0;
+  snd_pcm_sframes_t avail_frames = 0;
+
+  int delay_err = SndPcmDelay(g_linux_sound_output.handle, &delay_frames);
+  if (delay_err < 0) {
+    delay_frames = 0;
+  }
+
+  avail_frames = SndPcmAvail(g_linux_sound_output.handle);
+  if (avail_frames < 0) {
+    avail_frames = 0;
+  }
+
+  // Calculate buffer-relative cursors
+  int64_t total_written = sound_output->running_sample_index;
+  int64_t flip_write_cursor = total_written % buffer_size;
+  int64_t play_absolute = total_written - delay_frames;
+  if (play_absolute < 0)
+    play_absolute = 0;
+  int64_t flip_play_cursor = play_absolute % buffer_size;
+
+  // Record in current marker
+  LinuxDebugAudioMarker *marker = &g_debug_audio_markers[g_debug_marker_index];
+  marker->flip_play_cursor = flip_play_cursor;
+  marker->flip_write_cursor = flip_write_cursor;
+  marker->flip_delay_frames = delay_frames;
+  marker->flip_avail_frames = avail_frames;
+
+  // ✅ ADVANCE marker index AFTER recording (circular buffer)
+  g_debug_marker_index = (g_debug_marker_index + 1) % MAX_DEBUG_AUDIO_MARKERS;
+}
+
+#endif // HANDMADE_INTERNAL
+
+#if HANDMADE_INTERNAL
+// ═══════════════════════════════════════════════════════════════
+// 🎨 DRAW VERTICAL LINE (Helper for Visualization)
+// ═══════════════════════════════════════════════════════════════
+//
+// Draws a vertical line in the pixel buffer.
+// Used to mark cursor positions in the audio visualization.
+//
+// DirectSound equivalent: Win32DebugDrawVertical()
+// X11 equivalent: Direct pixel manipulation in RGBA buffer
+//
+// ═══════════════════════════════════════════════════════════════
+
+file_scoped_fn void linux_debug_draw_vertical(GameOffscreenBuffer *buffer,
+                                              int x, int top, int bottom,
+                                              uint32_t color) {
+  // Bounds checking
+  if (x < 0 || x >= buffer->width) {
+    return;
+  }
+
+  if (top < 0) {
+    top = 0;
+  }
+
+  if (bottom > buffer->height) {
+    bottom = buffer->height;
+  }
+
+  // Draw vertical line
+  uint8_t *pixel = (uint8_t *)buffer->memory.base +
+                   x * 4 + // 4 bytes per pixel (RGBA)
+                   top * buffer->pitch;
+
+  for (int y = top; y < bottom; ++y) {
+    *(uint32_t *)pixel = color;
+    pixel += buffer->pitch;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 🎨 DRAW SOUND BUFFER MARKER (Helper for Visualization)
+// ═══════════════════════════════════════════════════════════════
+//
+// Converts a sample position to screen X coordinate and draws a line.
+//
+// DirectSound equivalent: Win32DrawSoundBufferMarker()
+// Key difference: We work with absolute sample positions, not buffer offsets
+//
+// ═══════════════════════════════════════════════════════════════
+
+file_scoped_fn void
+linux_draw_sound_buffer_marker(GameOffscreenBuffer *buffer,
+                               GameSoundOutput *sound_output,
+                               real32 coefficient, int pad_x, int top,
+                               int bottom, int64_t value, uint32_t color) {
+  (void)(sound_output);
+
+  int32_t buffer_size = g_linux_sound_output.latency_sample_count;
+
+  // ✅ SAFETY CHECK
+  if (buffer_size <= 0) {
+    return;
+  }
+
+  // Handle negative values
+  int64_t buffer_offset = value;
+  if (buffer_offset < 0) {
+    buffer_offset = 0;
+  }
+  buffer_offset = buffer_offset % buffer_size;
+
+  real32 x_real = coefficient * (real32)buffer_offset;
+  int x = pad_x + (int)x_real;
+
+  // ✅ STRICT BOUNDS CHECK before drawing
+  if (x < 0 || x >= buffer->width) {
+    return; // Silently skip out-of-bounds draws
+  }
+
+  if (top < 0)
+    top = 0;
+  if (bottom > buffer->height)
+    bottom = buffer->height;
+  if (top >= bottom)
+    return;
+
+  linux_debug_draw_vertical(buffer, x, top, bottom, color);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 🎨 DEBUG SYNC DISPLAY (Day 20 Visualization)
+// ═══════════════════════════════════════════════════════════════
+//
+// Draws the complete audio timing visualization.
+// Shows last 15 frames compressed, current frame expanded.
+//
+// DirectSound equivalent: Win32DebugSyncDisplay()
+// Key differences:
+// 1. We work with absolute sample positions (modulo for display)
+// 2. We show ALSA-specific data (delay, avail)
+// 3. We handle RGBA pixel format (not BGRA)
+//
+// ═══════════════════════════════════════════════════════════════
+
+void linux_debug_sync_display(GameOffscreenBuffer *buffer,
+                              GameSoundOutput *sound_output,
+                              LinuxDebugAudioMarker *markers, int marker_count,
+                              int current_marker_index) {
+  if (!sound_output->is_initialized) {
+    return;
+  }
+
+  // ✅ SAFETY CHECKS
+  if (!buffer || !buffer->memory.base) {
+    return;
+  }
+
+  if (!markers || marker_count <= 0) {
+    return;
+  }
+
+  if (current_marker_index < 0 || current_marker_index >= marker_count) {
+    current_marker_index = 0;
+  }
+
+  int32_t buffer_size = g_linux_sound_output.latency_sample_count;
+  if (buffer_size <= 0) {
+    return;
+  }
+
+#if HANDMADE_INTERNAL
+  if (FRAME_LOG_EVERY_ONE_SECONDS_CHECK) { // Every second
+    printf("\n🎨 VISUALIZATION DEBUG:\n");
+    printf("   Buffer size: %d samples\n",
+           g_linux_sound_output.latency_sample_count);
+
+    LinuxDebugAudioMarker *marker = &markers[current_marker_index];
+    printf("   output_play_cursor:  %ld → offset %ld\n",
+           marker->output_play_cursor,
+           marker->output_play_cursor %
+               g_linux_sound_output.latency_sample_count);
+    printf("   output_write_cursor: %ld → offset %ld\n",
+           marker->output_write_cursor,
+           marker->output_write_cursor %
+               g_linux_sound_output.latency_sample_count);
+    printf("   flip_play_cursor:    %ld → offset %ld\n\n",
+           marker->flip_play_cursor,
+           marker->flip_play_cursor %
+               g_linux_sound_output.latency_sample_count);
+  }
+#endif
+
+  // ═══════════════════════════════════════════════════════════════
+  // LAYOUT CONSTANTS
+  // ═══════════════════════════════════════════════════════════════
+
+  int pad_x = 16;
+  int pad_y = 16;
+  int line_height = 64; // Height of each compressed frame
+
+  // ═══════════════════════════════════════════════════════════════
+  // 🔍 COMPREHENSIVE DEBUG LOGGING
+  // ═══════════════════════════════════════════════════════════════
+
+  if (FRAME_LOG_EVERY_ONE_SECONDS_CHECK) { // Log every second
+    LinuxDebugAudioMarker *current = &markers[current_marker_index];
+
+    printf("\n════════════════════════════════════════════════════════\n");
+    printf("🎨 VISUALIZATION DEEP DEBUG (frame %d)\n", g_frame_log_counter);
+    printf("════════════════════════════════════════════════════════\n");
+
+    printf("\n📐 LAYOUT PARAMETERS:\n");
+    printf("   buffer->width:  %d pixels\n", buffer->width);
+    printf("   buffer->height: %d pixels\n", buffer->height);
+    printf("   buffer_size:    %d samples\n", buffer_size);
+    printf("   pad_x:          16 pixels\n");
+    printf("   drawable_width: %d pixels\n", buffer->width - 32);
+
+    real32 coefficient = (real32)(buffer->width - 32) / (real32)buffer_size;
+    printf("   coefficient:    %.6f pixels/sample\n", coefficient);
+
+    printf("\n📊 RAW MARKER VALUES (current_marker_index=%d):\n",
+           current_marker_index);
+    printf("   output_play_cursor:       %ld\n", current->output_play_cursor);
+    printf("   output_write_cursor:      %ld\n", current->output_write_cursor);
+    printf("   output_safe_write_cursor: %ld\n",
+           current->output_safe_write_cursor);
+    printf("   output_location:          %ld\n", current->output_location);
+    printf("   output_sample_count:      %ld\n", current->output_sample_count);
+    printf("   expected_flip_play_cursor:%ld\n",
+           current->expected_flip_play_cursor);
+    printf("   flip_play_cursor:         %ld\n", current->flip_play_cursor);
+    printf("   flip_write_cursor:        %ld\n", current->flip_write_cursor);
+
+    printf("\n🔢 AFTER MODULO (buffer_size=%d):\n", buffer_size);
+    printf("   output_play_cursor %%:       %ld\n",
+           current->output_play_cursor % buffer_size);
+    printf("   output_write_cursor %%:      %ld\n",
+           current->output_write_cursor % buffer_size);
+    printf("   output_safe_write_cursor %%: %ld\n",
+           current->output_safe_write_cursor % buffer_size);
+    printf("   flip_play_cursor %%:         %ld\n",
+           current->flip_play_cursor % buffer_size);
+
+    printf("\n📍 SCREEN X POSITIONS (pad_x=16):\n");
+    int x_play = 16 + (int)(coefficient * (real32)(current->output_play_cursor %
+                                                   buffer_size));
+    int x_write =
+        16 + (int)(coefficient *
+                   (real32)(current->output_write_cursor % buffer_size));
+    int x_safe =
+        16 + (int)(coefficient *
+                   (real32)(current->output_safe_write_cursor % buffer_size));
+    int x_flip = 16 + (int)(coefficient *
+                            (real32)(current->flip_play_cursor % buffer_size));
+
+    printf("   play cursor X:       %d pixels\n", x_play);
+    printf("   write cursor X:      %d pixels\n", x_write);
+    printf("   safe write cursor X: %d pixels\n", x_safe);
+    printf("   flip play cursor X:  %d pixels\n", x_flip);
+
+    printf("\n🎯 EXPECTED RELATIONSHIPS:\n");
+    printf("   write should be AHEAD of play by: %ld samples\n",
+           current->output_write_cursor - current->output_play_cursor);
+    printf("   safe should be AHEAD of write by: %ld samples\n",
+           current->output_safe_write_cursor - current->output_write_cursor);
+    printf("   (If negative, cursor wrapped around buffer)\n");
+
+    printf("\n🖼️ VISUAL REPRESENTATION (0=left, %d=right):\n", buffer->width);
+    printf("   [");
+    for (int i = 0; i < 60; i++) {
+      int screen_pos = 16 + (i * (buffer->width - 32) / 60);
+      if (abs(screen_pos - x_play) < 10)
+        printf("P");
+      else if (abs(screen_pos - x_write) < 10)
+        printf("W");
+      else if (abs(screen_pos - x_safe) < 10)
+        printf("S");
+      else if (abs(screen_pos - x_flip) < 10)
+        printf("F");
+      else
+        printf("-");
+    }
+    printf("]\n");
+    printf("   P=PlayCursor W=WriteCursor S=SafeCursor F=FlipCursor\n");
+
+    printf("════════════════════════════════════════════════════════\n\n");
+  }
+  real32 coefficient =
+      (real32)(buffer->width - 2 * pad_x) / (real32)buffer_size;
+
+  // ═══════════════════════════════════════════════════════════════
+  // COLORS (RGBA format, not BGRA!)
+  // ═══════════════════════════════════════════════════════════════
+
+  uint32_t play_color = 0xFFFFFFFF;          // White (play cursor)
+  uint32_t write_color = 0xFF0000FF;         // Red (write cursor)
+  uint32_t expected_flip_color = 0xFF00FFFF; // Yellow (prediction)
+  uint32_t play_window_color = 0xFFFF00FF;   // Magenta (uncertainty)
+
+  // ═══════════════════════════════════════════════════════════════
+  // DRAW ALL MARKERS
+  // ═══════════════════════════════════════════════════════════════
+
+  for (int marker_index = 0; marker_index < marker_count; ++marker_index) {
+    // ✅ BOUNDS CHECK
+    if (marker_index < 0 || marker_index >= MAX_DEBUG_AUDIO_MARKERS) {
+      continue;
+    }
+
+    LinuxDebugAudioMarker *this_marker = &markers[marker_index];
+
+    int top = pad_y;
+    int bottom = pad_y + line_height;
+
+    // ═══════════════════════════════════════════════════════════
+    // CURRENT FRAME: Expanded view (4 lines)
+    // ═══════════════════════════════════════════════════════════
+
+    if (marker_index == current_marker_index) {
+      top += line_height + pad_y;
+      bottom += line_height + pad_y;
+
+      int first_top = top;
+
+      // LINE 1: Output Cursors (at frame start)
+      linux_draw_sound_buffer_marker(
+          buffer, sound_output, coefficient, pad_x, top, bottom,
+          this_marker->output_play_cursor, play_color); // White
+
+      linux_draw_sound_buffer_marker(buffer, sound_output, coefficient, pad_x,
+                                     top, bottom,
+                                     this_marker->output_write_cursor,
+                                     write_color); // Red (actual write cursor)
+
+      // ✅ NEW: Draw safe write cursor in a different color
+      linux_draw_sound_buffer_marker(buffer, sound_output, coefficient, pad_x,
+                                     top, bottom,
+                                     this_marker->output_safe_write_cursor,
+                                     0xFFFFFF00); // Yellow (safe cursor)
+
+      top += line_height + pad_y;
+      bottom += line_height + pad_y;
+
+      // LINE 2: Write Region (what we wrote)
+      linux_draw_sound_buffer_marker(buffer, sound_output, coefficient, pad_x,
+                                     top, bottom, this_marker->output_location,
+                                     play_color);
+      linux_draw_sound_buffer_marker(
+          buffer, sound_output, coefficient, pad_x, top, bottom,
+          this_marker->output_location + this_marker->output_sample_count,
+          write_color);
+
+      top += line_height + pad_y;
+      bottom += line_height + pad_y;
+
+      // LINE 3: Expected Flip Cursor (prediction)
+      // This is a TALL line spanning all 3 lines above
+      linux_draw_sound_buffer_marker(
+          buffer, sound_output, coefficient, pad_x, first_top, bottom,
+          this_marker->expected_flip_play_cursor, expected_flip_color);
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // ALL FRAMES: Flip Cursors (compressed view)
+    // ═══════════════════════════════════════════════════════════
+
+    // LINE 4: Actual cursors after flip
+    linux_draw_sound_buffer_marker(buffer, sound_output, coefficient, pad_x,
+                                   top, bottom, this_marker->flip_play_cursor,
+                                   play_color);
+
+    // Play window (480-sample uncertainty)
+    // ALSA equivalent: We use a fixed window size for consistency
+    int32_t play_window_samples = 480; // Same as DirectSound
+    linux_draw_sound_buffer_marker(
+        buffer, sound_output, coefficient, pad_x, top, bottom,
+        this_marker->flip_play_cursor + play_window_samples, play_window_color);
+
+    linux_draw_sound_buffer_marker(buffer, sound_output, coefficient, pad_x,
+                                   top, bottom, this_marker->flip_write_cursor,
+                                   write_color);
+  }
+}
+#endif // HANDMADE_INTERNAL
