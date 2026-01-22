@@ -231,7 +231,7 @@ alsa_snd_pcm_start *SndPcmStart_ = AlsaSndPcmStartStub;
 alsa_snd_pcm_drop *SndPcmDrop_ = AlsaSndPcmDropStub;
 
 // Global audio state (ALSA handle, buffers, latency params)
-LinuxSoundOutput g_linux_sound_output = {0};
+LinuxSoundOutput g_linux_audio_output = {0};
 
 // ═══════════════════════════════════════════════════════════════
 // Load ALSA Library (Casey's Win32LoadXInput pattern)
@@ -260,7 +260,7 @@ void linux_load_alsa(void) {
   }
 
   printf("✅ ALSA: Loaded libasound.so\n");
-  g_linux_sound_output.alsa_library = alsa_lib;
+  g_linux_audio_output.alsa_library = alsa_lib;
 
   // Get function pointers (like Casey's GetProcAddress)
   // Macro reduces repetition - each function loaded the same way
@@ -299,7 +299,7 @@ void linux_load_alsa(void) {
     SndPcmSetParams_ = AlsaSndPcmSetParamsStub;
     SndPcmWritei_ = AlsaSndPcmWriteiStub;
     dlclose(alsa_lib);
-    g_linux_sound_output.alsa_library = NULL;
+    g_linux_audio_output.alsa_library = NULL;
   }
 
   // Day 10: Optional latency measurement (not all ALSA versions have it)
@@ -344,16 +344,18 @@ void linux_load_alsa(void) {
 // 5. Simplified prefill with silence
 // ═══════════════════════════════════════════════════════════════
 
-bool linux_init_sound(GameSoundOutput *sound_output, int32_t samples_per_second,
-                      int32_t buffer_size_bytes, int32_t game_update_hz) {
+bool linux_init_audio(GameAudioOutputBuffer *audio_output,
+                      PlatformAudioConfig *audio_config,
+                      int32_t samples_per_second, int32_t buffer_size_bytes,
+                      int32_t game_update_hz) {
   if (game_update_hz <= 0) {
     fprintf(stderr, "❌ AUDIO INIT: Invalid game_update_hz=%d\n",
             game_update_hz);
     return false;
   }
 
-  sound_output->game_update_hz = game_update_hz;
-  int32_t samples_per_frame = samples_per_second / sound_output->game_update_hz;
+  audio_config->game_update_hz = game_update_hz;
+  int32_t samples_per_frame = samples_per_second / audio_config->game_update_hz;
 
   // ═══════════════════════════════════════════════════════════════
   // 🛡️ DAY 20: SAFETY MARGIN CALCULATION
@@ -372,12 +374,12 @@ bool linux_init_sound(GameSoundOutput *sound_output, int32_t samples_per_second,
   // - Covers variance with plenty of headroom
   // ═══════════════════════════════════════════════════════════════
 
-  g_linux_sound_output.safety_sample_count = samples_per_frame / 3;
-  sound_output->safety_sample_count = g_linux_sound_output.safety_sample_count;
+  g_linux_audio_output.safety_sample_count = samples_per_frame / 3;
+  audio_config->safety_sample_count = g_linux_audio_output.safety_sample_count;
 
   printf("[AUDIO INIT] Safety margin: %d samples (%.1f ms)\n",
-         g_linux_sound_output.safety_sample_count,
-         (float)g_linux_sound_output.safety_sample_count / samples_per_second *
+         g_linux_audio_output.safety_sample_count,
+         (float)g_linux_audio_output.safety_sample_count / samples_per_second *
              1000.0f);
 
   // ═════════════════════════════════════════════════════════════════
@@ -394,8 +396,8 @@ bool linux_init_sound(GameSoundOutput *sound_output, int32_t samples_per_second,
          latency_sample_count, latency_us / 1000.0f);
 
   // Store requested latency (will be updated with actual value later)
-  g_linux_sound_output.latency_sample_count = latency_sample_count;
-  g_linux_sound_output.latency_microseconds = latency_us;
+  g_linux_audio_output.latency_sample_count = latency_sample_count;
+  g_linux_audio_output.latency_microseconds = latency_us;
 
   // ═══════════════════════════════════════════════════════════════
   // 🔌 OPEN AUDIO DEVICE
@@ -410,7 +412,7 @@ bool linux_init_sound(GameSoundOutput *sound_output, int32_t samples_per_second,
   int err = -1;
 
   for (int i = 0; i < 3 && err < 0; i++) {
-    err = SndPcmOpen(&g_linux_sound_output.handle, devices[i],
+    err = SndPcmOpen(&g_linux_audio_output.pcm_handle, devices[i],
                      LINUX_SND_PCM_STREAM_PLAYBACK,
                      0); // 0 = blocking mode (not SND_PCM_NONBLOCK!)
     if (err >= 0) {
@@ -422,7 +424,7 @@ bool linux_init_sound(GameSoundOutput *sound_output, int32_t samples_per_second,
 
   if (err < 0) {
     fprintf(stderr, "❌ Sound: Cannot open any audio device\n");
-    sound_output->is_initialized = false;
+    audio_config->is_initialized = false;
     return false;
   }
 
@@ -433,7 +435,7 @@ bool linux_init_sound(GameSoundOutput *sound_output, int32_t samples_per_second,
   // soft_resample = 1 allows ALSA to handle rate conversion if needed
   // latency_us = requested buffer size in microseconds
   err = SndPcmSetParams(
-      g_linux_sound_output.handle,
+      g_linux_audio_output.pcm_handle,
       LINUX_SND_PCM_FORMAT_S16_LE,         // 16-bit signed little-endian
       LINUX_SND_PCM_ACCESS_RW_INTERLEAVED, // Interleaved (L-R-L-R)
       2,                                   // Stereo (2 channels)
@@ -444,8 +446,8 @@ bool linux_init_sound(GameSoundOutput *sound_output, int32_t samples_per_second,
 
   if (err < 0) {
     fprintf(stderr, "❌ Sound: Cannot set parameters: %s\n", SndStrerror(err));
-    SndPcmClose(g_linux_sound_output.handle);
-    sound_output->is_initialized = false;
+    SndPcmClose(g_linux_audio_output.pcm_handle);
+    audio_config->is_initialized = false;
     return false;
   }
 
@@ -457,7 +459,7 @@ bool linux_init_sound(GameSoundOutput *sound_output, int32_t samples_per_second,
   snd_pcm_uframes_t actual_buffer_size = 0;
   snd_pcm_uframes_t actual_period_size = 0;
 
-  err = SndPcmGetParams(g_linux_sound_output.handle, &actual_buffer_size,
+  err = SndPcmGetParams(g_linux_audio_output.pcm_handle, &actual_buffer_size,
                         &actual_period_size);
 
   if (err >= 0) {
@@ -469,7 +471,7 @@ bool linux_init_sound(GameSoundOutput *sound_output, int32_t samples_per_second,
     // CRITICAL: Use ALSA's actual buffer size!
     // If we use our requested size but ALSA gave us something different,
     // the cursor math will be wrong and audio will click.
-    g_linux_sound_output.latency_sample_count = (int32_t)actual_buffer_size;
+    g_linux_audio_output.latency_sample_count = (int32_t)actual_buffer_size;
 
     float actual_latency_ms =
         (float)actual_buffer_size / samples_per_second * 1000.0f;
@@ -490,56 +492,63 @@ bool linux_init_sound(GameSoundOutput *sound_output, int32_t samples_per_second,
   // ═══════════════════════════════════════════════════════════════
   // 💾 STORE AUDIO PARAMETERS
   // ═══════════════════════════════════════════════════════════════
-  sound_output->samples_per_second = samples_per_second;
-  sound_output->bytes_per_sample = sizeof(int16_t) * 2; // L+R channels
-  g_linux_sound_output.buffer_size = buffer_size_bytes;
+  audio_output->samples_per_second = samples_per_second;
+  audio_config->bytes_per_sample = sizeof(int16_t) * 2; // L+R channels
+  g_linux_audio_output.buffer_size = buffer_size_bytes;
 
   // ═══════════════════════════════════════════════════════════════
   // 📦 ALLOCATE SAMPLE BUFFER
   // ═══════════════════════════════════════════════════════════════
-  g_linux_sound_output.sample_buffer_size =
-      g_linux_sound_output.latency_sample_count;
+  g_linux_audio_output.sample_buffer_size =
+      g_linux_audio_output.latency_sample_count;
   int sample_buffer_bytes =
-      g_linux_sound_output.sample_buffer_size * sound_output->bytes_per_sample;
+      g_linux_audio_output.sample_buffer_size * audio_config->bytes_per_sample;
 
   // ✅ Add PLATFORM_MEMORY_ZEROED here if you want it pre-zeroed
-  g_linux_sound_output.sample_buffer = platform_allocate_memory(
+  g_linux_audio_output.sample_buffer = platform_allocate_memory(
       NULL, sample_buffer_bytes,
       PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE | PLATFORM_MEMORY_ZEROED);
 
-  if (!g_linux_sound_output.sample_buffer.base) {
+  if (!platform_memory_is_valid(g_linux_audio_output.sample_buffer)) {
     fprintf(stderr, "❌ Sound: Cannot allocate sample buffer\n");
-    SndPcmClose(g_linux_sound_output.handle);
-    sound_output->is_initialized = false;
+    fprintf(stderr, "   Error: %s\n",
+            g_linux_audio_output.sample_buffer.error_message);
+    fprintf(stderr, "   Code: %s\n",
+            platform_memory_strerror(
+                g_linux_audio_output.sample_buffer.error_code));
+    SndPcmClose(g_linux_audio_output.pcm_handle);
+    audio_config->is_initialized = false;
     return false;
   }
 
   printf("✅ Sound: Allocated sample buffer (%d frames, %.1f KB)\n",
-         g_linux_sound_output.sample_buffer_size,
+         g_linux_audio_output.sample_buffer_size,
          (float)sample_buffer_bytes / 1024.0f);
 
   // ═══════════════════════════════════════════════════════════════
   // 🎵 INITIALIZE TEST TONE PARAMETERS
   // ═══════════════════════════════════════════════════════════════
-  sound_output->running_sample_index = 0;
-  sound_output->tone_hz = 256;      // 256 Hz test tone
-  sound_output->tone_volume = 6000; // Volume (max ~32767)
-  sound_output->wave_period = samples_per_second / sound_output->tone_hz;
-  sound_output->t_sine = 0.0f;    // Sine wave phase
-  sound_output->pan_position = 0; // Center pan
-  sound_output->is_initialized = true;
+  audio_config->running_sample_index = 0;
+  // Can't init `game_audio_state` here, it should be on the game loop
+  // game_audio_state->tone.frequency = 256; // 256 Hz test tone
+  // game_audio_state->tone.volume = 6000;   // Volume (max ~32767)
+  // audio_config->wave_period =
+  //     samples_per_second / game_audio_state->tone.frequency;
+  // game_audio_state->tone.phase = 0.0f;     // Sine wave phase
+  // game_audio_state->tone.pan_position = 0; // Center pan
+  audio_config->is_initialized = true;
 
-  printf("✅ Sound: Test tone initialized\n");
-  printf("   Frequency:  %d Hz\n", sound_output->tone_hz);
-  printf("   Volume:     %d / 32767\n", sound_output->tone_volume);
-  printf("   Pan:        center (0)\n");
+  // printf("✅ Sound: Test tone initialized\n");
+  // printf("   Frequency:  %0.2f Hz\n", game_audio_state->tone.frequency);
+  // printf("   Volume:     %0.2f\n", game_audio_state->tone.volume);
+  // printf("   Pan:        center (0)\n");
 
   // 🚀 PRE-FILL BUFFER TO START PLAYBACK
   // Use a SMALLER prefill - just enough to start playback
   {
     printf("🔊 Sound: Pre-filling buffer...\n");
 
-    int prep_err = SndPcmPrepare(g_linux_sound_output.handle);
+    int prep_err = SndPcmPrepare(g_linux_audio_output.pcm_handle);
     if (prep_err < 0) {
       printf("⚠️  snd_pcm_prepare failed: %s (continuing anyway)\n",
              SndStrerror(prep_err));
@@ -550,19 +559,19 @@ bool linux_init_sound(GameSoundOutput *sound_output, int32_t samples_per_second,
     int32_t samples_per_frame_init = samples_per_second / game_update_hz;
     int prefill_frames = samples_per_frame_init * 2;
 
-    if (prefill_frames > (int)g_linux_sound_output.sample_buffer_size) {
-      prefill_frames = (int)g_linux_sound_output.sample_buffer_size;
+    if (prefill_frames > (int)g_linux_audio_output.sample_buffer_size) {
+      prefill_frames = (int)g_linux_audio_output.sample_buffer_size;
     }
 
     long written =
-        SndPcmWritei(g_linux_sound_output.handle,
-                     g_linux_sound_output.sample_buffer.base, prefill_frames);
+        SndPcmWritei(g_linux_audio_output.pcm_handle,
+                     g_linux_audio_output.sample_buffer.base, prefill_frames);
 
     if (written > 0) {
-      sound_output->running_sample_index = written;
+      audio_config->running_sample_index = written;
       printf("✅ Sound: Pre-filled %ld frames of silence\n", written);
 
-      int start_err = SndPcmStart(g_linux_sound_output.handle);
+      int start_err = SndPcmStart(g_linux_audio_output.pcm_handle);
       if (start_err < 0 && start_err != -EBADFD) {
         printf("⚠️  snd_pcm_start: %s (continuing anyway)\n",
                SndStrerror(start_err));
@@ -571,7 +580,7 @@ bool linux_init_sound(GameSoundOutput *sound_output, int32_t samples_per_second,
       }
     } else if (written < 0) {
       printf("⚠️  Pre-fill write failed: %s\n", SndStrerror((int)written));
-      SndPcmRecover(g_linux_sound_output.handle, (int)written, 1);
+      SndPcmRecover(g_linux_audio_output.pcm_handle, (int)written, 1);
     }
   }
 
@@ -584,21 +593,22 @@ bool linux_init_sound(GameSoundOutput *sound_output, int32_t samples_per_second,
   printf("═══════════════════════════════════════════════════════════\n");
   printf("Sample rate:      %d Hz\n", samples_per_second);
   printf("Buffer size:      %d frames (%.1f ms)\n",
-         g_linux_sound_output.latency_sample_count,
-         (float)g_linux_sound_output.latency_sample_count / samples_per_second *
+         g_linux_audio_output.latency_sample_count,
+         (float)g_linux_audio_output.latency_sample_count / samples_per_second *
              1000.0f);
   printf("Samples/frame:    %d (at %d Hz game logic)\n", samples_per_frame,
          game_update_hz);
-  printf("Safety margin:    %d samples\n", sound_output->safety_sample_count);
-  printf("Test tone:        %d Hz at volume %d\n", sound_output->tone_hz,
-         sound_output->tone_volume);
+  printf("Safety margin:    %d samples\n", audio_config->safety_sample_count);
+  // printf("Test tone:        %0.2f Hz at volume %0.2f\n",
+  //        game_audio_state->tone.frequency, game_audio_state->tone.volume);
   printf("═══════════════════════════════════════════════════════════\n");
   printf("\n");
 
   return true;
 }
 
-void linux_audio_fps_change_handling(GameSoundOutput *sound_output) {
+void linux_audio_fps_change_handling(GameAudioOutputBuffer *audio_output,
+                                     PlatformAudioConfig *audio_config) {
   // ═══════════════════════════════════════════════════════════════
   // IMPORTANT: Audio rate should NOT change with rendering FPS!
   // ═══════════════════════════════════════════════════════════════
@@ -615,31 +625,26 @@ void linux_audio_fps_change_handling(GameSoundOutput *sound_output) {
   // parameters without resetting the buffer:
   // ═══════════════════════════════════════════════════════════════
 
-  if (!sound_output->is_initialized) {
+  if (!audio_config->is_initialized) {
     return;
   }
 
   // Recalculate derived values based on new game_update_hz
   int32_t samples_per_frame =
-      sound_output->samples_per_second / sound_output->game_update_hz;
+      audio_output->samples_per_second / audio_config->game_update_hz;
 
-  g_linux_sound_output.safety_sample_count = samples_per_frame / 3;
-  sound_output->safety_sample_count = g_linux_sound_output.safety_sample_count;
+  g_linux_audio_output.safety_sample_count = samples_per_frame / 3;
+  audio_config->safety_sample_count = g_linux_audio_output.safety_sample_count;
 
 #if HANDMADE_INTERNAL
   printf("[AUDIO] Rate updated: %d Hz, samples/frame=%d, safety=%d\n",
-         sound_output->game_update_hz, samples_per_frame,
-         sound_output->safety_sample_count);
+         audio_config->game_update_hz, samples_per_frame,
+         audio_config->safety_sample_count);
 #endif
 
   // NOTE: We do NOT call SndPcmDrop/SndPcmPrepare!
   // That would cause audio clicks. The buffer continues playing
   // and we just adjust how much we write each frame.
-}
-
-// Check if ALSA latency measurement is available (not all versions have it)
-file_scoped_fn inline bool linux_audio_has_latency_measurement(void) {
-  return SndPcmDelay_ != AlsaSndPcmDelayStub;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -677,8 +682,10 @@ file_scoped_fn inline bool linux_audio_has_latency_measurement(void) {
 // - Don't overthink the wrap-around math
 //
 // ═══════════════════════════════════════════════════════════════
-void linux_fill_sound_buffer(GameSoundOutput *sound_output) {
-  if (!sound_output->is_initialized || !g_linux_sound_output.handle) {
+void linux_fill_audio_buffer(GameAudioOutputBuffer *audio_output,
+                             PlatformAudioConfig *audio_config,
+                             GameAudioState *game_audio_state) {
+  if (!audio_config->is_initialized || !g_linux_audio_output.pcm_handle) {
     return;
   }
 
@@ -687,16 +694,16 @@ void linux_fill_sound_buffer(GameSoundOutput *sound_output) {
   // ═══════════════════════════════════════════════════════════════
 
   snd_pcm_sframes_t delay_frames = 0;
-  int delay_err = SndPcmDelay(g_linux_sound_output.handle, &delay_frames);
+  int delay_err = SndPcmDelay(g_linux_audio_output.pcm_handle, &delay_frames);
   if (delay_err < 0) {
-    SndPcmRecover(g_linux_sound_output.handle, delay_err, 1);
+    SndPcmRecover(g_linux_audio_output.pcm_handle, delay_err, 1);
     delay_frames = 0;
   }
 
-  snd_pcm_sframes_t avail_frames = SndPcmAvail(g_linux_sound_output.handle);
+  snd_pcm_sframes_t avail_frames = SndPcmAvail(g_linux_audio_output.pcm_handle);
   if (avail_frames < 0) {
-    SndPcmRecover(g_linux_sound_output.handle, (int)avail_frames, 1);
-    avail_frames = SndPcmAvail(g_linux_sound_output.handle);
+    SndPcmRecover(g_linux_audio_output.pcm_handle, (int)avail_frames, 1);
+    avail_frames = SndPcmAvail(g_linux_audio_output.pcm_handle);
     if (avail_frames < 0) {
       avail_frames = 0;
     }
@@ -706,12 +713,12 @@ void linux_fill_sound_buffer(GameSoundOutput *sound_output) {
   // STEP 2: CALCULATE PARAMETERS
   // ═══════════════════════════════════════════════════════════════
 
-  int32_t samples_per_second = sound_output->samples_per_second;
-  int32_t samples_per_frame = samples_per_second / sound_output->game_update_hz;
-  int32_t buffer_size = g_linux_sound_output.latency_sample_count;
+  int32_t samples_per_second = audio_output->samples_per_second;
+  int32_t samples_per_frame = samples_per_second / audio_config->game_update_hz;
+  int32_t buffer_size = g_linux_audio_output.latency_sample_count;
 
   // Virtual cursors
-  int64_t running_sample_index = sound_output->running_sample_index;
+  int64_t running_sample_index = audio_config->running_sample_index;
   int64_t play_cursor = running_sample_index - delay_frames;
   if (play_cursor < 0) {
     play_cursor = 0;
@@ -759,8 +766,8 @@ void linux_fill_sound_buffer(GameSoundOutput *sound_output) {
   }
 
   // Clamp to our sample buffer size
-  if (samples_to_write > (int64_t)g_linux_sound_output.sample_buffer_size) {
-    samples_to_write = g_linux_sound_output.sample_buffer_size;
+  if (samples_to_write > (int64_t)g_linux_audio_output.sample_buffer_size) {
+    samples_to_write = g_linux_audio_output.sample_buffer_size;
   }
 
   // Calculate cursors for debug
@@ -788,26 +795,27 @@ void linux_fill_sound_buffer(GameSoundOutput *sound_output) {
   // STEP 4: GENERATE AUDIO SAMPLES
   // ═══════════════════════════════════════════════════════════════
 
-  int16_t *sample_out = (int16_t *)g_linux_sound_output.sample_buffer.base;
+  int16_t *sample_out = (int16_t *)g_linux_audio_output.sample_buffer.base;
 
   real32 samples_per_cycle =
-      (real32)samples_per_second / (real32)sound_output->tone_hz;
+      (real32)samples_per_second / (real32)game_audio_state->tone.frequency;
   real32 phase_increment = M_PI_DOUBLED / samples_per_cycle;
   for (int64_t i = 0; i < samples_to_write; ++i) {
-    real32 sine_value = sinf(sound_output->t_sine);
-    int16_t sample_value = (int16_t)(sine_value * sound_output->tone_volume);
+    real32 sine_value = sinf(game_audio_state->tone.phase);
+    int16_t sample_value =
+        (int16_t)(sine_value * game_audio_state->tone.volume);
 
-    int32_t left_gain = (100 - sound_output->pan_position);
-    int32_t right_gain = (100 + sound_output->pan_position);
+    int32_t left_gain = (100 - game_audio_state->tone.pan_position);
+    int32_t right_gain = (100 + game_audio_state->tone.pan_position);
     int32_t left_sample = ((int32_t)sample_value * left_gain) / 200;
     int32_t right_sample = ((int32_t)sample_value * right_gain) / 200;
 
     *sample_out++ = (int16_t)left_sample;
     *sample_out++ = (int16_t)right_sample;
 
-    sound_output->t_sine += phase_increment;
-    if (sound_output->t_sine >= M_PI_DOUBLED) {
-      sound_output->t_sine -= M_PI_DOUBLED;
+    game_audio_state->tone.phase += phase_increment;
+    if (game_audio_state->tone.phase >= M_PI_DOUBLED) {
+      game_audio_state->tone.phase -= M_PI_DOUBLED;
     }
   }
 
@@ -816,7 +824,7 @@ void linux_fill_sound_buffer(GameSoundOutput *sound_output) {
   // ═══════════════════════════════════════════════════════════════
 
   snd_pcm_sframes_t frames_written = SndPcmWritei(
-      g_linux_sound_output.handle, g_linux_sound_output.sample_buffer.base,
+      g_linux_audio_output.pcm_handle, g_linux_audio_output.sample_buffer.base,
       (snd_pcm_uframes_t)samples_to_write);
 
   if (frames_written < 0) {
@@ -825,51 +833,51 @@ void linux_fill_sound_buffer(GameSoundOutput *sound_output) {
       printf("⚠️  AUDIO UNDERRUN! Buffered was %ld, needed %d\n",
              buffered_samples, min_buffer_samples);
 #endif
-      SndPcmPrepare(g_linux_sound_output.handle);
+      SndPcmPrepare(g_linux_audio_output.pcm_handle);
 
       // After underrun, write a larger chunk to recover
       int recovery_samples = min_buffer_samples;
-      if (recovery_samples > (int)g_linux_sound_output.sample_buffer_size) {
-        recovery_samples = g_linux_sound_output.sample_buffer_size;
+      if (recovery_samples > (int)g_linux_audio_output.sample_buffer_size) {
+        recovery_samples = g_linux_audio_output.sample_buffer_size;
       }
 
       // Generate recovery audio
-      sample_out = (int16_t *)g_linux_sound_output.sample_buffer.base;
+      sample_out = (int16_t *)g_linux_audio_output.sample_buffer.base;
       for (int i = 0; i < recovery_samples; ++i) {
-        real32 sine_value = sinf(sound_output->t_sine);
+        real32 sine_value = sinf(game_audio_state->tone.phase);
         int16_t sample_value =
-            (int16_t)(sine_value * sound_output->tone_volume);
+            (int16_t)(sine_value * game_audio_state->tone.volume);
         *sample_out++ = sample_value;
         *sample_out++ = sample_value;
-        sound_output->t_sine += phase_increment;
-        if (sound_output->t_sine >= M_PI_DOUBLED) {
-          sound_output->t_sine -= M_PI_DOUBLED;
+        game_audio_state->tone.phase += phase_increment;
+        if (game_audio_state->tone.phase >= M_PI_DOUBLED) {
+          game_audio_state->tone.phase -= M_PI_DOUBLED;
         }
       }
 
-      frames_written = SndPcmWritei(g_linux_sound_output.handle,
-                                    g_linux_sound_output.sample_buffer.base,
+      frames_written = SndPcmWritei(g_linux_audio_output.pcm_handle,
+                                    g_linux_audio_output.sample_buffer.base,
                                     (snd_pcm_uframes_t)recovery_samples);
 
       if (frames_written < 0) {
         frames_written = 0;
       }
     } else {
-      SndPcmRecover(g_linux_sound_output.handle, (int)frames_written, 1);
+      SndPcmRecover(g_linux_audio_output.pcm_handle, (int)frames_written, 1);
       frames_written = 0;
     }
   }
 
   // Update running index
   if (frames_written > 0) {
-    sound_output->running_sample_index += frames_written;
+    audio_config->running_sample_index += frames_written;
   }
 
   // ═══════════════════════════════════════════════════════════════
   // STEP 6: RECORD DEBUG MARKER
   // ═══════════════════════════════════════════════════════════════
 
-  // In linux_fill_sound_buffer, add bounds check before recording marker:
+  // In linux_fill_audio_buffer, add bounds check before recording marker:
 
 #if HANDMADE_INTERNAL
   {
@@ -892,7 +900,7 @@ void linux_fill_sound_buffer(GameSoundOutput *sound_output) {
     marker->output_avail_frames = avail_frames;
 
     // Debug logging every 5 seconds
-    if (g_frame_log_counter % (sound_output->game_update_hz * 5) == 0) {
+    if (g_frame_log_counter % (audio_config->game_update_hz * 5) == 0) {
       printf(
           "[AUDIO] buffered=%ld target=%d | wrote=%ld | delay=%ld avail=%ld\n",
           buffered_samples, min_buffer_samples, (long)frames_written,
@@ -902,117 +910,257 @@ void linux_fill_sound_buffer(GameSoundOutput *sound_output) {
 #endif
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// QUERY SAMPLES TO WRITE
+// ═══════════════════════════════════════════════════════════════════════════
+// Tells the game how many samples to generate this frame.
+//
+// Casey's approach (Day 20):
+// - Query ALSA delay (how much is buffered)
+// - Calculate target buffer level
+// - Return difference
+// ═══════════════════════════════════════════════════════════════════════════
+
+int32_t linux_get_samples_to_write(PlatformAudioConfig *audio_config,
+                                   GameAudioOutputBuffer *audio_output) {
+  if (!audio_config->is_initialized || !g_linux_audio_output.pcm_handle) {
+    return 0;
+  }
+
+  // Query ALSA state
+  snd_pcm_sframes_t delay = 0;
+  int err = SndPcmDelay(g_linux_audio_output.pcm_handle, &delay);
+  if (err < 0) {
+    SndPcmRecover(g_linux_audio_output.pcm_handle, err, 1);
+    delay = 0;
+  }
+
+  snd_pcm_sframes_t avail = SndPcmAvail(g_linux_audio_output.pcm_handle);
+  if (avail < 0) {
+    SndPcmRecover(g_linux_audio_output.pcm_handle, (int)avail, 1);
+    avail = SndPcmAvail(g_linux_audio_output.pcm_handle);
+    if (avail < 0)
+      avail = 0;
+  }
+
+  // Target: Keep 100ms of audio buffered
+  int32_t target_buffered = audio_output->samples_per_second / 10;
+
+  // Calculate how many samples to generate
+  int32_t samples_needed = target_buffered - (int32_t)delay;
+
+  // Clamp to available space
+  if (samples_needed > (int32_t)avail) {
+    samples_needed = (int32_t)avail;
+  }
+
+  // Clamp to reasonable range
+  if (samples_needed < 0) {
+    samples_needed = 0;
+  }
+
+  // Don't generate more than one frame's worth at a time
+  int32_t max_per_frame =
+      audio_output->samples_per_second / audio_config->game_update_hz;
+  max_per_frame *= 2; // Allow some headroom
+
+  if (samples_needed > max_per_frame) {
+    samples_needed = max_per_frame;
+  }
+
+  return samples_needed;
+}
+
 // Debug helper: Print current audio latency (Day 10)
-void linux_debug_audio_latency(GameSoundOutput *sound_output) {
-  if (!sound_output->is_initialized) {
+void linux_debug_audio_latency(
+    // GameAudioOutputBuffer *audio_output,
+    PlatformAudioConfig *audio_config
+    //  GameAudioState *game_audio_state
+) {
+  if (!audio_config->is_initialized) {
     printf("❌ Audio: Not initialized\n");
     return;
   }
 
   printf("┌─────────────────────────────────────────────────────────┐\n");
-  printf("│ 🔊 Audio Debug Info                                     │\n");
+  printf("│ 🔊 Audio Debug Info (Platform Layer)                   │\n");
   printf("├─────────────────────────────────────────────────────────┤\n");
 
-  // Check if Day 10 features available
-  if (!linux_audio_has_latency_measurement()) {
-    printf("│ ⚠️  Mode: Day 9 (Availability-Based)                    │\n");
-    printf("│                                                         │\n");
-    printf("│ snd_pcm_delay not available                             │\n");
-    printf("│ Latency measurement disabled                            │\n");
-    printf("│                                                         │\n");
-
-    long frames_available = SndPcmAvail(g_linux_sound_output.handle);
-
-    printf("│ Frames available: %ld                                   │\n",
-           frames_available);
-    printf("│ Sample rate:     %d Hz                                 │\n",
-           sound_output->samples_per_second);
-    printf("│ Frequency:       %d Hz                                 │\n",
-           sound_output->tone_hz);
-    printf("│ Volume:          %d / 15000                            │\n",
-           sound_output->tone_volume);
-    printf("│ Pan:             %+d (L=%d, R=%d)                      │\n",
-           sound_output->pan_position, 100 - sound_output->pan_position,
-           100 + sound_output->pan_position);
-    printf("└─────────────────────────────────────────────────────────┘\n");
-    return;
-  }
-
-  // Day 10 mode - full latency stats
-  printf("│ Mode: Day 10 (Latency-Aware)                          │\n");
-  printf("│                                                         │\n");
-
   snd_pcm_sframes_t delay_frames = 0;
-  int err = SndPcmDelay(g_linux_sound_output.handle, &delay_frames);
+  int err = SndPcmDelay(g_linux_audio_output.pcm_handle, &delay_frames);
 
   if (err < 0) {
-    printf("│ ❌ Can't measure delay: %s                              │\n",
-           SndStrerror(err));
-    printf("└─────────────────────────────────────────────────────────┘\n");
-    return;
-  }
-
-  long frames_available = SndPcmAvail(g_linux_sound_output.handle);
-
-  float actual_latency_ms =
-      (float)delay_frames / sound_output->samples_per_second * 1000.0f;
-  float target_latency_ms = (float)sound_output->latency_sample_count /
-                            sound_output->samples_per_second * 1000.0f;
-
-  printf("│ Target latency:  %.1f ms (%d frames)                 │\n",
-         target_latency_ms, sound_output->latency_sample_count);
-  printf("│ Actual latency:  %.1f ms (%ld frames)                │\n",
-         actual_latency_ms, (long)delay_frames);
-
-  // Color-code latency status
-  float latency_diff = actual_latency_ms - target_latency_ms;
-  if (fabs(latency_diff) < 5.0f) {
-    printf("│ Status:          GOOD (±%.1fms)                       │\n",
-           latency_diff);
-  } else if (fabs(latency_diff) < 10.0f) {
-    printf("│ Status:          ⚠️  OK (±%.1fms)                         │\n",
-           latency_diff);
+    printf("│ ❌ Can't measure delay: %s\n", SndStrerror(err));
   } else {
-    printf("│ Status:          ❌ BAD (±%.1fms)                         │\n",
-           latency_diff);
+    float latency_ms =
+        (float)delay_frames / audio_config->samples_per_second * 1000.0f;
+    printf("│ Latency:         %.1f ms (%ld frames)\n", latency_ms,
+           (long)delay_frames);
   }
 
-  printf("│                                                         │\n");
-  printf("│ Frames available: %ld                                   │\n",
-         frames_available);
-  printf("│ Sample rate:     %d Hz                                 │\n",
-         sound_output->samples_per_second);
-  printf("│ Frequency:       %d Hz                                 │\n",
-         sound_output->tone_hz);
-  printf("│ Volume:          %d / 15000                            │\n",
-         sound_output->tone_volume);
-  printf("│ Pan:             %+d (L=%d, R=%d)                      │\n",
-         sound_output->pan_position, 100 - sound_output->pan_position,
-         100 + sound_output->pan_position);
+  snd_pcm_sframes_t avail = SndPcmAvail(g_linux_audio_output.pcm_handle);
+  printf("│ Available:       %ld frames\n", (long)avail);
+  printf("│ Sample rate:     %d Hz\n", audio_config->samples_per_second);
+  printf("│ Running index:   %ld\n", (long)audio_config->running_sample_index);
+  printf("│ Game update Hz:  %d\n", audio_config->game_update_hz);
   printf("└─────────────────────────────────────────────────────────┘\n");
 }
 
-void linux_unload_alsa(GameSoundOutput *sound_output) {
+void linux_unload_alsa(GameAudioOutputBuffer *audio_output,
+                       PlatformAudioConfig *audio_config) {
   printf("Unloading ALSA audio...\n");
 
   // Free sample buffer
-  platform_free_memory(&g_linux_sound_output.sample_buffer);
+  platform_free_memory(&g_linux_audio_output.sample_buffer);
+  platform_free_memory(&audio_output->samples_block);
 
   // Close PCM device
-  if (g_linux_sound_output.handle) {
-    SndPcmClose(g_linux_sound_output.handle);
-    g_linux_sound_output.handle = NULL;
+  if (g_linux_audio_output.pcm_handle) {
+    SndPcmClose(g_linux_audio_output.pcm_handle);
+    g_linux_audio_output.pcm_handle = NULL;
   }
 
   // Unload ALSA library
-  if (g_linux_sound_output.alsa_library) {
-    dlclose(g_linux_sound_output.alsa_library);
-    g_linux_sound_output.alsa_library = NULL;
+  if (g_linux_audio_output.alsa_library) {
+    dlclose(g_linux_audio_output.alsa_library);
+    g_linux_audio_output.alsa_library = NULL;
   }
 
-  sound_output->is_initialized = false;
+  audio_config->is_initialized = false;
 
   printf("✅ ALSA audio unloaded.\n");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SEND SAMPLES TO ALSA (Platform just copies bytes - no generation!)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// This replaces your current linux_fill_audio_buffer().
+// The game has already generated the samples, we just send them.
+// ═══════════════════════════════════════════════════════════════════════════
+
+void linux_send_samples_to_alsa(PlatformAudioConfig *audio_config,
+                                GameAudioOutputBuffer *source) {
+  if (!g_linux_audio_output.pcm_handle || !audio_config->is_initialized) {
+    return;
+  }
+
+  if (!source->samples_block.is_valid || source->sample_count <= 0) {
+    return;
+  }
+
+#if HANDMADE_INTERNAL
+  // ═══════════════════════════════════════════════════════════════
+  // RECORD DEBUG STATE BEFORE WRITE (Day 20 pattern)
+  // ═══════════════════════════════════════════════════════════════
+  snd_pcm_sframes_t delay_frames = 0;
+  snd_pcm_sframes_t avail_frames = 0;
+
+  int delay_err = SndPcmDelay(g_linux_audio_output.pcm_handle, &delay_frames);
+  if (delay_err < 0) {
+    delay_frames = 0;
+  }
+
+  avail_frames = SndPcmAvail(g_linux_audio_output.pcm_handle);
+  if (avail_frames < 0) {
+    avail_frames = 0;
+  }
+
+  int32_t buffer_size = g_linux_audio_output.latency_sample_count;
+  int64_t running_sample_index = audio_config->running_sample_index;
+
+  // Calculate virtual cursors
+  int64_t play_cursor = running_sample_index - delay_frames;
+  if (play_cursor < 0)
+    play_cursor = 0;
+  int64_t write_cursor = running_sample_index;
+
+  // Calculate expected flip position
+  int32_t samples_per_frame =
+      audio_config->samples_per_second / audio_config->game_update_hz;
+  int64_t expected_flip_play_cursor = play_cursor + samples_per_frame;
+  int64_t safe_write_cursor = write_cursor + source->sample_count;
+#endif
+
+  // Write samples to ALSA
+  snd_pcm_sframes_t frames_written =
+      SndPcmWritei(g_linux_audio_output.pcm_handle, source->samples_block.base,
+                   source->sample_count);
+
+  if (frames_written < 0) {
+    if (frames_written == -EPIPE) {
+#if HANDMADE_INTERNAL
+      fprintf(stderr, "⚠️  ALSA underrun, recovering...\n");
+#endif
+      SndPcmPrepare(g_linux_audio_output.pcm_handle);
+      frames_written =
+          SndPcmWritei(g_linux_audio_output.pcm_handle,
+                       source->samples_block.base, source->sample_count);
+    } else {
+#if HANDMADE_INTERNAL
+      fprintf(stderr, "❌ ALSA write error: %ld\n", frames_written);
+#endif
+      SndPcmRecover(g_linux_audio_output.pcm_handle, (int)frames_written, 1);
+      frames_written = 0;
+    }
+  }
+
+  if (frames_written > 0) {
+    audio_config->running_sample_index += frames_written;
+  }
+
+#if HANDMADE_INTERNAL
+  // ═══════════════════════════════════════════════════════════════
+  // RECORD DEBUG MARKER (Day 20 pattern)
+  // ═══════════════════════════════════════════════════════════════
+  if (buffer_size > 0) {
+    if (g_debug_marker_index < 0 ||
+        g_debug_marker_index >= MAX_DEBUG_AUDIO_MARKERS) {
+      g_debug_marker_index = 0;
+    }
+
+    LinuxDebugAudioMarker *marker =
+        &g_debug_audio_markers[g_debug_marker_index];
+
+    marker->output_play_cursor = play_cursor % buffer_size;
+    marker->output_write_cursor = write_cursor % buffer_size;
+    marker->output_safe_write_cursor = safe_write_cursor % buffer_size;
+    marker->output_location = write_cursor % buffer_size;
+    marker->output_sample_count = frames_written > 0 ? frames_written : 0;
+    marker->expected_flip_play_cursor = expected_flip_play_cursor % buffer_size;
+    marker->output_delay_frames = delay_frames;
+    marker->output_avail_frames = avail_frames;
+  }
+#endif
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CLEAR SOUND BUFFER (Fill with silence)
+// ═══════════════════════════════════════════════════════════════════════════
+
+void linux_clear_audio_buffer(PlatformAudioConfig *audio_config) {
+  if (!g_linux_audio_output.pcm_handle || !audio_config->is_initialized) {
+    return;
+  }
+
+  // Calculate buffer size in frames
+  int frames =
+      audio_config->secondary_buffer_size / audio_config->bytes_per_sample;
+
+  // Allocate temporary silence buffer
+  PlatformMemoryBlock silence_block = platform_allocate_memory(
+      NULL, audio_config->secondary_buffer_size,
+      PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE | PLATFORM_MEMORY_ZEROED);
+
+  if (!platform_memory_is_valid(silence_block)) {
+    fprintf(stderr, "❌ Cannot allocate silence buffer: %s\n",
+            silence_block.error_message);
+    return;
+  }
+
+  // Write silence
+  SndPcmWritei(g_linux_audio_output.pcm_handle, silence_block.base, frames);
+  platform_free_memory(&silence_block);
 }
 
 #if HANDMADE_INTERNAL
@@ -1028,12 +1176,14 @@ void linux_unload_alsa(GameSoundOutput *sound_output) {
 //
 // ═══════════════════════════════════════════════════════════════
 
-void linux_debug_capture_flip_state(GameSoundOutput *sound_output) {
-  if (!sound_output->is_initialized || !g_linux_sound_output.handle) {
+void linux_debug_capture_flip_state(
+    // GameAudioOutputBuffer *audio_output,
+    PlatformAudioConfig *audio_config) {
+  if (!audio_config->is_initialized || !g_linux_audio_output.pcm_handle) {
     return;
   }
 
-  int32_t buffer_size = g_linux_sound_output.latency_sample_count;
+  int32_t buffer_size = g_linux_audio_output.latency_sample_count;
   if (buffer_size <= 0) {
     return;
   }
@@ -1048,18 +1198,18 @@ void linux_debug_capture_flip_state(GameSoundOutput *sound_output) {
   snd_pcm_sframes_t delay_frames = 0;
   snd_pcm_sframes_t avail_frames = 0;
 
-  int delay_err = SndPcmDelay(g_linux_sound_output.handle, &delay_frames);
+  int delay_err = SndPcmDelay(g_linux_audio_output.pcm_handle, &delay_frames);
   if (delay_err < 0) {
     delay_frames = 0;
   }
 
-  avail_frames = SndPcmAvail(g_linux_sound_output.handle);
+  avail_frames = SndPcmAvail(g_linux_audio_output.pcm_handle);
   if (avail_frames < 0) {
     avail_frames = 0;
   }
 
   // Calculate buffer-relative cursors
-  int64_t total_written = sound_output->running_sample_index;
+  int64_t total_written = audio_config->running_sample_index;
   int64_t flip_write_cursor = total_written % buffer_size;
   int64_t play_absolute = total_written - delay_frames;
   if (play_absolute < 0)
@@ -1131,13 +1281,13 @@ file_scoped_fn void linux_debug_draw_vertical(GameOffscreenBuffer *buffer,
 // ═══════════════════════════════════════════════════════════════
 
 file_scoped_fn void
-linux_draw_sound_buffer_marker(GameOffscreenBuffer *buffer,
-                               GameSoundOutput *sound_output,
+linux_draw_audio_buffer_marker(GameOffscreenBuffer *buffer,
+                               GameAudioOutputBuffer *audio_output,
                                real32 coefficient, int pad_x, int top,
                                int bottom, int64_t value, uint32_t color) {
-  (void)(sound_output);
+  (void)(audio_output);
 
-  int32_t buffer_size = g_linux_sound_output.latency_sample_count;
+  int32_t buffer_size = g_linux_audio_output.latency_sample_count;
 
   // ✅ SAFETY CHECK
   if (buffer_size <= 0) {
@@ -1185,10 +1335,11 @@ linux_draw_sound_buffer_marker(GameOffscreenBuffer *buffer,
 // ═══════════════════════════════════════════════════════════════
 
 void linux_debug_sync_display(GameOffscreenBuffer *buffer,
-                              GameSoundOutput *sound_output,
+                              GameAudioOutputBuffer *audio_output,
+                              PlatformAudioConfig *audio_config,
                               LinuxDebugAudioMarker *markers, int marker_count,
                               int current_marker_index) {
-  if (!sound_output->is_initialized) {
+  if (!audio_config->is_initialized) {
     return;
   }
 
@@ -1205,7 +1356,7 @@ void linux_debug_sync_display(GameOffscreenBuffer *buffer,
     current_marker_index = 0;
   }
 
-  int32_t buffer_size = g_linux_sound_output.latency_sample_count;
+  int32_t buffer_size = g_linux_audio_output.latency_sample_count;
   if (buffer_size <= 0) {
     return;
   }
@@ -1214,21 +1365,21 @@ void linux_debug_sync_display(GameOffscreenBuffer *buffer,
   if (FRAME_LOG_EVERY_ONE_SECONDS_CHECK) { // Every second
     printf("\n🎨 VISUALIZATION DEBUG:\n");
     printf("   Buffer size: %d samples\n",
-           g_linux_sound_output.latency_sample_count);
+           g_linux_audio_output.latency_sample_count);
 
     LinuxDebugAudioMarker *marker = &markers[current_marker_index];
     printf("   output_play_cursor:  %ld → offset %ld\n",
            marker->output_play_cursor,
            marker->output_play_cursor %
-               g_linux_sound_output.latency_sample_count);
+               g_linux_audio_output.latency_sample_count);
     printf("   output_write_cursor: %ld → offset %ld\n",
            marker->output_write_cursor,
            marker->output_write_cursor %
-               g_linux_sound_output.latency_sample_count);
+               g_linux_audio_output.latency_sample_count);
     printf("   flip_play_cursor:    %ld → offset %ld\n\n",
            marker->flip_play_cursor,
            marker->flip_play_cursor %
-               g_linux_sound_output.latency_sample_count);
+               g_linux_audio_output.latency_sample_count);
   }
 #endif
 
@@ -1366,17 +1517,17 @@ void linux_debug_sync_display(GameOffscreenBuffer *buffer,
       int first_top = top;
 
       // LINE 1: Output Cursors (at frame start)
-      linux_draw_sound_buffer_marker(
-          buffer, sound_output, coefficient, pad_x, top, bottom,
+      linux_draw_audio_buffer_marker(
+          buffer, audio_output, coefficient, pad_x, top, bottom,
           this_marker->output_play_cursor, play_color); // White
 
-      linux_draw_sound_buffer_marker(buffer, sound_output, coefficient, pad_x,
+      linux_draw_audio_buffer_marker(buffer, audio_output, coefficient, pad_x,
                                      top, bottom,
                                      this_marker->output_write_cursor,
                                      write_color); // Red (actual write cursor)
 
       // ✅ NEW: Draw safe write cursor in a different color
-      linux_draw_sound_buffer_marker(buffer, sound_output, coefficient, pad_x,
+      linux_draw_audio_buffer_marker(buffer, audio_output, coefficient, pad_x,
                                      top, bottom,
                                      this_marker->output_safe_write_cursor,
                                      0xFFFFFF00); // Yellow (safe cursor)
@@ -1385,11 +1536,11 @@ void linux_debug_sync_display(GameOffscreenBuffer *buffer,
       bottom += line_height + pad_y;
 
       // LINE 2: Write Region (what we wrote)
-      linux_draw_sound_buffer_marker(buffer, sound_output, coefficient, pad_x,
+      linux_draw_audio_buffer_marker(buffer, audio_output, coefficient, pad_x,
                                      top, bottom, this_marker->output_location,
                                      play_color);
-      linux_draw_sound_buffer_marker(
-          buffer, sound_output, coefficient, pad_x, top, bottom,
+      linux_draw_audio_buffer_marker(
+          buffer, audio_output, coefficient, pad_x, top, bottom,
           this_marker->output_location + this_marker->output_sample_count,
           write_color);
 
@@ -1398,8 +1549,8 @@ void linux_debug_sync_display(GameOffscreenBuffer *buffer,
 
       // LINE 3: Expected Flip Cursor (prediction)
       // This is a TALL line spanning all 3 lines above
-      linux_draw_sound_buffer_marker(
-          buffer, sound_output, coefficient, pad_x, first_top, bottom,
+      linux_draw_audio_buffer_marker(
+          buffer, audio_output, coefficient, pad_x, first_top, bottom,
           this_marker->expected_flip_play_cursor, expected_flip_color);
     }
 
@@ -1408,18 +1559,18 @@ void linux_debug_sync_display(GameOffscreenBuffer *buffer,
     // ═══════════════════════════════════════════════════════════
 
     // LINE 4: Actual cursors after flip
-    linux_draw_sound_buffer_marker(buffer, sound_output, coefficient, pad_x,
+    linux_draw_audio_buffer_marker(buffer, audio_output, coefficient, pad_x,
                                    top, bottom, this_marker->flip_play_cursor,
                                    play_color);
 
     // Play window (480-sample uncertainty)
     // ALSA equivalent: We use a fixed window size for consistency
     int32_t play_window_samples = 480; // Same as DirectSound
-    linux_draw_sound_buffer_marker(
-        buffer, sound_output, coefficient, pad_x, top, bottom,
+    linux_draw_audio_buffer_marker(
+        buffer, audio_output, coefficient, pad_x, top, bottom,
         this_marker->flip_play_cursor + play_window_samples, play_window_color);
 
-    linux_draw_sound_buffer_marker(buffer, sound_output, coefficient, pad_x,
+    linux_draw_audio_buffer_marker(buffer, audio_output, coefficient, pad_x,
                                    top, bottom, this_marker->flip_write_cursor,
                                    write_color);
   }

@@ -1,6 +1,7 @@
 #include "game.h"
-#include "../engine/_common/base.h"
+// #include "../engine/_common/base.h"
 #include "../engine/game/backbuffer.h"
+#include "../engine/game/game-loader.h"
 #include "../engine/game/input.h"
 #include <fcntl.h>
 #include <math.h>
@@ -28,7 +29,8 @@ controller_has_input(GameControllerInput *controller) {
           controller->move_right.ended_down);
 }
 
-void render_weird_gradient(GameOffscreenBuffer *buffer, GameState *game_state) {
+void render_weird_gradient(GameOffscreenBuffer *buffer,
+                           HandMadeHeroGameState *game_state) {
   uint8_t *row = (uint8_t *)buffer->memory.base;
 
   // The following is correct for X11
@@ -51,7 +53,8 @@ void render_weird_gradient(GameOffscreenBuffer *buffer, GameState *game_state) {
   }
 }
 
-void testPixelAnimation(GameOffscreenBuffer *buffer, GameState *game_state) {
+void testPixelAnimation(GameOffscreenBuffer *buffer,
+                        HandMadeHeroGameState *game_state) {
   // Test pixel animation
   uint32_t *pixels = (uint32_t *)buffer->memory.base;
   int total_pixels = buffer->width * buffer->height;
@@ -76,8 +79,8 @@ void testPixelAnimation(GameOffscreenBuffer *buffer, GameState *game_state) {
 }
 
 // Handle game controls
-void handle_controls(GameControllerInput *input, GameSoundOutput *sound_output,
-                     GameState *game_state) {
+void handle_controls(GameControllerInput *input,
+                     HandMadeHeroGameState *game_state) {
   if (input->is_analog) {
     // ═════════════════════════════════════════════════════════
     // ANALOG MOVEMENT (Joystick)
@@ -99,7 +102,7 @@ void handle_controls(GameControllerInput *input, GameSoundOutput *sound_output,
     // Vertical stick controls tone frequency
     // NOTE: `tone_hz` is moved to the game layer, but initilized by the
     // platform layer
-    sound_output->tone_hz = 256 + (int)(128.0f * y);
+    game_state->audio.tone.frequency = 256 + (int)(128.0f * y);
   } else {
     if (input->move_up.ended_down) {
       game_state->gradient_state.offset_y += game_state->speed;
@@ -116,20 +119,19 @@ void handle_controls(GameControllerInput *input, GameSoundOutput *sound_output,
   }
 
   // Clamp tone
-  if (sound_output->tone_hz < 20)
-    sound_output->tone_hz = 20;
-  if (sound_output->tone_hz > 2000)
-    sound_output->tone_hz = 2000;
+  if (game_state->audio.tone.frequency < 20)
+    game_state->audio.tone.frequency = 20;
+  if (game_state->audio.tone.frequency > 2000)
+    game_state->audio.tone.frequency = 2000;
 
-  // Update wave_period when tone_hz changes (prevent audio clicking)
-  sound_output->wave_period =
-      sound_output->samples_per_second / sound_output->tone_hz;
+  // // Update wave_period when tone_hz changes (prevent audio clicking)
+  // audio_output->wave_period =
+  //     audio_output->samples_per_second / game_state->audio.tone.frequency;
 }
 
-void game_update_and_render(GameMemory *memory, GameInput *input,
-                            GameOffscreenBuffer *buffer,
-                            GameSoundOutput *sound_buffer) {
-  GameState *game_state = (GameState *)memory->permanent_storage.base;
+GAME_UPDATE_AND_RENDER(game_update_and_render) {
+  HandMadeHeroGameState *game_state =
+      (HandMadeHeroGameState *)memory->permanent_storage.base;
 
   if (!memory->is_initialized) { // false (skip!)
                                  // Never runs again!
@@ -146,10 +148,18 @@ void game_update_and_render(GameMemory *memory, GameInput *input,
       printf("Wrote test.out\n");
     }
 #endif
+    // Initialize audio state
+    game_state->audio.tone.frequency = 256;
+    game_state->audio.tone.phase = 0.0f;
+    game_state->audio.tone.volume = 1.0f;
+    game_state->audio.tone.pan_position = 0.0f;
+    game_state->audio.tone.is_playing = true;
+    game_state->audio.master_volume = 1.0f;
 
     game_state->gradient_state = (GradientState){0};
     game_state->pixel_state = (PixelState){0};
     game_state->speed = 5;
+
     memory->is_initialized = true;
     return;
   }
@@ -209,9 +219,143 @@ void game_update_and_render(GameMemory *memory, GameInput *input,
   }
 #endif
 
-  handle_controls(active_controller, sound_buffer, game_state);
+  handle_controls(active_controller, game_state);
 
   render_weird_gradient(buffer, game_state);
 
   testPixelAnimation(buffer, game_state);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GAME GET SOUND SAMPLES - Click-Free Version
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// KEY INSIGHT: The phase accumulator must be CONTINUOUS across all calls.
+// Each call picks up exactly where the last one left off.
+//
+// Click causes:
+// 1. Phase discontinuity (jumping to wrong point in wave)
+// 2. Frequency changes mid-buffer (wave period changes)
+// 3. Volume changes mid-buffer (amplitude jumps)
+//
+// This implementation ensures smooth, continuous audio.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GAME GET SOUND SAMPLES
+// ═══════════════════════════════════════════════════════════════════════════
+// This is the ONLY place audio samples are generated!
+// Platform tells us how many samples to generate, we fill the buffer.
+//
+// KEY REQUIREMENTS:
+// 1. Phase must be CONTINUOUS across calls (stored in game_state)
+// 2. Volume changes should be gradual (future: implement ramping)
+// 3. Frequency changes should be gradual (future: implement smoothing)
+// ═══════════════════════════════════════════════════════════════════════════
+
+GAME_GET_SOUND_SAMPLES(game_get_audio_samples) {
+  HandMadeHeroGameState *game_state =
+      (HandMadeHeroGameState *)memory->permanent_storage.base;
+
+  // SAFETY: If game not initialized yet, output silence
+  if (!memory->is_initialized) {
+    int16_t *sample_out = (int16_t *)sound_buffer->samples_block.base;
+    for (int i = 0; i < sound_buffer->sample_count; ++i) {
+      *sample_out++ = 0; // Left
+      *sample_out++ = 0; // Right
+    }
+    return;
+  }
+
+  // DEBUG: Check for phase discontinuities
+#if HANDMADE_INTERNAL
+  static real32 last_phase = 0.0f;
+  static int call_count = 0;
+  call_count++;
+
+  if (call_count % 100 == 0) {
+    real32 phase_diff = game_state->audio.tone.phase - last_phase;
+    if (phase_diff < 0)
+      phase_diff += 2.0f * M_PI; // Handle wrap
+    printf("[AUDIO DIAG] call=%d, phase=%.3f, diff=%.3f, samples=%d\n",
+           call_count, game_state->audio.tone.phase, phase_diff,
+           sound_buffer->sample_count);
+  }
+  last_phase = game_state->audio.tone.phase;
+#endif
+
+  // ═══════════════════════════════════════════════════════════════
+  // DEBUG: Log audio state periodically
+  // ═══════════════════════════════════════════════════════════════
+#if HANDMADE_INTERNAL
+  static int audio_debug_counter = 0;
+  if (++audio_debug_counter % 100 == 1) { // Every ~3 seconds at 30Hz
+    SoundSource *tone = &game_state->audio.tone;
+    printf("[AUDIO DEBUG] is_playing=%d, freq=%.1f, vol=%.2f, phase=%.2f, "
+           "samples=%d\n",
+           tone->is_playing, tone->frequency, tone->volume, tone->phase,
+           sound_buffer->sample_count);
+  }
+#endif
+
+  // Get audio state
+  SoundSource *tone = &game_state->audio.tone;
+  real32 master_volume = game_state->audio.master_volume;
+
+  // Safety check: if not initialized, output silence
+  if (!tone->is_playing || tone->frequency <= 0.0f) {
+    int16_t *sample_out = (int16_t *)sound_buffer->samples_block.base;
+    for (int sample_index = 0; sample_index < sound_buffer->sample_count;
+         ++sample_index) {
+      *sample_out++ = 0; // Left
+      *sample_out++ = 0; // Right
+    }
+    return;
+  }
+
+  // Calculate wave period
+  real32 wave_period =
+      (real32)sound_buffer->samples_per_second / tone->frequency;
+
+  // Clamp volume
+  if (master_volume < 0.0f)
+    master_volume = 0.0f;
+  if (master_volume > 1.0f)
+    master_volume = 1.0f;
+  if (tone->volume < 0.0f)
+    tone->volume = 0.0f;
+  if (tone->volume > 1.0f)
+    tone->volume = 1.0f;
+
+  // Volume in 16-bit range
+  int16_t sample_volume = (int16_t)(tone->volume * master_volume * 16000.0f);
+
+  // Calculate pan volumes
+  real32 left_volume =
+      (tone->pan_position <= 0.0f) ? 1.0f : (1.0f - tone->pan_position);
+  real32 right_volume =
+      (tone->pan_position >= 0.0f) ? 1.0f : (1.0f + tone->pan_position);
+
+  int16_t *sample_out = (int16_t *)sound_buffer->samples_block.base;
+
+  for (int sample_index = 0; sample_index < sound_buffer->sample_count;
+       ++sample_index) {
+    real32 sine_value = sinf(tone->phase);
+    int16_t sample_value = (int16_t)(sine_value * sample_volume);
+
+    // Apply panning
+    int16_t left_sample = (int16_t)(sample_value * left_volume);
+    int16_t right_sample = (int16_t)(sample_value * right_volume);
+
+    *sample_out++ = left_sample;
+    *sample_out++ = right_sample;
+
+    // Advance phase
+    tone->phase += 2.0f * M_PI / wave_period;
+
+    // Wrap phase to prevent floating point precision issues
+    if (tone->phase > 2.0f * M_PI) {
+      tone->phase -= 2.0f * M_PI;
+    }
+  }
 }

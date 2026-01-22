@@ -80,13 +80,18 @@ if [ "$BUILD_MODE" = "all" ] || [ "$BUILD_MODE" = "platform" ]; then
     fi
     
     # Common platform sources
-    # PLATFORM_SRC="src/main.c src/_common/backbuffer.c src/_common/debug.c src/_common/input.c src/_common/memory.c src/_common/debug-file-io.c"
-    PLATFORM_SRC="../engine/main.c"
+    PLATFORM_SRC="$PLATFORM_SRC ../engine/main.c"
+
     PLATFORM_SRC="$PLATFORM_SRC ../engine/_common/debug.c"
     PLATFORM_SRC="$PLATFORM_SRC ../engine/_common/debug-file-io.c"
+    PLATFORM_SRC="$PLATFORM_SRC ../engine/_common/dll.c"
+    PLATFORM_SRC="$PLATFORM_SRC ../engine/_common/file.c"
     PLATFORM_SRC="$PLATFORM_SRC ../engine/_common/memory.c"
+
+    PLATFORM_SRC="$PLATFORM_SRC ../engine/game/audio.c"
     PLATFORM_SRC="$PLATFORM_SRC ../engine/game/backbuffer.c"
     PLATFORM_SRC="$PLATFORM_SRC ../engine/game/base.c"
+    PLATFORM_SRC="$PLATFORM_SRC ../engine/game/game-loader.c"
     PLATFORM_SRC="$PLATFORM_SRC ../engine/game/input.c"
     PLATFORM_SRC="$PLATFORM_SRC ../engine/game/memory.c"
 

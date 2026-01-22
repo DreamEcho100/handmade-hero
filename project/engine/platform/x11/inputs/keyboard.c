@@ -1,3 +1,4 @@
+#include "keyboard.h"
 #include "../../../game/base.h"
 #include "../../../game/input.h"
 #include "../audio.h"
@@ -6,7 +7,7 @@
 #include <stdio.h>
 
 void handleEventKeyPress(XEvent *event, GameInput *new_game_input,
-                         GameSoundOutput *sound_output) {
+                         PlatformAudioConfig *platform_audio_config) {
   KeySym key = XLookupKeysym(&event->xkey, 0);
   // printf("pressed\n");
 
@@ -83,7 +84,7 @@ void handleEventKeyPress(XEvent *event, GameInput *new_game_input,
 
   case XK_F1: {
     printf("F1 pressed - showing audio debug\n");
-    linux_debug_audio_latency(sound_output);
+    linux_debug_audio_latency(platform_audio_config);
     break;
   }
   // ← ADD THIS: Pause key (P key)

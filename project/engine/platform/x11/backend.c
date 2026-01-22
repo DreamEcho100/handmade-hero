@@ -2,9 +2,18 @@
   199309L // Enable POSIX functions like nanosleep, clock_gettime
 
 #include "backend.h"
+
+#include "../../_common/base.h"
+#include "../../game/backbuffer.h"
+#include "../../game/base.h"
+#include "../../game/game-loader.h"
+#include "../../game/input.h"
+#include "../../game/memory.h"
+#include "../_common/audio.h"
 #include "audio.h"
 #include "inputs/joystick.h"
 #include "inputs/keyboard.h"
+
 #include <GL/gl.h>
 #include <GL/glx.h>
 #include <X11/X.h>
@@ -20,11 +29,6 @@
 #include <time.h>
 #include <unistd.h>
 #include <x86intrin.h> // For __rdtsc() CPU cycle counter
-
-#include "../../_common/base.h"
-#include "../../game/backbuffer.h"
-#include "../../game/base.h"
-#include "../../game/input.h"
 
 #if HANDMADE_INTERNAL
 #include "../../_common/debug.h"
@@ -245,10 +249,10 @@ static inline real64 get_wall_clock() {
 // Processes X11 window events (resize, close, keyboard, etc.)
 // Like addEventListener() in JavaScript
 // ═══════════════════════════════════════════════════════════════
-inline file_scoped_fn void handle_event(GameOffscreenBuffer *backbuffer,
-                                        Display *display, XEvent *event,
-                                        GameSoundOutput *sound_output,
-                                        GameInput *new_game_input) {
+inline file_scoped_fn void
+handle_event(GameOffscreenBuffer *backbuffer, Display *display, XEvent *event,
+             GameInput *new_game_input,
+             PlatformAudioConfig *platform_audio_config) {
   switch (event->type) {
 
   case ConfigureNotify: {
@@ -300,7 +304,7 @@ inline file_scoped_fn void handle_event(GameOffscreenBuffer *backbuffer,
   }
 
   case KeyPress: {
-    handleEventKeyPress(event, new_game_input, sound_output);
+    handleEventKeyPress(event, new_game_input, platform_audio_config);
     break;
   }
 
@@ -337,17 +341,20 @@ int platform_main() {
 #endif
 
   uint64_t permanent_storage_size = MEGABYTES(64);
-  uint64_t transient_storage_size = GIGABYTES(4);
+  uint64_t transient_storage_size = GIGABYTES(1);
 
   printf("[%.3fs] Allocating permanent storage (%lu MB)...\n",
          get_wall_clock() - t_start, permanent_storage_size / (1024 * 1024));
 
-  PlatformMemoryBlock permanent_storage =
-      platform_allocate_memory(base_address, permanent_storage_size,
-                               PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE);
+  PlatformMemoryBlock permanent_storage = platform_allocate_memory(
+      base_address, permanent_storage_size,
+      PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE | PLATFORM_MEMORY_ZEROED);
 
-  if (!permanent_storage.base) {
+  if (!platform_memory_is_valid(permanent_storage)) {
     fprintf(stderr, "❌ Could not allocate permanent storage\n");
+    fprintf(stderr, "   Error: %s\n", permanent_storage.error_message);
+    fprintf(stderr, "   Code: %s\n",
+            platform_memory_strerror(permanent_storage.error_code));
     return 1;
   }
 
@@ -359,13 +366,15 @@ int platform_main() {
   void *transient_base =
       (uint8_t *)permanent_storage.base + permanent_storage.size;
 
-  PlatformMemoryBlock transient_storage =
-      platform_allocate_memory(transient_base, transient_storage_size,
-                               PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE);
+  PlatformMemoryBlock transient_storage = platform_allocate_memory(
+      transient_base, transient_storage_size,
+      PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE | PLATFORM_MEMORY_ZEROED);
 
-  if (!transient_storage.base) {
+  if (!platform_memory_is_valid(transient_storage)) {
     fprintf(stderr, "❌ Could not allocate transient storage\n");
-    platform_free_memory(&permanent_storage);
+    fprintf(stderr, "   Error: %s\n", transient_storage.error_message);
+    fprintf(stderr, "   Code: %s\n",
+            platform_memory_strerror(transient_storage.error_code));
     return 1;
   }
 
@@ -395,7 +404,6 @@ int platform_main() {
   GameInput *new_game_input = &game_inputs[0];
   GameInput *old_game_input = &game_inputs[1];
 
-  GameSoundOutput game_sound_output = {0};
   GameOffscreenBuffer game_buffer = {0};
 
   // ═══════════════════════════════════════════════════════════════
@@ -485,12 +493,17 @@ int platform_main() {
   printf("Miss threshold:  %.1f%%\n", adaptive.miss_threshold * 100.0f);
   printf("═══════════════════════════════════════════════════════════\n\n");
 
+  GameAudioOutputBuffer game_audio_output = {0};
+  PlatformAudioConfig platform_audio_config = {0};
   int samples_per_second = 48000;
   int bytes_per_sample = sizeof(int16_t) * 2; // 16-bit stereo
   int secondary_buffer_size = samples_per_second * bytes_per_sample;
   int audio_update_hz = 30; // Fixed audio/game logic rate
-  linux_init_sound(&game_sound_output, samples_per_second,
-                   secondary_buffer_size, audio_update_hz);
+  game_audio_output.samples_per_second = samples_per_second;
+  platform_audio_config.bytes_per_sample = bytes_per_sample;
+  platform_audio_config.secondary_buffer_size = secondary_buffer_size;
+  linux_init_audio(&game_audio_output, &platform_audio_config,
+                   samples_per_second, secondary_buffer_size, audio_update_hz);
 
   // Enable window close button
   Atom wmDelete = XInternAtom(display, "WM_DELETE_WINDOW", False);
@@ -522,12 +535,51 @@ int platform_main() {
 
   int buffer_size = width * height * 4;
   game_buffer.memory = platform_allocate_memory(
-      NULL, buffer_size, PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE);
+      NULL, buffer_size,
+      PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE | PLATFORM_MEMORY_ZEROED);
   game_buffer.width = width;
   game_buffer.height = height;
   game_buffer.pitch = width * 4;
 
   printf("Entering main loop...\n");
+
+  // ─────────────────────────────────────────────────────────────────────
+  // ALLOCATE SOUND SAMPLE BUFFER
+  // ─────────────────────────────────────────────────────────────────────
+  // This is where the game writes audio samples.
+  // Platform owns this buffer, game fills it.
+
+  int max_samples_per_frame =
+      game_audio_output.samples_per_second / 30; // Worst case: 30fps
+  int sample_buffer_size =
+      max_samples_per_frame * platform_audio_config.bytes_per_sample;
+
+  // TODO: handle `platform_allocate_memory` error correctly
+  PlatformMemoryBlock sound_samples_block = platform_allocate_memory(
+      NULL, sample_buffer_size,
+      PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE | PLATFORM_MEMORY_ZEROED);
+
+  if (!platform_memory_is_valid(sound_samples_block)) {
+    fprintf(stderr, "❌ Failed to allocate sound sample buffer\n");
+    fprintf(stderr, "   Error: %s\n", sound_samples_block.error_message);
+    fprintf(stderr, "   Code: %s\n",
+            platform_memory_strerror(sound_samples_block.error_code));
+    return 1;
+  }
+
+  printf("✅ Sound sample buffer allocated: %d bytes\n", sample_buffer_size);
+
+  // ─────────────────────────────────────────────────────────────────────
+  // LOAD GAME CODE
+  // ─────────────────────────────────────────────────────────────────────
+
+  char *game_so_path = "build/libgame.so";
+  char *game_temp_so_path = "build/libgame_temp.so";
+
+  GameCode game = load_game_code(game_so_path, game_temp_so_path);
+
+  // uint32_t reload_check_counter = 0;
+  // const uint32_t RELOAD_CHECK_INTERVAL = 120;
 
   // ═══════════════════════════════════════════════════════════════
   // 🔄 MAIN GAME LOOP (Casey's Day 8+ pattern)
@@ -546,15 +598,15 @@ int platform_main() {
         // DEBUG: Track RSI changes in main loop
         static int64_t loop_last_rsi = 0;
 
-        if (game_sound_output.running_sample_index != loop_last_rsi) {
+        if (platform_audio_config.running_sample_index != loop_last_rsi) {
           // Only print first 10 frames for debugging
           if (g_frame_log_counter <= 10) {
-            printf(
-                "[LOOP #%d] RSI=%ld (changed by %ld)\n", g_frame_log_counter,
-                (long)game_sound_output.running_sample_index,
-                (long)(game_sound_output.running_sample_index - loop_last_rsi));
+            printf("[LOOP #%d] RSI=%ld (changed by %ld)\n", g_frame_log_counter,
+                   (long)platform_audio_config.running_sample_index,
+                   (long)(platform_audio_config.running_sample_index -
+                          loop_last_rsi));
           }
-          loop_last_rsi = game_sound_output.running_sample_index;
+          loop_last_rsi = platform_audio_config.running_sample_index;
         }
       }
 #endif
@@ -569,16 +621,6 @@ int platform_main() {
       prepare_input_frame(old_game_input, new_game_input);
 
       // ─────────────────────────────────────────────────────────────
-      // PROCESS X11 EVENTS
-      // ─────────────────────────────────────────────────────────────
-      XEvent event;
-      while (XPending(display) > 0) {
-        XNextEvent(display, &event);
-        handle_event(&game_buffer, display, &event, &game_sound_output,
-                     new_game_input);
-      }
-
-      // ─────────────────────────────────────────────────────────────
       // POLL JOYSTICK
       // ─────────────────────────────────────────────────────────────
       linux_poll_joystick(new_game_input);
@@ -587,16 +629,42 @@ int platform_main() {
       // UPDATE GAME + RENDER (Skip if window inactive or game paused)
       // ─────────────────────────────────────────────────────────────
       if (g_window_is_active && !g_game_is_paused) {
-        // ═══════════════════════════════════════════════════════════
-        // ONLY RUN WHEN NOT PAUSED
-        // ═══════════════════════════════════════════════════════════
-
         // Step 1: Update game logic and render graphics
-        game_update_and_render(&game_memory, new_game_input, &game_buffer,
-                               &game_sound_output);
+        game.update_and_render(&game_memory, new_game_input, &game_buffer);
 
-        // Step 2: Fill audio buffer (captures Output* debug state)
-        linux_fill_sound_buffer(&game_sound_output);
+        // Step 2: Generate audio based on ALSA's needs
+        // Query how much audio the platform needs
+        int32_t samples_to_generate = linux_get_samples_to_write(
+            &platform_audio_config, &game_audio_output);
+
+        if (samples_to_generate > 0) {
+          GameAudioOutputBuffer sound_buffer = {
+              .samples_per_second = game_audio_output.samples_per_second,
+              .sample_count = samples_to_generate,
+              .samples_block = sound_samples_block};
+
+          // Game generates the samples
+          game.get_audio_samples(&game_memory, &sound_buffer);
+
+          // Platform sends to ALSA
+          linux_send_samples_to_alsa(&platform_audio_config, &sound_buffer);
+        }
+
+        // ─────────────────────────────────────────────────────────────
+        // PROCESS X11 EVENTS
+        // ─────────────────────────────────────────────────────────────
+        XEvent event;
+        while (XPending(display) > 0) {
+          XNextEvent(display, &event);
+          // GameAudioState game_audio_state =
+          //     (GameState)(game_memory.permanent_storage.base);
+          handle_event(&game_buffer, display, &event, new_game_input,
+                       &platform_audio_config
+                       // Where to store and get `game_audio_state`?
+                       // I mean it should be initilized inside the game render
+                       // first time but how to access it?
+          );
+        }
 
       } else if (!g_window_is_active || g_game_is_paused) {
         // Window in background or paused: sleep to save CPU
@@ -613,9 +681,9 @@ int platform_main() {
       int display_marker_index =
           (g_debug_marker_index - 1 + MAX_DEBUG_AUDIO_MARKERS) %
           MAX_DEBUG_AUDIO_MARKERS;
-      linux_debug_sync_display(&game_buffer, &game_sound_output,
-                               g_debug_audio_markers, MAX_DEBUG_AUDIO_MARKERS,
-                               display_marker_index);
+      linux_debug_sync_display(&game_buffer, &game_audio_output,
+                               &platform_audio_config, g_debug_audio_markers,
+                               MAX_DEBUG_AUDIO_MARKERS, display_marker_index);
 #endif
 
       // ─────────────────────────────────────────────────────────────
@@ -628,7 +696,7 @@ int platform_main() {
       // ═══════════════════════════════════════════════════════════════
       // CAPTURE FLIP STATE (after display)
       // ═══════════════════════════════════════════════════════════════
-      linux_debug_capture_flip_state(&game_sound_output);
+      linux_debug_capture_flip_state(&platform_audio_config);
 #endif
 
       // ─────────────────────────────────────────────────────────────
@@ -979,7 +1047,7 @@ int platform_main() {
   printf("[%.3fs] Exiting, freeing memory...\n", get_wall_clock() - t_start);
 
   linux_close_joysticks();
-  linux_unload_alsa(&game_sound_output);
+  linux_unload_alsa(&game_audio_output, &platform_audio_config);
 
   if (game_buffer.memory.base) {
     platform_free_memory(&game_buffer.memory);

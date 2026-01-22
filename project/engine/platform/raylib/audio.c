@@ -1,223 +1,426 @@
 #include "audio.h"
 
-#include <math.h>
+#include <raylib.h>
 #include <stdio.h>
+#include <string.h>
 
-#ifndef M_PI_DOUBLED
-#define M_PI_DOUBLED (2.f * M_PI)
-#endif // M_PI_DOUBLED
+#if HANDMADE_INTERNAL
+#include "../../_common/debug.h"
+#endif
 
-// ═══════════════════════════════════════════════════════════════
-// 🔊 AUDIO STATE (Day 7-9)
-// ═══════════════════════════════════════════════════════════════
-// This mirrors your LinuxSoundOutput but simplified for Raylib
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
+// 🔊 GLOBAL STATE
+// ═══════════════════════════════════════════════════════════════════════════
 
-RaylibSoundOutput g_linux_sound_output = {0};
+RaylibSoundOutput g_raylib_audio_output = {0};
 
-GameSoundOutput *temp_sound_output = NULL;
-
-// ═══════════════════════════════════════════════════════════════
-// 🔊 AUDIO CALLBACK (Raylib's equivalent of linux_fill_sound_buffer)
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
+// 🔊 INITIALIZE AUDIO SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════
 //
-// Raylib calls this function AUTOMATICALLY when it needs audio data.
-// This is cleaner than ALSA's manual SndPcmWritei() every frame!
+// KEY INSIGHT: Raylib audio is fundamentally different from ALSA!
 //
-// Parameters:
-//   backbuffer - Pointer to audio backbuffer to fill
-//   frames - Number of stereo frames to generate
+// ALSA Model (X11 backend):
+//   - Continuous ring buffer with play/write cursors
+//   - You calculate how much to write based on cursor positions
+//   - Write whenever you want, as long as you don't overrun
 //
-// ═══════════════════════════════════════════════════════════════
-void raylib_audio_callback(void *backbuffer, unsigned int frames) {
-  if (!temp_sound_output || !temp_sound_output->is_initialized) {
-    return;
-  }
-
-  int16_t *sample_out = (int16_t *)backbuffer;
-
-  for (unsigned int i = 0; i < frames; ++i) {
-    // ═══════════════════════════════════════════════════════════
-    // Day 9: Generate sine wave sample
-    // ═══════════════════════════════════════════════════════════
-    // Casey's exact formula:
-    //   SineValue = sinf(tSine);
-    //   SampleValue = (int16)(SineValue * ToneVolume);
-    //   tSine += 2π / WavePeriod;
-    // ═══════════════════════════════════════════════════════════
-
-    real32 sine_value = sinf(temp_sound_output->t_sine);
-    int16_t sample_value =
-        (int16_t)(sine_value * temp_sound_output->tone_volume);
-
-    // Apply panning (your extension from X11 version)
-    int left_gain = (100 - temp_sound_output->pan_position);  // 0 to 200
-    int right_gain = (100 + temp_sound_output->pan_position); // 0 to 200
-
-    *sample_out++ = (sample_value * left_gain) / 200;  // Left channel
-    *sample_out++ = (sample_value * right_gain) / 200; // Right channel
-
-    // Increment phase accumulator (Day 9)
-    temp_sound_output->t_sine +=
-        (2.0f * M_PI * 1.0f) / (real32)temp_sound_output->wave_period;
-
-    // Wrap to [0, 2π) range to prevent overflow
-    if (temp_sound_output->t_sine >= 2.0f * M_PI) {
-      temp_sound_output->t_sine -= 2.0f * M_PI;
-    }
-
-    temp_sound_output->running_sample_index++;
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════
-// 🔊 INITIALIZE AUDIO SYSTEM (Day 7-9)
-// ═══════════════════════════════════════════════════════════════
+// Raylib Model:
+//   - Double-buffered internally
+//   - IsAudioStreamProcessed() returns true when a buffer is consumed
+//   - You write EXACTLY buffer_size_frames samples when called
+//   - If you try to write when buffer is full, it's rejected
 //
-// Raylib equivalent of:
-//   linux_load_alsa()      → InitAudioDevice()
-//   linux_init_sound()     → LoadAudioStream() + SetAudioStreamCallback()
-//
-// This is MUCH simpler than ALSA because Raylib handles:
-// - Device detection
-// - Format negotiation
-// - Buffer management
-// - Error recovery
-//
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
+bool raylib_init_audio(GameAudioOutputBuffer *audio_output,
+                       PlatformAudioConfig *audio_config,
+                       int32_t samples_per_second, int32_t buffer_size_frames,
+                       int32_t game_update_hz) {
+  (void)(buffer_size_frames);
 
-void raylib_init_audio(GameSoundOutput *sound_output) {
-  printf("🔊 Initializing audio system...\n");
+  printf("═══════════════════════════════════════════════════════════\n");
+  printf("🔊 RAYLIB AUDIO INITIALIZATION\n");
+  printf("═══════════════════════════════════════════════════════════\n");
 
-  // ═══════════════════════════════════════════════════════════
-  // Step 1: Initialize audio device (Casey's DirectSoundCreate)
-  // ═══════════════════════════════════════════════════════════
+  // ─────────────────────────────────────────────────────────────────────
+  // STEP 1: Initialize Raylib audio device
+  // ─────────────────────────────────────────────────────────────────────
   InitAudioDevice();
 
   if (!IsAudioDeviceReady()) {
-    fprintf(stderr, "❌ Audio: Device initialization failed\n");
-    fprintf(stderr, "   Game will run without sound\n");
-    sound_output->is_initialized = false;
-    return;
+    fprintf(stderr, "❌ Audio: Failed to initialize audio device\n");
+    audio_config->is_initialized = false;
+    return false;
   }
 
   printf("✅ Audio: Device initialized\n");
 
-  // ═══════════════════════════════════════════════════════════
-  // Step 2: Set audio parameters (Day 7-9)
-  // ═══════════════════════════════════════════════════════════
-  sound_output->samples_per_second = 24000;
-  sound_output->bytes_per_sample = sizeof(int16_t) * 2; // 16-bit stereo
+  // ─────────────────────────────────────────────────────────────────────
+  // STEP 2: Calculate proper buffer size
+  // ─────────────────────────────────────────────────────────────────────
+  // For 60 FPS: we need ~800 samples per frame (48000/60)
+  // For smooth audio, buffer should be ~2-3 frames worth
+  // But not too big or latency increases
+  // ─────────────────────────────────────────────────────────────────────
 
-  // Day 8: Sound generation parameters
-  sound_output->running_sample_index = 0;
-  sound_output->tone_hz = 256;      // Middle C-ish
-  sound_output->tone_volume = 6000; // Casey's Day 8 value
-  sound_output->wave_period =
-      sound_output->samples_per_second / sound_output->tone_hz;
+  int32_t samples_per_frame = samples_per_second / game_update_hz;
 
-  // Day 9: Sine wave phase accumulator
-  sound_output->t_sine = 0.0f;
+  // Use 2 frames worth as buffer size for low latency
+  // This means we'll get IsAudioStreamProcessed() every ~2 frames
+  int32_t actual_buffer_size = samples_per_frame * 2;
 
-  // Day 9: Latency (1/15 second like Casey)
-  sound_output->latency_sample_count = sound_output->samples_per_second / 15;
+  // Clamp to reasonable range
+  if (actual_buffer_size < 512)
+    actual_buffer_size = 512;
+  if (actual_buffer_size > 4096)
+    actual_buffer_size = 4096;
 
-  sound_output->pan_position = 0; // Center
+  printf("[AUDIO] Samples per frame: %d (at %d Hz game logic)\n",
+         samples_per_frame, game_update_hz);
+  printf("[AUDIO] Buffer size: %d samples (%.1f ms, ~%.1f frames)\n",
+         actual_buffer_size,
+         (float)actual_buffer_size / samples_per_second * 1000.0f,
+         (float)actual_buffer_size / samples_per_frame);
 
-  // ═══════════════════════════════════════════════════════════
-  // Step 3: Create audio stream (Casey's secondary backbuffer)
-  // ═══════════════════════════════════════════════════════════
-  //
-  // LoadAudioStream parameters:
-  //   - sampleRate:    48000 Hz (CD quality is 44100)
-  //   - sampleSize:    16 bits per sample
-  //   - channels:      2 (stereo)
-  //
-  // Raylib creates a ring backbuffer internally (like DirectSound)
-  // ═══════════════════════════════════════════════════════════
+  // ─────────────────────────────────────────────────────────────────────
+  // STEP 3: Configure platform audio config
+  // ─────────────────────────────────────────────────────────────────────
+  audio_config->samples_per_second = samples_per_second;
+  audio_config->bytes_per_sample = sizeof(int16_t) * 2; // 16-bit stereo
+  audio_config->running_sample_index = 0;
+  audio_config->game_update_hz = game_update_hz;
+  audio_config->latency_sample_count = actual_buffer_size;
 
-  g_linux_sound_output.stream =
-      LoadAudioStream(sound_output->samples_per_second, // 48000 Hz
-                      16,                               // 16-bit samples
-                      2                                 // Stereo
+  // Safety margin: 1/3 of a frame (same as Casey's SafetyBytes)
+  audio_config->safety_sample_count = samples_per_frame / 3;
+
+  // Target buffer: 2 frames of audio (provides good latency cushion)
+  int32_t target_buffer_samples = samples_per_frame * 2;
+  audio_config->secondary_buffer_size =
+      target_buffer_samples * audio_config->bytes_per_sample;
+
+  // ─────────────────────────────────────────────────────────────────────
+  // STEP 4: Set buffer size BEFORE creating stream
+  // ─────────────────────────────────────────────────────────────────────
+  SetAudioStreamBufferSizeDefault(actual_buffer_size);
+
+  // ─────────────────────────────────────────────────────────────────────
+  // STEP 5: Create audio stream
+  // ─────────────────────────────────────────────────────────────────────
+  g_raylib_audio_output.stream =
+      LoadAudioStream(samples_per_second, // Sample rate
+                      16,                 // Bits per sample
+                      2                   // Channels (stereo)
       );
 
-  // ═══════════════════════════════════════════════════════════
-  // Step 4: Set backbuffer size (Casey's latency calculation)
-  // ═══════════════════════════════════════════════════════════
-  // 4096 frames = ~85ms at 48kHz (similar to Casey's 1/15 sec)
-  SetAudioStreamBufferSizeDefault(4096);
+  if (!IsAudioStreamValid(g_raylib_audio_output.stream)) {
+    fprintf(stderr, "❌ Audio: Failed to create audio stream\n");
+    CloseAudioDevice();
+    audio_config->is_initialized = false;
+    return false;
+  }
 
-  // ═══════════════════════════════════════════════════════════
-  // Step 5: Attach callback (automatic audio generation!)
-  // ═══════════════════════════════════════════════════════════
-  // Raylib will call raylib_audio_callback() when backbuffer needs data
-  // This replaces your manual linux_fill_sound_buffer() call
-  temp_sound_output = sound_output;
-  SetAudioStreamCallback(g_linux_sound_output.stream, raylib_audio_callback);
+  g_raylib_audio_output.stream_valid = true;
+  // g_raylib_audio_output.buffer_size_frames = actual_buffer_size;
+  g_raylib_audio_output.buffer_size_frames = samples_per_frame * 2;
 
-  // ═══════════════════════════════════════════════════════════
-  // Step 6: Start playback (Casey's IDirectSoundBuffer->Play())
-  // ═══════════════════════════════════════════════════════════
-  PlayAudioStream(g_linux_sound_output.stream);
+  printf("✅ Audio: Stream created (%d Hz, 16-bit stereo)\n",
+         samples_per_second);
+  printf("[AUDIO] Stream buffer size: %d frames (%.1f ms)\n",
+         g_raylib_audio_output.buffer_size_frames,
+         (float)g_raylib_audio_output.buffer_size_frames / samples_per_second *
+             1000.0f);
 
-  sound_output->is_initialized = true;
+  // Create audio stream with this buffer size
+  g_raylib_audio_output.stream = LoadAudioStream(samples_per_second,
+                                                 16, // 16-bit
+                                                 2   // stereo
+  );
 
-  printf("✅ Audio: Initialized with sine wave!\n");
-  printf("   Sample rate:  %d Hz\n", sound_output->samples_per_second);
-  printf("   Tone:         %d Hz (sine wave)\n", sound_output->tone_hz);
-  printf("   Wave period:  %d samples\n", sound_output->wave_period);
-  printf("   Latency:      %d samples (~%.1f ms)\n",
-         sound_output->latency_sample_count,
-         (float)sound_output->latency_sample_count /
-             sound_output->samples_per_second * 1000.0f);
-  printf("   Buffer:       4096 frames (~85 ms)\n");
+  // ─────────────────────────────────────────────────────────────────────
+  // STEP 6: Allocate sample buffer for game to fill
+  // ─────────────────────────────────────────────────────────────────────
+  // Only need enough for one buffer write
+  uint32_t buffer_bytes = actual_buffer_size * audio_config->bytes_per_sample;
+
+  g_raylib_audio_output.sample_buffer = platform_allocate_memory(
+      NULL, buffer_bytes,
+      PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE | PLATFORM_MEMORY_ZEROED);
+
+  if (!platform_memory_is_valid(g_raylib_audio_output.sample_buffer)) {
+    fprintf(stderr, "❌ Audio: Failed to allocate sample buffer\n");
+    UnloadAudioStream(g_raylib_audio_output.stream);
+    CloseAudioDevice();
+    audio_config->is_initialized = false;
+
+    fprintf(stderr, "   Error: %s\n",
+            g_raylib_audio_output.sample_buffer.error_message);
+    fprintf(stderr, "   Code: %s\n",
+            platform_memory_strerror(
+                g_raylib_audio_output.sample_buffer.error_code));
+    return false;
+  }
+
+  g_raylib_audio_output.sample_buffer_size =
+      g_raylib_audio_output.buffer_size_frames *
+      audio_config->bytes_per_sample * 4;
+
+  g_raylib_audio_output.sample_buffer = platform_allocate_memory(
+      NULL, g_raylib_audio_output.sample_buffer_size,
+      PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE | PLATFORM_MEMORY_ZEROED);
+
+  printf("✅ Audio: Sample buffer allocated (%d bytes)\n", buffer_bytes);
+
+  // ─────────────────────────────────────────────────────────────────────
+  // STEP 7: Configure game audio output buffer
+  // ─────────────────────────────────────────────────────────────────────
+  audio_output->samples_per_second = samples_per_second;
+  audio_output->sample_count = actual_buffer_size; // Fixed size for Raylib
+  audio_output->samples_block = g_raylib_audio_output.sample_buffer;
+
+  // ─────────────────────────────────────────────────────────────────────
+  // STEP 8: Start playback (Raylib handles pre-buffering internally)
+  // ─────────────────────────────────────────────────────────────────────
+  PlayAudioStream(g_raylib_audio_output.stream);
+
+  audio_config->is_initialized = true;
+
+  printf("═══════════════════════════════════════════════════════════\n");
+  printf("🔊 AUDIO SYSTEM INITIALIZED\n");
+  printf("═══════════════════════════════════════════════════════════\n");
+
+  return true;
 }
 
-void raylib_shutdown_audio(GameSoundOutput *sound_output) {
-  if (!sound_output->is_initialized) {
+// ═══════════════════════════════════════════════════════════════════════════
+// 🔊 QUERY SAMPLES TO WRITE
+// ═══════════════════════════════════════════════════════════════════════════
+// FIXED: Write audio EVERY frame to keep buffer full, not just when empty.
+// Raylib's internal buffer needs continuous feeding.
+// ═══════════════════════════════════════════════════════════════════════════
+int32_t raylib_get_samples_to_write(PlatformAudioConfig *audio_config,
+                                    GameAudioOutputBuffer *audio_output) {
+  (void)(audio_output);
+  if (!audio_config->is_initialized || !g_raylib_audio_output.stream_valid) {
+    return 0;
+  }
+
+  // CRITICAL: Only write when Raylib's buffer has been consumed
+  // This prevents buffer overflow warnings
+  if (!IsAudioStreamProcessed(g_raylib_audio_output.stream)) {
+    return 0; // Buffer still has data, don't write yet
+  }
+
+  // Calculate samples to fill one buffer's worth
+  // Use the buffer size we configured the stream with
+  int32_t samples_to_write = g_raylib_audio_output.buffer_size_frames;
+
+  // Clamp to our sample buffer capacity
+  int32_t max_samples =
+      g_raylib_audio_output.sample_buffer_size / audio_config->bytes_per_sample;
+  if (samples_to_write > max_samples) {
+    samples_to_write = max_samples;
+  }
+
+  return samples_to_write;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 🔊 SEND SAMPLES TO RAYLIB
+// ═══════════════════════════════════════════════════════════════════════════
+
+void raylib_send_samples(PlatformAudioConfig *audio_config,
+                         GameAudioOutputBuffer *source) {
+  if (!audio_config->is_initialized || !g_raylib_audio_output.stream_valid) {
     return;
   }
 
-  // Stop playback
-  StopAudioStream(g_linux_sound_output.stream);
+  if (!source->samples_block.is_valid || source->sample_count <= 0) {
+    return;
+  }
 
-  // Unload audio stream
-  UnloadAudioStream(g_linux_sound_output.stream);
+  // Ensure stream is playing
+  if (!IsAudioStreamPlaying(g_raylib_audio_output.stream)) {
+    PlayAudioStream(g_raylib_audio_output.stream);
+  }
 
-  // Close audio device
-  CloseAudioDevice();
+  // Send samples to Raylib
+  UpdateAudioStream(g_raylib_audio_output.stream, source->samples_block.base,
+                    source->sample_count);
 
-  sound_output->is_initialized = false;
+  // Update running sample index for debugging
+  audio_config->running_sample_index += source->sample_count;
 
-  printf("✅ Audio: Shutdown complete\n");
+  // DEBUG: Track write statistics
+#if HANDMADE_INTERNAL
+  static int64_t last_log_samples = 0;
+  static int write_count = 0;
+
+  write_count++;
+
+  if (FRAME_LOG_EVERY_THREE_SECONDS_CHECK) {
+    int64_t samples_written =
+        audio_config->running_sample_index - last_log_samples;
+    printf("[AUDIO] Writes in last 3s: %d, total samples: %lld\n", write_count,
+           (long long)samples_written);
+    write_count = 0;
+    last_log_samples = audio_config->running_sample_index;
+  }
+#endif
 }
 
-// ═══════════════════════════════════════════════════════════════
-// 🎵 DAY 8: SOUND CONTROL FUNCTIONS
-// ═══════════════════════════════════════════════════════════════
-// These mirror your X11 backend functions exactly
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
+// 🔊 CLEAR AUDIO BUFFER (send silence)
+// ═══════════════════════════════════════════════════════════════════════════
 
-void raylib_debug_audio(GameSoundOutput *sound_output) {
-  if (!sound_output->is_initialized) {
+void raylib_clear_audio_buffer(PlatformAudioConfig *audio_config) {
+  if (!audio_config->is_initialized || !g_raylib_audio_output.stream_valid) {
+    return;
+  }
+
+  // Only send silence if buffer is ready
+  if (IsAudioStreamProcessed(g_raylib_audio_output.stream)) {
+    memset(g_raylib_audio_output.sample_buffer.base, 0,
+           g_raylib_audio_output.buffer_size_frames *
+               audio_config->bytes_per_sample);
+
+    UpdateAudioStream(g_raylib_audio_output.stream,
+                      g_raylib_audio_output.sample_buffer.base,
+                      g_raylib_audio_output.buffer_size_frames);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 🔊 DEBUG AUDIO LATENCY
+// ═══════════════════════════════════════════════════════════════════════════
+
+void raylib_debug_audio_latency(PlatformAudioConfig *audio_config) {
+  if (!audio_config->is_initialized) {
     printf("❌ Audio: Not initialized\n");
     return;
   }
 
-  printf("┌─────────────────────────────────────────────────────────┐\n");
-  printf("│ 🔊 Raylib Audio Debug Info                              │\n");
-  printf("├─────────────────────────────────────────────────────────┤\n");
-  printf("│ Mode: Callback-based (automatic latency control)       │\n");
-  printf("│                                                         │\n");
-  printf("│ Sample rate:       %d Hz                                 │\n",
-         sound_output->samples_per_second);
-  printf("│ Frequency:         %d Hz                                 │\n",
-         sound_output->tone_hz);
-  printf("│ Volume:            %d / 15000                            │\n",
-         sound_output->tone_volume);
-  printf("│ Pan:               %+d (L=%d, R=%d)                      │\n",
-         sound_output->pan_position, 100 - sound_output->pan_position,
-         100 + sound_output->pan_position);
-  printf("└─────────────────────────────────────────────────────────┘\n");
+  float runtime_seconds = (float)audio_config->running_sample_index /
+                          (float)audio_config->samples_per_second;
+
+  float buffer_latency_ms = (float)g_raylib_audio_output.buffer_size_frames /
+                            audio_config->samples_per_second * 1000.0f;
+
+  printf("┌─────────────────────────────────────────────────────────────┐\n");
+  printf("│ 🔊 RAYLIB AUDIO DEBUG INFO                                  │\n");
+  printf("├─────────────────────────────────────────────────────────────┤\n");
+  printf("│ Mode: Double-buffered (Raylib internal)                     │\n");
+  printf("│                                                             │\n");
+  printf("│ Sample rate:        %6d Hz                               │\n",
+         audio_config->samples_per_second);
+  printf("│ Bytes per sample:   %6d (16-bit stereo)                  │\n",
+         audio_config->bytes_per_sample);
+  printf("│ Buffer size:        %6d frames (%.1f ms)                 │\n",
+         g_raylib_audio_output.buffer_size_frames, buffer_latency_ms);
+  printf("│ Game update rate:   %6d Hz                               │\n",
+         audio_config->game_update_hz);
+  printf("│                                                             │\n");
+  printf("│ Running samples:    %10lld                              │\n",
+         (long long)audio_config->running_sample_index);
+  printf("│ Runtime:            %10.2f seconds                      │\n",
+         runtime_seconds);
+  printf("│                                                             │\n");
+  printf("│ Stream ready:       %-3s                                    │\n",
+         IsAudioStreamValid(g_raylib_audio_output.stream) ? "Yes" : "No");
+  printf("│ Stream processed:   %-3s (buffer needs fill)                │\n",
+         IsAudioStreamProcessed(g_raylib_audio_output.stream) ? "Yes" : "No");
+  printf("│ Stream playing:     %-3s                                    │\n",
+         IsAudioStreamPlaying(g_raylib_audio_output.stream) ? "Yes" : "No");
+  printf("└─────────────────────────────────────────────────────────────┘\n");
+
+  raylib_debug_audio_overlay();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 🔊 SHUTDOWN AUDIO
+// ═══════════════════════════════════════════════════════════════════════════
+
+void raylib_shutdown_audio(GameAudioOutputBuffer *audio_output,
+                           PlatformAudioConfig *audio_config) {
+  if (!audio_config->is_initialized) {
+    return;
+  }
+
+  printf("🔊 Shutting down audio...\n");
+
+  if (g_raylib_audio_output.stream_valid) {
+    StopAudioStream(g_raylib_audio_output.stream);
+    UnloadAudioStream(g_raylib_audio_output.stream);
+    g_raylib_audio_output.stream_valid = false;
+  }
+
+  if (platform_memory_is_valid(g_raylib_audio_output.sample_buffer)) {
+    platform_free_memory(&g_raylib_audio_output.sample_buffer);
+  }
+
+  CloseAudioDevice();
+
+  audio_config->is_initialized = false;
+  platform_free_memory(&audio_output->samples_block);
+  audio_output->sample_count = 0;
+
+  printf("✅ Audio: Shutdown complete\n");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 🔊 HANDLE FPS CHANGE
+// ═══════════════════════════════════════════════════════════════════════════
+
+void raylib_audio_fps_change_handling(GameAudioOutputBuffer *audio_output,
+                                      PlatformAudioConfig *audio_config) {
+  (void)audio_output;
+  (void)audio_config;
+  // For Raylib, buffer size is fixed at init time
+  // Would need to recreate stream to change it
+  printf("[AUDIO] Note: FPS change doesn't affect Raylib audio buffer size\n");
+}
+
+/*
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    AUDIO ARCHITECTURE COMPARISON                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  X11/ALSA (Low-Level)                │  RAYLIB (High-Level)                │
+│  ─────────────────────               │  ───────────────────                │
+│                                      │                                      │
+│  YOU control the ring buffer:        │  RAYLIB controls the ring buffer:   │
+│  ┌────────────────────────┐          │  ┌────────────────────────┐         │
+│  │  ▼ Play Cursor         │          │  │  ??? (hidden)          │         │
+│  │  ████████░░░░░░░░░░░░░░│          │  │  ????????????????      │         │
+│  │           ▲ Write Cursor│          │  │  ??? (hidden)          │         │
+│  └────────────────────────┘          │  └────────────────────────┘         │
+│                                      │                                      │
+│  You can query:                      │  You can only ask:                  │
+│  - snd_pcm_delay()                   │  - IsAudioStreamProcessed()         │
+│  - snd_pcm_avail()                   │    (true/false, no position info)   │
+│  - Calculate exact positions         │                                      │
+│                                      │                                      │
+│  Debug markers SHOW:                 │  Debug markers would show:           │
+│  - Where audio is playing            │  - Nothing useful! 😅               │
+│  - Where we're writing               │  - We don't have cursor access      │
+│  - Predicted flip position           │  - Raylib handles timing internally │
+│  - Latency visualization             │                                      │
+│                                      │                                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+*/
+
+void raylib_debug_audio_overlay(void) {
+  if (!g_raylib_audio_output.stream_valid)
+    return;
+
+  char stats[256];
+  snprintf(stats, sizeof(stats),
+           "Audio: %lld samples written | %d writes/period | %.1f ms latency "
+           "estimate",
+           (long long)g_raylib_audio_output.total_samples_written,
+           g_raylib_audio_output.writes_this_period,
+           (float)g_raylib_audio_output.buffer_size_frames / 48000.0f *
+               1000.0f);
+
+  DrawText(stats, 10, 10, 16, GREEN);
 }

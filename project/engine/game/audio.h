@@ -1,37 +1,52 @@
 #ifndef ENGINE_GAME_AUDIO_H
 #define ENGINE_GAME_AUDIO_H
 
-#include <stdint.h>
 #include "../_common/base.h"
+#include "../_common/memory.h"
+#include <stdint.h>
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SOUND SOURCE (Individual audio generator)
+// ═══════════════════════════════════════════════════════════════════════════
 
 typedef struct {
-  // ═════════════════════════════════════════════════════════
-  // HARDWARE PARAMETERS (Platform Layer Owns)
-  // ═════════════════════════════════════════════════════════
-  bool is_initialized;
+    real32 phase;            // Phase accumulator (0 to 2π) - PERSISTS between calls!
+    real32 frequency;        // Current frequency (Hz)
+    real32 target_frequency; // For smooth frequency transitions (future)
+    real32 volume;           // 0.0 to 1.0
+    real32 pan_position;     // -1.0 (left) to 1.0 (right)
+    bool is_playing;
+} SoundSource;
 
-  int32_t samples_per_second; // 48000 Hz (hardware config)
-  int32_t bytes_per_sample;   // 4 (16-bit stereo)
+// ═══════════════════════════════════════════════════════════════════════════
+// GAME AUDIO STATE (Lives in game memory)
+// ═══════════════════════════════════════════════════════════════════════════
 
-  // ═════════════════════════════════════════════════════════
-  // AUDIO GENERATION STATE (Platform Layer Uses)
-  // ═════════════════════════════════════════════════════════
-  int64_t running_sample_index; // Sample counter (for waveform)
-  int wave_period;              // Samples per wave (cached calculation)
-  real32 t_sine;                // Phase accumulator (0 to 2π)
-  int latency_sample_count;     // Target latency in samples
+typedef struct {
+    SoundSource tone;       // Simple oscillator
+    real32 master_volume;   // Global volume multiplier
+    
+    // Future expansion:
+    // SoundSource music;
+    // SoundSource sfx[8];
+} GameAudioState;
 
-  // ═════════════════════════════════════════════════════════
-  // GAME-SET PARAMETERS (Game Layer Sets)
-  // ═════════════════════════════════════════════════════════
-  int tone_hz;         // Frequency of tone to generate
-  int16_t tone_volume; // Volume of tone to generate
-  int pan_position;    // -100 (left) to +100 (right)
-  int32_t game_update_hz;
+// ═══════════════════════════════════════════════════════════════════════════
+// SOUND OUTPUT BUFFER (Platform → Game → Platform)
+// ═══════════════════════════════════════════════════════════════════════════
+// Platform allocates memory, tells game how many samples to generate,
+// game fills buffer, platform sends to hardware.
+//
+// Casey's equivalent: game_sound_output_buffer
+// ═══════════════════════════════════════════════════════════════════════════
 
-  // Day 20 safety margin
-  int32_t safety_sample_count; // Samples of safety buffer (~1/3 frame)
-} GameSoundOutput;
-
+typedef struct {
+    int32_t samples_per_second;  // Sample rate (e.g., 48000)
+    int32_t sample_count;        // How many samples to generate THIS call
+    
+    // Two ways to access the buffer (platform chooses which to use):
+    // int16_t *samples;            // Simple pointer (preferred for game code)
+    PlatformMemoryBlock samples_block;  // Full block info (for platform)
+} GameAudioOutputBuffer;
 
 #endif // ENGINE_GAME_AUDIO_H

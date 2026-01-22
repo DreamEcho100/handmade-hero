@@ -1,7 +1,12 @@
 #include "backend.h"
-#include "../../base.h"
-#include "../_common/backbuffer.h"
-#include "../_common/input.h"
+
+#include "../../_common/base.h"
+#include "../../game/backbuffer.h"
+#include "../../game/base.h"
+#include "../../game/game-loader.h"
+#include "../../game/input.h"
+#include "../../game/memory.h"
+#include "../_common/audio.h"
 #include "audio.h"
 #include "inputs/joystick.h"
 #include "inputs/keyboard.h"
@@ -12,9 +17,13 @@
 #include <stdio.h>
 #include <string.h>
 
-// ═══════════════════════════════════════════════════════════════
+#if HANDMADE_INTERNAL
+#include "../../_common/debug.h"
+#endif
+
+// ═══════════════════════════════════════════════════════════════════════════
 // 🎨 RAYLIB-SPECIFIC TYPES
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
 
 typedef struct {
   Texture2D texture;
@@ -23,29 +32,15 @@ typedef struct {
 
 file_scoped_global_var OffscreenBufferMeta g_game_buffer_meta = {0};
 
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
 // 🖼️ BACKBUFFER MANAGEMENT
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
 
-/**
- * RESIZE BACKBUFFER (Day 2-3)
- *
- * Steps:
- * 1. Free old CPU pixel memory
- * 2. Free old GPU texture
- * 3. Allocate new CPU pixel memory
- * 4. Create new Raylib texture (GPU)
- *
- * This is called when:
- * - Window is first created
- * - Window is resized by user
- */
 file_scoped_fn void resize_back_buffer(GameOffscreenBuffer *backbuffer,
                                        OffscreenBufferMeta *backbuffer_meta,
                                        int width, int height) {
   printf("Resizing backbuffer → %dx%d\n", width, height);
 
-  // Guard against invalid sizes
   if (width <= 0 || height <= 0) {
     printf("⚠️  Rejected resize: invalid size\n");
     return;
@@ -54,51 +49,43 @@ file_scoped_fn void resize_back_buffer(GameOffscreenBuffer *backbuffer,
   int old_width = backbuffer->width;
   int old_height = backbuffer->height;
 
-  // Update dimensions FIRST (we'll need them for allocation)
   backbuffer->width = width;
   backbuffer->height = height;
   backbuffer->pitch = backbuffer->width * backbuffer->bytes_per_pixel;
 
-  // ─────────────────────────────────────────────────────────────
-  // STEP 1: FREE OLD PIXEL MEMORY (if exists)
-  // ─────────────────────────────────────────────────────────────
+  // Free old memory
   if (backbuffer->memory.base && old_width > 0 && old_height > 0) {
     platform_free_memory(&backbuffer->memory);
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // STEP 2: FREE OLD TEXTURE (if exists)
-  // ─────────────────────────────────────────────────────────────
+  // Free old texture
   if (backbuffer_meta->has_texture) {
     UnloadTexture(backbuffer_meta->texture);
     backbuffer_meta->has_texture = false;
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // STEP 3: ALLOCATE NEW BACKBUFFER MEMORY
-  // ─────────────────────────────────────────────────────────────
+  // Allocate new memory
   int buffer_size = width * height * backbuffer->bytes_per_pixel;
   PlatformMemoryBlock backbuffer_memory = platform_allocate_memory(
-      NULL, buffer_size, PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE);
+      NULL, buffer_size,
+      PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE | PLATFORM_MEMORY_ZEROED);
 
-  if (!backbuffer_memory.base) {
-    fprintf(stderr,
-            "❌ platform_allocate_memory failed: could not allocate %d bytes\n",
-            buffer_size);
+  if (!platform_memory_is_valid(backbuffer_memory)) {
+    fprintf(stderr, "❌ Failed to allocate backbuffer: %s\n",
+            backbuffer_memory.error_message);
+    fprintf(stderr, "   Error: %s\n", backbuffer_memory.error_message);
+    fprintf(stderr, "   Code: %s\n",
+            platform_memory_strerror(backbuffer_memory.error_code));
     return;
   }
 
   backbuffer->memory = backbuffer_memory;
 
-  // ─────────────────────────────────────────────────────────────
-  // STEP 4: CREATE RAYLIB TEXTURE (GPU)
-  // ─────────────────────────────────────────────────────────────
-  // Raylib's Image is just a wrapper around our pixel buffer
+  // Create Raylib texture
   Image img = {.data = backbuffer->memory.base,
                .width = backbuffer->width,
                .height = backbuffer->height,
-               .format =
-                   PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, // 32-bit RGBA (like X11)
+               .format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8,
                .mipmaps = 1};
 
   backbuffer_meta->texture = LoadTextureFromImage(img);
@@ -107,20 +94,6 @@ file_scoped_fn void resize_back_buffer(GameOffscreenBuffer *backbuffer,
   printf("✅ Raylib texture created successfully\n");
 }
 
-// ═══════════════════════════════════════════════════════════════
-// 🖥️ DISPLAY UPDATE (BLIT)
-// ═══════════════════════════════════════════════════════════════
-
-/**
- * UPDATE WINDOW FROM BACKBUFFER (Day 2-3)
- *
- * Equivalent to:
- * - X11:     XPutImage()
- * - Windows: StretchDIBits()
- * - OpenGL:  glTexImage2D() + DrawQuad
- *
- * This uploads our CPU-rendered pixels to the GPU and draws them.
- */
 file_scoped_fn void
 update_window_from_backbuffer(GameOffscreenBuffer *backbuffer,
                               OffscreenBufferMeta *backbuffer_meta) {
@@ -129,123 +102,124 @@ update_window_from_backbuffer(GameOffscreenBuffer *backbuffer,
     return;
   }
 
-  // Upload CPU pixels → GPU texture (like glTexImage2D)
   UpdateTexture(backbuffer_meta->texture, backbuffer->memory.base);
-
-  // Draw GPU texture → screen (fullscreen quad)
   DrawTexture(backbuffer_meta->texture, 0, 0, WHITE);
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
 // 🚀 MAIN PLATFORM ENTRY POINT
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
 
 int platform_main() {
-  real64 t_start = GetTime(); // ✅ Cross-platform (works on all OSes)
+  real64 t_start = GetTime();
   printf("[%.3fs] Starting platform_main\n", GetTime() - t_start);
   fflush(stdout);
 
-  // ═══════════════════════════════════════════════════════════
-  // 💾 STEP 1: ALLOCATE GAME MEMORY (Day 25)
-  // ═══════════════════════════════════════════════════════════
-  //
-  // Casey's "RESERVE vs COMMIT" pattern:
-  // - Debug:   Reserve 2TB address space (virtual, no RAM used)
-  // - Release: Let OS choose address (NULL)
-  // ═══════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════
+  // 💾 ALLOCATE GAME MEMORY
+  // ═══════════════════════════════════════════════════════════════════
 
 #if HANDMADE_INTERNAL
-  void *base_address =
-      (void *)TERABYTES(2); // Debug: Fixed address for reproducibility
+  void *base_address = (void *)TERABYTES(2);
 #else
-  void *base_address = NULL; // Release: OS chooses
+  void *base_address = NULL;
 #endif
 
   uint64_t permanent_storage_size = MEGABYTES(64);
   uint64_t transient_storage_size = GIGABYTES(1);
 
-  // Allocate permanent storage (survives across levels)
-  PlatformMemoryBlock permanent_storage =
-      platform_allocate_memory(base_address, permanent_storage_size,
-                               PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE);
+  PlatformMemoryBlock permanent_storage = platform_allocate_memory(
+      base_address, permanent_storage_size,
+      PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE | PLATFORM_MEMORY_ZEROED);
 
-  if (!permanent_storage.base) {
+  if (!platform_memory_is_valid(permanent_storage)) {
     fprintf(stderr, "❌ ERROR: Could not allocate permanent storage\n");
+    platform_free_memory(&permanent_storage);
+    fprintf(stderr, "   Error: %s\n", permanent_storage.error_message);
+    fprintf(stderr, "   Code: %s\n",
+            platform_memory_strerror(permanent_storage.error_code));
     return 1;
   }
 
-  // Allocate transient storage (cleared between levels)
   void *transient_base =
       (uint8_t *)permanent_storage.base + permanent_storage.size;
-  PlatformMemoryBlock transient_storage =
-      platform_allocate_memory(transient_base, transient_storage_size,
-                               PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE);
+  PlatformMemoryBlock transient_storage = platform_allocate_memory(
+      transient_base, transient_storage_size,
+      PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE | PLATFORM_MEMORY_ZEROED);
 
-  if (!transient_storage.base) {
+  if (!platform_memory_is_valid(transient_storage)) {
     fprintf(stderr, "❌ ERROR: Could not allocate transient storage\n");
     platform_free_memory(&permanent_storage);
+    fprintf(stderr, "   Error: %s\n", transient_storage.error_message);
+    fprintf(stderr, "   Code: %s\n",
+            platform_memory_strerror(transient_storage.error_code));
     return 1;
   }
 
-  // Setup game memory structure
   GameMemory game_memory = {.permanent_storage = permanent_storage,
                             .transient_storage = transient_storage,
                             .permanent_storage_size = permanent_storage.size,
                             .transient_storage_size = transient_storage.size};
 
-  printf("✅ Game memory allocated:\n");
-  printf("   Permanent: %lu MB at %p\n",
-         game_memory.permanent_storage.size / (1024 * 1024),
-         game_memory.permanent_storage.base);
-  printf("   Transient: %lu GB at %p\n",
-         game_memory.transient_storage.size / (1024 * 1024 * 1024),
-         game_memory.transient_storage.base);
+  printf("✅ Game memory allocated\n");
 
-  // ═══════════════════════════════════════════════════════════
-  // 🎮 STEP 2: INITIALIZE INPUT BUFFERS (Day 14)
-  // ═══════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════
+  // 🎮 INITIALIZE INPUT BUFFERS
+  // ═══════════════════════════════════════════════════════════════════
 
-  static GameInput game_inputs[2] = {0}; // Static: survives across frames
+  static GameInput game_inputs[2] = {0};
   GameInput *new_game_input = &game_inputs[0];
   GameInput *old_game_input = &game_inputs[1];
 
-  GameSoundOutput game_sound_output = {0};
-  GameOffscreenBuffer game_buffer = {0};
+  // ═══════════════════════════════════════════════════════════════════
+  // 🪟 CREATE WINDOW
+  // ═══════════════════════════════════════════════════════════════════
 
-  // ═══════════════════════════════════════════════════════════
-  // 🪟 STEP 3: CREATE WINDOW (Day 2)
-  // ═══════════════════════════════════════════════════════════
-
-  InitWindow(1250, 720, "Handmade Hero");
-  printf("✅ Window created and shown\n");
-
-  // Enable window resizing (disabled by default in Raylib)
+  InitWindow(1280, 720, "Handmade Hero");
   SetWindowState(FLAG_WINDOW_RESIZABLE);
-  printf("✅ Window is now resizable\n");
-
-  // Disable ESC auto-close (let game handle it)
   SetExitKey(KEY_NULL);
+  int32_t target_fps = 60;
+  SetTargetFPS(target_fps);
 
-  // Set target FPS (Raylib handles frame limiting automatically)
-  SetTargetFPS(60);
-  printf("✅ VSync enabled (60 FPS target)\n");
+#if HANDMADE_INTERNAL
+  g_frame_log_counter = 0;
+  g_debug_fps = target_fps;
+#endif
 
-  // ═══════════════════════════════════════════════════════════
-  // 🎮 STEP 4: INITIALIZE GAMEPAD (Day 14-16)
-  // ═══════════════════════════════════════════════════════════
+  printf("✅ Window created\n");
+
+  // ═══════════════════════════════════════════════════════════════════
+  // 🎮 INITIALIZE GAMEPAD
+  // ═══════════════════════════════════════════════════════════════════
 
   raylib_init_gamepad(old_game_input->controllers, new_game_input->controllers);
 
-  // ═══════════════════════════════════════════════════════════
-  // 🔊 STEP 5: INITIALIZE AUDIO (Day 7-9)
-  // ═══════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════
+  // 🔊 INITIALIZE AUDIO (MIRRORS X11 PATTERN)
+  // ═══════════════════════════════════════════════════════════════════
 
-  raylib_init_audio(&game_sound_output);
+  GameAudioOutputBuffer game_audio_output = {0};
+  PlatformAudioConfig platform_audio_config = {0};
 
-  // ═══════════════════════════════════════════════════════════
-  // 🖼️ STEP 6: INITIALIZE BACKBUFFER (Day 2-3)
-  // ═══════════════════════════════════════════════════════════
+  // Audio parameters (same as X11)
+  int32_t samples_per_second = 48000;
+  int32_t buffer_size_frames = 4096; // ~85ms at 48kHz
+  int32_t game_update_hz = 30;
 
+  bool audio_initialized =
+      raylib_init_audio(&game_audio_output, &platform_audio_config,
+                        samples_per_second, buffer_size_frames, game_update_hz);
+
+  if (!audio_initialized) {
+    fprintf(stderr,
+            "⚠️  Audio failed to initialize, continuing without sound\n");
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // 🖼️ INITIALIZE BACKBUFFER
+  // ═══════════════════════════════════════════════════════════════════
+
+  GameOffscreenBuffer game_buffer = {0};
   int init_backbuffer_status = init_backbuffer(&game_buffer, 1280, 720, 4);
   if (init_backbuffer_status != 0) {
     fprintf(stderr, "❌ Failed to initialize backbuffer\n");
@@ -255,127 +229,148 @@ int platform_main() {
   resize_back_buffer(&game_buffer, &g_game_buffer_meta, game_buffer.width,
                      game_buffer.height);
 
+  // ═══════════════════════════════════════════════════════════════════
+  // 🎮 LOAD GAME CODE
+  // ═══════════════════════════════════════════════════════════════════
+
+  char *game_so_path = "build/libgame.so";
+  char *game_temp_so_path = "build/libgame_temp.so";
+  GameCode game = load_game_code(game_so_path, game_temp_so_path);
+
   printf("✅ Entering main loop...\n");
 
-  // ═══════════════════════════════════════════════════════════
-  // 🔁 STEP 7: MAIN GAME LOOP (Day 1-∞)
-  // ═══════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════
+  // 🔁 MAIN GAME LOOP
+  // ═══════════════════════════════════════════════════════════════════
 
-  while (!WindowShouldClose()) {
+  while (!WindowShouldClose() && is_game_running) {
 
-    // ─────────────────────────────────────────────────────────
-    // 🐛 DEBUG: Print controller states (every 300 frames)
-    // ─────────────────────────────────────────────────────────
-#if HANDMADE_INTERNAL
-    static int debug_counter = 0;
-    if (FRAME_LOG_EVERY_FIVE_SECONDS_CHECK) {
-      debug_joystick_state(old_game_input);
-    }
-#endif
-
-    // ─────────────────────────────────────────────────────────
-    // ⌨️ INPUT: Prepare input frame (clear transitions)
-    // ─────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────
+    // INPUT: Prepare frame
+    // ─────────────────────────────────────────────────────────────
     prepare_input_frame(old_game_input, new_game_input);
 
-    // ─────────────────────────────────────────────────────────
-    // 🖥️ HANDLE WINDOW RESIZE (Day 2)
-    // ─────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────
+    // HANDLE WINDOW RESIZE
+    // ─────────────────────────────────────────────────────────────
     if (IsWindowResized()) {
-      printf("🖥️  Window resized to: %dx%d\n", GetScreenWidth(),
-             GetScreenHeight());
       resize_back_buffer(&game_buffer, &g_game_buffer_meta, GetScreenWidth(),
                          GetScreenHeight());
     }
 
-    // ─────────────────────────────────────────────────────────
-    // ⌨️ INPUT: Keyboard (Day 6)
-    // ─────────────────────────────────────────────────────────
-    handle_keyboard_inputs(&game_sound_output, new_game_input);
+    // ─────────────────────────────────────────────────────────────
+    // INPUT: Keyboard
+    // ─────────────────────────────────────────────────────────────
+    handle_keyboard_inputs(&platform_audio_config, new_game_input);
 
-    // ─────────────────────────────────────────────────────────
-    // 🎮 INPUT: Gamepad (Day 14-16)
-    // ─────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────
+    // INPUT: Gamepad
+    // ─────────────────────────────────────────────────────────────
     raylib_poll_gamepad(new_game_input);
 
-    // ─────────────────────────────────────────────────────────
-    // 🎨 RENDER & UPDATE (Day 3)
-    // ─────────────────────────────────────────────────────────
-    if (game_buffer.memory.base) {
-      // Casey's pattern: Render THEN update (for next frame)
+    // ─────────────────────────────────────────────────────────────
+    // SKIP UPDATES IF PAUSED
+    // ─────────────────────────────────────────────────────────────
+    if (g_game_is_paused) {
       BeginDrawing();
       ClearBackground(BLACK);
       update_window_from_backbuffer(&game_buffer, &g_game_buffer_meta);
+      DrawText("PAUSED", 10, 10, 40, RED);
       EndDrawing();
 
-      // Update game state for NEXT frame
-      game_update_and_render(&game_memory, new_game_input, &game_buffer,
-                             &game_sound_output);
+      GameInput *temp = new_game_input;
+      new_game_input = old_game_input;
+      old_game_input = temp;
+      continue;
     }
 
-    // ─────────────────────────────────────────────────────────
-    // 🔄 SWAP INPUT BUFFERS (Day 14)
-    // ─────────────────────────────────────────────────────────
-    GameInput *temp_game_input = new_game_input;
-    new_game_input = old_game_input;
-    old_game_input = temp_game_input;
+    // ─────────────────────────────────────────────────────────────
+    // GAME UPDATE + RENDER
+    // ─────────────────────────────────────────────────────────────
+    if (game_buffer.memory.base) {
+      game.update_and_render(&game_memory, new_game_input, &game_buffer);
+    }
 
-    // ─────────────────────────────────────────────────────────
-    // 📊 DEBUG: Print FPS (every 60 frames)
-    // ─────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────
+    // AUDIO: Only generate when Raylib needs more data
+    // ─────────────────────────────────────────────────────────────
+    if (platform_audio_config.is_initialized) {
+      // Check if Raylib's buffer is ready for more samples
+      int32_t samples_to_write = raylib_get_samples_to_write(
+          &platform_audio_config, &game_audio_output);
+
+      if (samples_to_write > 0) {
+        // Configure buffer for game
+        game_audio_output.sample_count = samples_to_write;
+
+        // Game generates samples
+        game.get_audio_samples(&game_memory, &game_audio_output);
+
+        // Platform sends to hardware
+        raylib_send_samples(&platform_audio_config, &game_audio_output);
+      }
+      // If samples_to_write == 0, Raylib's buffer is still full
+      // This is normal - we don't write every frame!
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // DISPLAY
+    // ─────────────────────────────────────────────────────────────
+    BeginDrawing();
+    ClearBackground(BLACK);
+    update_window_from_backbuffer(&game_buffer, &g_game_buffer_meta);
+    EndDrawing();
+
 #if HANDMADE_INTERNAL
-    static int frame_counter = 0;
+    g_frame_log_counter++;
+#endif
+
+    // ─────────────────────────────────────────────────────────────
+    // SWAP INPUT BUFFERS
+    // ─────────────────────────────────────────────────────────────
+    GameInput *temp = new_game_input;
+    new_game_input = old_game_input;
+    old_game_input = temp;
+
+    // ─────────────────────────────────────────────────────────────
+    // DEBUG: FPS logging
+    // ─────────────────────────────────────────────────────────────
+#if HANDMADE_INTERNAL
     if (FRAME_LOG_EVERY_FIVE_SECONDS_CHECK) {
-      printf("[Raylib] %.2fms/f, %.0ff/s\n",
-             GetFrameTime() * 1000.0f, // ✅ Raylib's cross-platform timer
-             (float)GetFPS());         // ✅ Raylib's FPS counter
-      frame_counter = 0;
+      printf("[Raylib] %.2fms/f, %.0ff/s\n", GetFrameTime() * 1000.0f,
+             (float)GetFPS());
     }
 #endif
   }
 
-  // ═══════════════════════════════════════════════════════════
-  // 🧹 STEP 8: CLEANUP (Day 25)
-  // ═══════════════════════════════════════════════════════════
-  //
-  // Casey's "Resource Lifetimes in Waves" philosophy:
-  // - Wave 1 (Process lifetime): OS cleans up automatically
-  // - Wave 2 (State lifetime):   We clean up manually
-  //
-  // By default, we rely on OS cleanup (Wave 1).
-  // Enable HANDMADE_SANITIZE_WAVE_1_MEMORY to manually free everything.
-  // ═══════════════════════════════════════════════════════════
+#if HANDMADE_INTERNAL
+  if (FRAME_LOG_EVERY_FIVE_SECONDS_CHECK) {
+    raylib_debug_audio_overlay();
+  }
+#endif
+
+  // ═══════════════════════════════════════════════════════════════════
+  // 🧹 CLEANUP
+  // ═══════════════════════════════════════════════════════════════════
 
 #if HANDMADE_SANITIZE_WAVE_1_MEMORY
-  printf("[%.3fs] Exiting, freeing memory...\n", GetTime() - t_start);
+  printf("Cleaning up...\n");
 
-  // Free Raylib texture (GPU)
   if (g_game_buffer_meta.has_texture) {
     UnloadTexture(g_game_buffer_meta.texture);
-    g_game_buffer_meta.has_texture = false;
   }
 
-  // Free backbuffer memory (CPU)
   if (game_buffer.memory.base) {
-    printf("Freeing backbuffer memory...\n");
     platform_free_memory(&game_buffer.memory);
-    game_buffer.memory.base = NULL;
   }
 
-  // Free game memory
-  printf("Freeing game transient memory...\n");
-  platform_free_memory(&transient_storage);
+  raylib_shutdown_audio(&game_audio_output, &platform_audio_config);
 
-  printf("Freeing game permanent memory...\n");
+  platform_free_memory(&transient_storage);
   platform_free_memory(&permanent_storage);
 
-  // Unload audio
-  raylib_shutdown_audio(&game_sound_output);
-
-  // Close window and unload Raylib resources
   CloseWindow();
-
-  printf("[%.3fs] ✅ Memory freed\n", GetTime() - t_start);
+  printf("✅ Cleanup complete\n");
 #endif
 
   printf("Goodbye!\n");

@@ -60,4 +60,7 @@ typedef struct {
   // Has this memory been initialized?
   bool32 is_initialized;
 } GameMemory;
+
+typedef struct GameState GameState;
+
 #endif // ENGINE_GAME_MEMORY_H

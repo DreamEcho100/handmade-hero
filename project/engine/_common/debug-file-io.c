@@ -25,10 +25,19 @@ DebugReadFileResult debug_platform_read_entire_file(char *filename) {
       if (file_size > 0) {
         rewind(file);
 
-        result.contents = platform_allocate_memory(
-            NULL, file_size, PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE);
+        result.contents = platform_allocate_memory(NULL, file_size,
+                                                   PLATFORM_MEMORY_READ |
+                                                       PLATFORM_MEMORY_WRITE |
+                                                       PLATFORM_MEMORY_ZEROED);
 
-        if (result.contents.base) {
+        if (!platform_memory_is_valid(result.contents)) {
+          fprintf(
+              stderr,
+              "debug_platform_read_entire_file: Memory allocation failed\n");
+          fprintf(stderr, "   Error: %s\n", result.contents.error_message);
+          fprintf(stderr, "   Code: %s\n",
+                  platform_memory_strerror(result.contents.error_code));
+        } else {
           size_t bytes_read = fread(result.contents.base, 1, file_size, file);
           if (bytes_read == (size_t)file_size) {
             result.size = safe_truncate_uint64(file_size);
@@ -36,10 +45,6 @@ DebugReadFileResult debug_platform_read_entire_file(char *filename) {
             debug_platform_free_file_memory(&result.contents);
             result.contents.base = NULL;
           }
-        } else {
-          fprintf(
-              stderr,
-              "debug_platform_read_entire_file: Memory allocation failed\n");
         }
       }
     }
