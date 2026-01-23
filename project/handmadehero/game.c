@@ -47,7 +47,7 @@ void render_weird_gradient(GameOffscreenBuffer *buffer,
       *pixel++ = (0xFF000000u |  // Alpha = 255
                   (blue << 16) | // Blue
                   (green << 8) | // Green
-                  0);
+                  (0));
     }
     row += buffer->pitch;
   }
@@ -130,12 +130,16 @@ void handle_controls(GameControllerInput *input,
 }
 
 GAME_UPDATE_AND_RENDER(game_update_and_render) {
+
   HandMadeHeroGameState *game_state =
       (HandMadeHeroGameState *)memory->permanent_storage.base;
 
   if (!memory->is_initialized) { // false (skip!)
                                  // Never runs again!
                                  // First-time initialization
+#if HANDMADE_INTERNAL
+    printf("[GAME] First-time init\n");
+#endif
 
 #if HANDMADE_INTERNAL
     char *Filename = __FILE__;
@@ -148,6 +152,9 @@ GAME_UPDATE_AND_RENDER(game_update_and_render) {
       printf("Wrote test.out\n");
     }
 #endif
+    printf("[GAME INIT] game_update_and_render from build id %d\n",
+           1); // change this number each rebuild
+
     // Initialize audio state
     game_state->audio.tone.frequency = 256;
     game_state->audio.tone.phase = 0.0f;
@@ -161,7 +168,16 @@ GAME_UPDATE_AND_RENDER(game_update_and_render) {
     game_state->speed = 5;
 
     memory->is_initialized = true;
+#if HANDMADE_INTERNAL
+    printf("[GAME] Init complete\n");
+#endif
     return;
+  }
+
+  // For reload debugging:
+  static int version = 1; // CHANGE THIS between compiles
+  if ((g_frame_counter % 120) == 0) {
+    printf("[GAME] update_and_render version=%d\n", version);
   }
 
   // Find active controller
@@ -170,12 +186,12 @@ GAME_UPDATE_AND_RENDER(game_update_and_render) {
   // Priority 1: Check for active joystick input (controllers 1-4)
   for (int i = 0; i < MAX_CONTROLLER_COUNT; i++) {
 
-    ASSERT((&input->controllers[i].terminator -
-            &input->controllers[i].buttons[i]) ==
-           (ArraySize(input->controllers[i].buttons)));
-
     if (i == KEYBOARD_CONTROLLER_INDEX)
       continue;
+
+    ASSERT((&input->controllers[i].terminator -
+            &input->controllers[i].buttons[0]) ==
+           (ArraySize(input->controllers[i].buttons)));
 
     GameControllerInput *c = &input->controllers[i];
     if (c->is_connected) {
@@ -257,32 +273,14 @@ GAME_GET_SOUND_SAMPLES(game_get_audio_samples) {
   HandMadeHeroGameState *game_state =
       (HandMadeHeroGameState *)memory->permanent_storage.base;
 
-  // SAFETY: If game not initialized yet, output silence
   if (!memory->is_initialized) {
     int16_t *sample_out = (int16_t *)sound_buffer->samples_block.base;
     for (int i = 0; i < sound_buffer->sample_count; ++i) {
-      *sample_out++ = 0; // Left
-      *sample_out++ = 0; // Right
+      *sample_out++ = 0;
+      *sample_out++ = 0;
     }
     return;
   }
-
-  // DEBUG: Check for phase discontinuities
-#if HANDMADE_INTERNAL
-  static real32 last_phase = 0.0f;
-  static int call_count = 0;
-  call_count++;
-
-  if (call_count % 100 == 0) {
-    real32 phase_diff = game_state->audio.tone.phase - last_phase;
-    if (phase_diff < 0)
-      phase_diff += 2.0f * M_PI; // Handle wrap
-    printf("[AUDIO DIAG] call=%d, phase=%.3f, diff=%.3f, samples=%d\n",
-           call_count, game_state->audio.tone.phase, phase_diff,
-           sound_buffer->sample_count);
-  }
-  last_phase = game_state->audio.tone.phase;
-#endif
 
   // ═══════════════════════════════════════════════════════════════
   // DEBUG: Log audio state periodically

@@ -1,8 +1,8 @@
 // project/engine/game/game-loader.c
 
+#include "game-loader.h"
 #include "../_common/dll.h"
 #include "../_common/file.h"
-#include "game-loader.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -30,7 +30,6 @@ static GameCode create_stub_game_code(void) {
 // ═══════════════════════════════════════════════════════════════════════════
 // LOAD GAME CODE
 // ═══════════════════════════════════════════════════════════════════════════
-
 GameCode load_game_code(const char *source_lib_name,
                         const char *temp_lib_name) {
   GameCode result = create_stub_game_code();
@@ -100,17 +99,21 @@ GameCode load_game_code(const char *source_lib_name,
   // STEP 3: Load the library with de100_dlopen
   // ─────────────────────────────────────────────────────────────────────
 
-  printf("📂 Loading library: %s\n", temp_lib_name);
+  printf("📂 Loading library: %s\n",
+         temp_lib_name); // Changed back to temp_lib_name
 
 #if defined(__linux__) || defined(__APPLE__)
-  result.game_code_lib = de100_dlopen(temp_lib_name, RTLD_NOW);
+  result.game_code_lib = de100_dlopen(
+      temp_lib_name, RTLD_NOW | RTLD_LOCAL); // Changed back to temp_lib_name
 #else
-  result.game_code_lib = de100_dlopen(temp_lib_name, 0);
+  result.game_code_lib =
+      de100_dlopen(temp_lib_name, 0); // Changed back to temp_lib_name
 #endif
 
   if (!de100_dlvalid(result.game_code_lib)) {
     fprintf(stderr, "❌ Failed to load library\n");
-    fprintf(stderr, "   Library: %s\n", temp_lib_name);
+    fprintf(stderr, "   Library: %s\n",
+            temp_lib_name); // Changed back to temp_lib_name
     fprintf(stderr, "   Error: %s\n", result.game_code_lib.error_message);
     fprintf(stderr, "   Code: %s\n",
             de100_dlstrerror(result.game_code_lib.last_error));
@@ -135,7 +138,8 @@ GameCode load_game_code(const char *source_lib_name,
 
   if (!result.update_and_render) {
     fprintf(stderr, "❌ Failed to load symbol 'game_update_and_render'\n");
-    fprintf(stderr, "   Library: %s\n", temp_lib_name);
+    fprintf(stderr, "   Library: %s\n",
+            temp_lib_name); // Changed back to temp_lib_name
     fprintf(stderr, "   Error: %s\n", result.game_code_lib.error_message);
     fprintf(stderr, "   Code: %s\n",
             de100_dlstrerror(result.game_code_lib.last_error));
@@ -155,7 +159,8 @@ GameCode load_game_code(const char *source_lib_name,
 
   if (!result.get_audio_samples) {
     fprintf(stderr, "❌ Failed to load symbol 'game_get_audio_samples'\n");
-    fprintf(stderr, "   Library: %s\n", temp_lib_name);
+    fprintf(stderr, "   Library: %s\n",
+            temp_lib_name); // Changed back to temp_lib_name
     fprintf(stderr, "   Error: %s\n", result.game_code_lib.error_message);
     fprintf(stderr, "   Code: %s\n",
             de100_dlstrerror(result.game_code_lib.last_error));
@@ -257,6 +262,10 @@ bool32 game_code_needs_reload(const GameCode *game_code,
     }
     return false;
   }
+
+  printf("[RELOAD CHECK] Old: %ld, New: %ld, Changed: %s\n",
+         (long)game_code->last_write_time, (long)current_mod_time.value,
+         (current_mod_time.value != game_code->last_write_time) ? "YES" : "NO");
 
   // Compare modification times
   if (current_mod_time.value != game_code->last_write_time) {

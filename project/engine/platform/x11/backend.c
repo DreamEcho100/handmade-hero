@@ -4,6 +4,7 @@
 #include "backend.h"
 
 #include "../../_common/base.h"
+#include "../../_common/file.h"
 #include "../../game/backbuffer.h"
 #include "../../game/base.h"
 #include "../../game/game-loader.h"
@@ -30,10 +31,6 @@
 #include <unistd.h>
 #include <x86intrin.h> // For __rdtsc() CPU cycle counter
 
-#if HANDMADE_INTERNAL
-#include "../../_common/debug.h"
-#endif
-
 // ═══════════════════════════════════════════════════════════════
 // 🎮 OPENGL STATE
 // ═══════════════════════════════════════════════════════════════
@@ -51,6 +48,8 @@ typedef struct {
 
 file_scoped_global_var OpenGLState g_gl = {0};
 file_scoped_global_var bool g_window_is_active = true; // Track focus state
+file_scoped_global_var int last_window_width = 0;
+file_scoped_global_var int last_window_height = 0;
 
 // ═══════════════════════════════════════════════════════════════
 // 🎮 ADAPTIVE FPS STATE
@@ -255,13 +254,18 @@ handle_event(GameOffscreenBuffer *backbuffer, Display *display, XEvent *event,
              PlatformAudioConfig *platform_audio_config) {
   switch (event->type) {
 
+  // Then in the event handler:
   case ConfigureNotify: {
-    // Window was resized
     int new_width = event->xconfigure.width;
     int new_height = event->xconfigure.height;
-    printf("Window resized to: %dx%d\n", new_width, new_height);
-    // NOTE: We use fixed-size backbuffer (1280x720), so we ignore resize
-    // Casey does this in early Handmade Hero episodes
+
+    // Only log if size actually changed
+    if (new_width != last_window_width || new_height != last_window_height) {
+      printf("Window resized: %dx%d → %dx%d\n", last_window_width,
+             last_window_height, new_width, new_height);
+      last_window_width = new_width;
+      last_window_height = new_height;
+    }
     break;
   }
 
@@ -478,9 +482,9 @@ int platform_main() {
   };
 
   real32 target_seconds_per_frame = 1.0f / (real32)adaptive.target_fps;
+  g_fps = adaptive.target_fps;
 #if HANDMADE_INTERNAL
-  g_frame_log_counter = 0;
-  g_debug_fps = adaptive.target_fps;
+  g_reload_check_interval = g_fps * 2;
 #endif
 
   printf("═══════════════════════════════════════════════════════════\n");
@@ -546,15 +550,19 @@ int platform_main() {
   // ─────────────────────────────────────────────────────────────────────
   // ALLOCATE SOUND SAMPLE BUFFER
   // ─────────────────────────────────────────────────────────────────────
-  // This is where the game writes audio samples.
-  // Platform owns this buffer, game fills it.
+  // This buffer must be large enough to hold the maximum samples we might
+  // request in a single frame. We target 100ms of audio buffered ahead,
+  // so we need at least that much space.
+  //
+  // At 48kHz: 100ms = 4800 samples = 19200 bytes (stereo 16-bit)
+  // ─────────────────────────────────────────────────────────────────────
 
-  int max_samples_per_frame =
-      game_audio_output.samples_per_second / 30; // Worst case: 30fps
+  int32_t samples_per_frame =
+      game_audio_output.samples_per_second / audio_update_hz;
+  int32_t max_samples_per_call = samples_per_frame * 3;
   int sample_buffer_size =
-      max_samples_per_frame * platform_audio_config.bytes_per_sample;
+      max_samples_per_call * platform_audio_config.bytes_per_sample;
 
-  // TODO: handle `platform_allocate_memory` error correctly
   PlatformMemoryBlock sound_samples_block = platform_allocate_memory(
       NULL, sample_buffer_size,
       PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE | PLATFORM_MEMORY_ZEROED);
@@ -574,11 +582,27 @@ int platform_main() {
   // ─────────────────────────────────────────────────────────────────────
 
   char *game_so_path = "build/libgame.so";
-  char *game_temp_so_path = "build/libgame_temp.so";
+  // char unique_temp_name[512];
+  // snprintf(unique_temp_name, sizeof(unique_temp_name),
+  //          "%s.%d", temp_lib_name, g_game_code_load_counter++);
+
+  // printf("   Unique temp: %s\n", unique_temp_name);
+  // char *game_temp_so_path = "build/libgame_temp.so";
+  // Use a unique file name
+  char game_temp_so_path[512];
+  snprintf(game_temp_so_path, sizeof(game_temp_so_path),
+           "build/libgame_temp.%d.so", g_frame_counter);
 
   GameCode game = load_game_code(game_so_path, game_temp_so_path);
+  if (game.is_valid) {
+    printf("✅ Game code loaded successfully\n");
+    // NOTE: do on a separate thread
+    de100_file_delete(game_temp_so_path); // Clean up temp file
+  } else {
+    printf("❌ Failed to load game code, using stubs\n");
+  }
 
-  // uint32_t reload_check_counter = 0;
+  g_reload_check_interval = adaptive.target_fps * 2; // Check every 2 seconds
   // const uint32_t RELOAD_CHECK_INTERVAL = 120;
 
   // ═══════════════════════════════════════════════════════════════
@@ -594,14 +618,22 @@ int platform_main() {
   if (game_buffer.memory.base) {
     while (is_game_running) {
 #if HANDMADE_INTERNAL
-      if (g_frame_log_counter <= 10 || FRAME_LOG_EVERY_FIVE_SECONDS_CHECK) {
+      if (FRAME_LOG_EVERY_TEN_SECONDS_CHECK) { // Every 30 seconds at 60fps
+        printf("[HEALTH CHECK] frame=%u, RSI=%lld, marker_idx=%d\n",
+               g_frame_counter,
+               (long long)platform_audio_config.running_sample_index,
+               g_debug_marker_index);
+      }
+#endif
+#if HANDMADE_INTERNAL
+      if (g_frame_counter <= 10 || FRAME_LOG_EVERY_FIVE_SECONDS_CHECK) {
         // DEBUG: Track RSI changes in main loop
         static int64_t loop_last_rsi = 0;
 
         if (platform_audio_config.running_sample_index != loop_last_rsi) {
           // Only print first 10 frames for debugging
-          if (g_frame_log_counter <= 10) {
-            printf("[LOOP #%d] RSI=%ld (changed by %ld)\n", g_frame_log_counter,
+          if (g_frame_counter <= 10) {
+            printf("[LOOP #%d] RSI=%ld (changed by %ld)\n", g_frame_counter,
                    (long)platform_audio_config.running_sample_index,
                    (long)(platform_audio_config.running_sample_index -
                           loop_last_rsi));
@@ -610,6 +642,51 @@ int platform_main() {
         }
       }
 #endif
+
+      // ═══════════════════════════════════════════════════════════
+      // 🔄 HOT RELOAD CHECK (Casey's Day 21 pattern)
+      // ═══════════════════════════════════════════════════════════
+      // Check periodically if game code has been recompiled
+      // This allows changing game logic without restarting!
+      // ═══════════════════════════════════════════════════════════
+      g_reload_check_counter++;
+      if (g_reload_requested ||
+          g_reload_check_counter >= g_reload_check_interval) {
+        if (g_reload_requested) {
+          g_reload_requested = false;
+          printf("🔄 Hot reload requested by user!\n");
+        }
+        g_reload_check_counter = 0;
+        if (game_code_needs_reload(&game, game_so_path)) {
+          printf("🔄 Hot reload triggered! at g_frame_counter: %d\n",
+                 g_frame_counter);
+          printf("[HOT RELOAD] Before: update_and_render=%p "
+                 "get_audio_samples=%p\n",
+                 (void *)game.update_and_render,
+                 (void *)game.get_audio_samples);
+
+          unload_game_code(&game);
+          char game_temp_so_path[512];
+          snprintf(game_temp_so_path, sizeof(game_temp_so_path),
+                   "build/libgame_temp.%d.so", g_fps);
+
+          printf("[HOT RELOAD] After:  update_and_render=%p "
+                 "get_audio_samples=%p\n",
+                 (void *)game.update_and_render,
+                 (void *)game.get_audio_samples);
+
+          game = load_game_code(game_so_path, game_temp_so_path);
+
+          if (game.is_valid) {
+            printf("✅ Hot reload successful!\n");
+
+            // NOTE: do on a separate thread
+            de100_file_delete(game_temp_so_path); // Clean up temp file
+          } else {
+            printf("⚠️  Hot reload failed, using stubs\n");
+          }
+        }
+      }
 
       struct timespec frame_start_time;
       clock_gettime(CLOCK_MONOTONIC, &frame_start_time);
@@ -633,20 +710,32 @@ int platform_main() {
         game.update_and_render(&game_memory, new_game_input, &game_buffer);
 
         // Step 2: Generate audio based on ALSA's needs
-        // Query how much audio the platform needs
         int32_t samples_to_generate = linux_get_samples_to_write(
             &platform_audio_config, &game_audio_output);
 
+        // ✅ ADD: Log every 100 frames
+        static int audio_log_count = 0;
+        if (++audio_log_count % 100 == 1) {
+          printf("[MAIN] samples_to_generate=%d, RSI=%ld\n",
+                 samples_to_generate,
+                 (long)platform_audio_config.running_sample_index);
+        }
+
         if (samples_to_generate > 0) {
+          int32_t max_samples =
+              sample_buffer_size / platform_audio_config.bytes_per_sample;
+          if (samples_to_generate > max_samples) {
+            // printf("⚠️  Clamping: %d → %d\n", samples_to_generate,
+            // max_samples);
+            samples_to_generate = max_samples;
+          }
+
           GameAudioOutputBuffer sound_buffer = {
               .samples_per_second = game_audio_output.samples_per_second,
               .sample_count = samples_to_generate,
               .samples_block = sound_samples_block};
 
-          // Game generates the samples
           game.get_audio_samples(&game_memory, &sound_buffer);
-
-          // Platform sends to ALSA
           linux_send_samples_to_alsa(&platform_audio_config, &sound_buffer);
         }
 
@@ -802,7 +891,7 @@ int platform_main() {
       adaptive.frames_sampled++;
       adaptive.frames_since_last_change++;
 #if HANDMADE_INTERNAL
-      g_frame_log_counter++;
+      g_frame_counter++;
 #endif
 
       // Track if this frame missed (with larger tolerance for variance)
@@ -878,8 +967,9 @@ int platform_main() {
             adaptive.frames_missed = 0;
             consecutive_good_frames = 0;
 
+            g_fps = adaptive.target_fps;
 #if HANDMADE_INTERNAL
-            g_debug_fps = adaptive.target_fps;
+            g_reload_check_interval = g_fps * 2;
             printf("🚀 QUICK RECOVERY: %d → %d Hz (avg: %.1fms, headroom: "
                    "%.1fms)\n",
                    old_target, adaptive.target_fps, avg_recent,
@@ -935,8 +1025,9 @@ int platform_main() {
             target_seconds_per_frame = 1.0f / (real32)adaptive.target_fps;
             adaptive.frames_since_last_change = 0;
 
+            g_fps = adaptive.target_fps;
 #if HANDMADE_INTERNAL
-            g_debug_fps = adaptive.target_fps;
+            g_reload_check_interval = g_fps * 2;
 #endif
             printf("⚠️  ADAPTIVE: %d → %d Hz (miss rate: %.1f%%)\n", old_target,
                    adaptive.target_fps, miss_rate * 100.0f);
@@ -978,8 +1069,9 @@ int platform_main() {
             target_seconds_per_frame = 1.0f / (real32)adaptive.target_fps;
             adaptive.frames_since_last_change = 0;
 
+            g_fps = adaptive.target_fps;
 #if HANDMADE_INTERNAL
-            g_debug_fps = adaptive.target_fps;
+            g_reload_check_interval = g_fps * 2;
 #endif
             printf("✅ ADAPTIVE: %d → %d Hz (miss rate: %.1f%%)\n", old_target,
                    adaptive.target_fps, miss_rate * 100.0f);

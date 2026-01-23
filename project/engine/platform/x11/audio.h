@@ -225,11 +225,8 @@ bool linux_init_audio(GameAudioOutputBuffer *audio_output,
                       int32_t samples_per_second, int32_t buffer_size_bytes,
                       int32_t game_update_hz);
 
-void linux_fill_audio_buffer(GameAudioOutputBuffer *audio_output,
-                             PlatformAudioConfig *audio_config,
-                             GameAudioState *game_audio_state);
 int32_t linux_get_samples_to_write(PlatformAudioConfig *audio_config,
-                                    GameAudioOutputBuffer *audio_output);
+                                   GameAudioOutputBuffer *audio_output);
 void linux_debug_audio_latency(
     // GameAudioOutputBuffer *audio_output,
     PlatformAudioConfig *audio_config

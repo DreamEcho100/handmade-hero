@@ -15,6 +15,14 @@ void handleEventKeyPress(XEvent *event, GameInput *new_game_input,
       &new_game_input->controllers[KEYBOARD_CONTROLLER_INDEX];
 
   switch (key) {
+  case (XK_F5): {
+    printf("🔄 F5 pressed - Manual reload requested\n");
+    // Set a flag that the main loop will check
+    extern bool g_reload_requested;
+    g_reload_requested = true;
+    break;
+  }
+
   case (XK_w):
   case (XK_W): {
     process_game_button_state(true, &new_controller1->move_up);

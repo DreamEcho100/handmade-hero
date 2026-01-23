@@ -7,7 +7,6 @@ BACKEND="x11"
 HANDMADE_SANITIZE_WAVE_1_MEMORY="0"
 SHOULD_BUILD_GAME=false
 SHOULD_BUILD_PLATFORM=false
-SHOULD_BUILD_ALL=true
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -32,19 +31,22 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
+# Determine build mode
 BUILD_MODE="all"
-if [ "$SHOULD_BUILD_GAME" = true ] && [ "$SHOULD_BUILD_PLATFORM" = true ]; then
-    BUILD_MODE="all"
-elif [ "$SHOULD_BUILD_GAME" = true ]; then
-    BUILD_MODE="game"
-elif [ "$SHOULD_BUILD_PLATFORM" = true ]; then
-    BUILD_MODE="platform"
+if [ "$SHOULD_BUILD_GAME" = true ] || [ "$SHOULD_BUILD_PLATFORM" = true ]; then
+    if [ "$SHOULD_BUILD_GAME" = true ] && [ "$SHOULD_BUILD_PLATFORM" = true ]; then
+        BUILD_MODE="all"
+    elif [ "$SHOULD_BUILD_GAME" = true ]; then
+        BUILD_MODE="game"
+    else
+        BUILD_MODE="platform"
+    fi
 fi
 
 echo "Building with backend: $BACKEND, mode: $BUILD_MODE, sanitize: $HANDMADE_SANITIZE_WAVE_1_MEMORY"
 
 # Common flags
-COMMON_FLAGS="-Isrc -std=c11 -g -O0 -Werror -Wall -Wextra -DHANDMADE_INTERNAL=1"
+COMMON_FLAGS="-Isrc -std=c11 -g -O0 -Werror -Wall -Wextra -DHANDMADE_INTERNAL=1 -DHANDMADE_SLOW=1"
 COMMON_FLAGS="$COMMON_FLAGS -ffunction-sections -fdata-sections -Wl,--gc-sections"
 
 # Sanitize flags
@@ -58,7 +60,14 @@ fi
 if [ "$BUILD_MODE" = "all" ] || [ "$BUILD_MODE" = "game" ]; then
     echo "Building game library..."
     GAME_FLAGS="$COMMON_FLAGS $SANITIZE_FLAGS -shared -fPIC -fvisibility=default -lm"
+
+     # Delete old file first
+    rm -f build/libgame.so
+
     clang game.c -o build/libgame.so $GAME_FLAGS
+    # Force update modification time
+    touch build/libgame.so
+
     if [ -f build/libgame.so ]; then
         echo "Game library built: build/libgame.so"
         echo "Exported symbols (first 10):"
@@ -72,17 +81,11 @@ fi
 # Platform build
 if [ "$BUILD_MODE" = "all" ] || [ "$BUILD_MODE" = "platform" ]; then
     echo "Building platform executable..."
-    PLATFORM_FLAGS="$COMMON_FLAGS $SANITIZE_FLAGS -Wl,-Map=build/game.map -Lbuild -Wl,-rpath=build/ -lm"
-    
-    # Conditionally link the game library only if it was built
-    if [ "$BUILD_MODE" = "all" ]; then
-        PLATFORM_FLAGS="$PLATFORM_FLAGS -lgame"
-    fi
+    PLATFORM_FLAGS="$COMMON_FLAGS $SANITIZE_FLAGS -rdynamic -Wl,-Map=build/game.map -Lbuild -Wl,-rpath=build/ -lm"
     
     # Common platform sources
     PLATFORM_SRC="$PLATFORM_SRC ../engine/main.c"
 
-    PLATFORM_SRC="$PLATFORM_SRC ../engine/_common/debug.c"
     PLATFORM_SRC="$PLATFORM_SRC ../engine/_common/debug-file-io.c"
     PLATFORM_SRC="$PLATFORM_SRC ../engine/_common/dll.c"
     PLATFORM_SRC="$PLATFORM_SRC ../engine/_common/file.c"

@@ -35,18 +35,18 @@
 #endif
 
 #if HANDMADE_SLOW
-#if defined(_MSC_VER) || defined(__MINGW32__) || defined(__MINGW64__) ||       \
-    defined(__CYGWIN__) || defined(__BORLANDC__)
-#include <intrin.h>
-#define DebugTrap() __debugbreak()
-#elif defined(__GNUC__) || defined(__clang__)
-#define DebugTrap() __builtin_trap()
-#else
+// #if defined(_MSC_VER) || defined(__MINGW32__) || defined(__MINGW64__) ||       \
+//     defined(__CYGWIN__) || defined(__BORLANDC__)
+// #include <intrin.h>
+// #define DebugTrap() __debugbreak()
+// #elif defined(__GNUC__) || defined(__clang__)
+// #define DebugTrap() __builtin_trap()
+// #else
 #define DebugTrap()                                                            \
   {                                                                            \
     *(volatile int *)0 = 0;                                                    \
   }
-#endif
+// #endif
 #define ASSERT(expression)                                                     \
   if (!(expression)) {                                                         \
     DebugTrap();                                                               \

@@ -17,10 +17,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#if HANDMADE_INTERNAL
-#include "../../_common/debug.h"
-#endif
-
 // ═══════════════════════════════════════════════════════════════════════════
 // 🎨 RAYLIB-SPECIFIC TYPES
 // ═══════════════════════════════════════════════════════════════════════════
@@ -182,8 +178,9 @@ int platform_main() {
   SetTargetFPS(target_fps);
 
 #if HANDMADE_INTERNAL
-  g_frame_log_counter = 0;
-  g_debug_fps = target_fps;
+  g_frame_counter = 0;
+  g_fps = target_fps;
+  g_reload_check_interval = g_fps * 2;
 #endif
 
   printf("✅ Window created\n");
@@ -322,7 +319,7 @@ int platform_main() {
     EndDrawing();
 
 #if HANDMADE_INTERNAL
-    g_frame_log_counter++;
+    g_frame_counter++;
 #endif
 
     // ─────────────────────────────────────────────────────────────
