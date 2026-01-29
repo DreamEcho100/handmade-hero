@@ -12,7 +12,7 @@ typedef struct {
 file_scoped_global_var RaylibJoystickState g_joysticks[MAX_JOYSTICK_COUNT] = {
     0};
 
-void raylib_init_gamepad(GameControllerInput *controller_old_input,
+void raylib_game_initpad(GameControllerInput *controller_old_input,
                          GameControllerInput *controller_new_input) {
 
   // Initialize ALL controllers FIRST

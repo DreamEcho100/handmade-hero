@@ -1,31 +1,122 @@
-#ifndef DE100_ENGINE_HERO_game_LOADER_H
-#define DE100_ENGINE_HERO_game_LOADER_H
+#ifndef DE100_HERO_game_LOADER_H
+#define DE100_HERO_game_LOADER_H
+
+#include "base.h"
 
 #include "../_common/dll.h"
-#include "base.h"
-#include <time.h>
+#include "../_common/time.h"
+#include "config.h"
+
+
+#ifndef DE100_SHARED_LIB_PREFIX
+#if defined(_WIN32)
+#define DE100_SHARED_LIB_PREFIX ""
+#elif defined(__APPLE__)
+#define DE100_SHARED_LIB_PREFIX "lib"
+#else
+#define DE100_SHARED_LIB_PREFIX "lib"
+#endif
+#endif
+
+#ifndef DE100_SHARED_LIB_EXT
+#if defined(_WIN32)
+#define DE100_SHARED_LIB_EXT "dll"
+#elif defined(__APPLE__)
+#define DE100_SHARED_LIB_EXT "dylib"
+#else
+#define DE100_SHARED_LIB_EXT "so"
+#endif
+#endif
+
+#ifndef GAME_BUILD_DIR_PATH
+#define GAME_BUILD_DIR_PATH "./build"
+#endif
+
+// DE100_GAME_BUILD_DIR_PATH="./build"
+
+// DE100_GAME_MAIN_LIB_NAME="main"
+// DE100_GAME_MAIN_TMP_LIB_NAME="main.tmp"
+#ifndef DE100_GAME_MAIN_LIB_NAME
+#define DE100_GAME_MAIN_LIB_NAME "main"
+#endif
+#ifndef DE100_GAME_MAIN_TMP_LIB_NAME
+#define DE100_GAME_MAIN_TMP_LIB_NAME "main_tmp"
+#endif
+
+// DE100_GAME_STARTUP_LIB_NAME="startup"
+// DE100_GAME_STARTUP_TMP_LIB_NAME="startup.tmp"
+#ifndef DE100_GAME_STARTUP_LIB_NAME
+#define DE100_GAME_STARTUP_LIB_NAME "startup"
+#endif
+#ifndef DE100_GAME_STARTUP_TMP_LIB_NAME
+#define DE100_GAME_STARTUP_TMP_LIB_NAME "startup_tmp"
+#endif
+
+// DE100_GAME_INIT_LIB_NAME="init"
+// DE100_GAME_INIT_TMP_LIB_NAME="init.tmp"
+#ifndef DE100_GAME_INIT_LIB_NAME
+#define DE100_GAME_INIT_LIB_NAME "init"
+#endif
+#ifndef DE100_GAME_INIT_TMP_LIB_NAME
+#define DE100_GAME_INIT_TMP_LIB_NAME "init_tmp"
+#endif
+
+// Main
+#ifndef DE100_GAME_MAIN_SHARED_LIB_PATH
+#define DE100_GAME_MAIN_SHARED_LIB_PATH                                        \
+  GAME_BUILD_DIR_PATH "/" DE100_SHARED_LIB_PREFIX DE100_GAME_MAIN_LIB_NAME     \
+                      "." DE100_SHARED_LIB_EXT
+#endif
+#ifndef DE100_GAME_MAIN_TMP_SHARED_LIB_PATH
+#define DE100_GAME_MAIN_TMP_SHARED_LIB_PATH                                    \
+  GAME_BUILD_DIR_PATH "/" DE100_SHARED_LIB_PREFIX DE100_GAME_MAIN_TMP_LIB_NAME \
+                      "." DE100_SHARED_LIB_EXT
+#endif
+
+// Startup
+#ifndef DE100_GAME_STARTUP_SHARED_LIB_PATH
+#define DE100_GAME_STARTUP_SHARED_LIB_PATH                                     \
+  GAME_BUILD_DIR_PATH "/" DE100_SHARED_LIB_PREFIX DE100_GAME_STARTUP_LIB_NAME  \
+                      "." DE100_SHARED_LIB_EXT
+#endif
+#ifndef DE100_GAME_STARTUP_TMP_SHARED_LIB_PATH
+#define DE100_GAME_STARTUP_TMP_SHARED_LIB_PATH                                 \
+  GAME_BUILD_DIR_PATH                                                          \
+  "/" DE100_SHARED_LIB_PREFIX DE100_GAME_STARTUP_TMP_LIB_NAME                  \
+  "." DE100_SHARED_LIB_EXT
+#endif
+
+// Init
+#ifndef DE100_GAME_INIT_SHARED_LIB_PATH
+#define DE100_GAME_INIT_SHARED_LIB_PATH                                        \
+  GAME_BUILD_DIR_PATH "/" DE100_SHARED_LIB_PREFIX DE100_GAME_INIT_LIB_NAME     \
+                      "." DE100_SHARED_LIB_EXT
+#endif
+#ifndef DE100_GAME_INIT_TMP_SHARED_LIB_PATH
+#define DE100_GAME_INIT_TMP_SHARED_LIB_PATH                                    \
+  GAME_BUILD_DIR_PATH "/" DE100_SHARED_LIB_PREFIX DE100_GAME_INIT_TMP_LIB_NAME \
+                      "." DE100_SHARED_LIB_EXT
+#endif
 
 // ═══════════════════════════════════════════════════════════════════════════
 // GAME CODE FUNCTION SIGNATURES
 // ═══════════════════════════════════════════════════════════════════════════
 
-// Called once at startup to initialize game state and config, before any
-// rendering or audio. won't be called on hot reload
+// Can be used for very early, one-time setup (e.g., static data, global
+// resources, or things that must happen before memory allocation)
 #define GAME_STARTUP(name)                                                     \
-  int name(GameMemory *memory, GameInput *old_game_input,                      \
-           GameInput *new_game_input, GameOffscreenBuffer *buffer,             \
-           GameAudioOutputBuffer *audio_buffer)
+  int name(GameConfig *game_config)
 typedef GAME_STARTUP(game_startup_t);
 
-// Called once at initialization to set up game state, will be called on hot
-// reload
+// Can be used for per-session or per-level initialization, possibly with access
+// to memory arenas or engine services.
 #define GAME_INIT(name)                                                        \
-  void name(GameMemory *memory, GameInput *input, GameOffscreenBuffer *buffer)
+  void name(GameMemory *memory, GameInput *input, GameBackBuffer *buffer)
 typedef GAME_INIT(game_init_t);
 
 // Called once per frame - updates game logic and renders graphics
 #define GAME_UPDATE_AND_RENDER(name)                                           \
-  void name(GameMemory *memory, GameInput *input, GameOffscreenBuffer *buffer)
+  void name(GameMemory *memory, GameInput *input, GameBackBuffer *buffer)
 typedef GAME_UPDATE_AND_RENDER(game_update_and_render_t);
 
 // Called to fill audio buffer - may be called multiple times per frame
@@ -39,7 +130,7 @@ typedef GAME_GET_AUDIO_SAMPLES(game_get_audio_samples_t);
 
 typedef struct {
   struct de100_dll_t game_code_lib;
-  time_t last_write_time;
+  PlatformTimeSpec last_write_time;
 
   game_update_and_render_t *update_and_render;
   game_get_audio_samples_t *get_audio_samples;
@@ -54,17 +145,23 @@ typedef struct {
 // ═══════════════════════════════════════════════════════════════════════════
 
 typedef enum {
-  GAME_CODE_CATEGORY_ANY,
-  GAME_CODE_CATEGORY_MAIN,
-  GAME_CODE_CATEGORY_PRE_MAIN
+  GAME_CODE_CATEGORY_NONE = 0,
+  GAME_CODE_CATEGORY_MAIN = 1 << 0,
+  GAME_CODE_CATEGORY_INIT = 1 << 1,
+  GAME_CODE_CATEGORY_STARTUP = 1 << 2,
+  GAME_CODE_CATEGORY_ANY = GAME_CODE_CATEGORY_MAIN | GAME_CODE_CATEGORY_INIT |
+                           GAME_CODE_CATEGORY_STARTUP
 } GAME_CODE_CATEGORIES;
 
 typedef struct {
-  const char *main_main_game_lib_name;
-  const char *temp_main_game_lib_name;
+  char *game_main_lib_path;
+  char *game_main_lib_tmp_path;
 
-  const char *pre_main_game_lib_path;
-  const char *temp_pre_main_game_lib_path;
+  char *game_startup_lib_path;
+  char *game_startup_lib_tmp_path;
+
+  char *game_init_lib_path;
+  char *game_init_lib_tmp_path;
 } LoadGameCodeConfig;
 
 /**
@@ -81,8 +178,8 @@ typedef struct {
  * Never exits or crashes - always returns a valid GameCode structure.
  * On error, uses stub functions and sets is_valid to false.
  */
-void load_game_code(GameCode *game_code, LoadGameCodeConfig *config,
-                    GAME_CODE_CATEGORIES category);
+int load_game_code(GameCode *game_code, LoadGameCodeConfig *config,
+                   GAME_CODE_CATEGORIES category);
 
 /**
  * Unload game code and free resources.
@@ -105,8 +202,8 @@ void unload_game_code(GameCode *game_code);
  * Safe to call with NULL pointers (returns false with warning).
  * Returns false if file doesn't exist or can't be accessed.
  */
-bool32 main_game_code_needs_reload(const GameCode *game_code,
-                                   const char *source_lib_name);
+bool32 game_main_code_needs_reload(const GameCode *game_code,
+                                   char *source_lib_name);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // STUB FUNCTIONS
@@ -136,4 +233,4 @@ GAME_STARTUP(game_startup_stub);
  */
 GAME_INIT(game_init_stub);
 
-#endif // DE100_ENGINE_HERO_game_LOADER_H
+#endif // DE100_HERO_game_LOADER_H

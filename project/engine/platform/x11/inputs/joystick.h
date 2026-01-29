@@ -1,6 +1,6 @@
 
-#ifndef ENGINE_PLATFORM_X11_INPUTS_JOYSTICK_H
-#define ENGINE_PLATFORM_X11_INPUTS_JOYSTICK_H
+#ifndef DE100_PLATFORM_X11_INPUTS_JOYSTICK_H
+#define DE100_PLATFORM_X11_INPUTS_JOYSTICK_H
 
 #include "../../../game/input.h"
 
@@ -9,4 +9,4 @@ void linux_init_joystick(GameControllerInput *controller_old_input, GameControll
 void debug_joystick_state(GameInput *game_input);
 void linux_poll_joystick(GameInput *new_input);
 
-#endif // ENGINE_PLATFORM_X11_INPUTS_JOYSTICK_H
+#endif // DE100_PLATFORM_X11_INPUTS_JOYSTICK_H

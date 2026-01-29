@@ -1,5 +1,5 @@
-#ifndef ENGINE_GAME_MEMORY_H
-#define ENGINE_GAME_MEMORY_H
+#ifndef DE100_GAME_MEMORY_H
+#define DE100_GAME_MEMORY_H
 
 #include "../_common/memory.h"
 #include <stdint.h>
@@ -54,13 +54,13 @@ typedef struct {
   // scratch data!
   PlatformMemoryBlock transient_storage;
   // Size of the permanent storage block in bytes
-  uint64_t permanent_storage_size;
+  uint64 permanent_storage_size;
   // Size of the temporary storage block in bytes
-  uint64_t transient_storage_size;
+  uint64 transient_storage_size;
   // Has this memory been initialized?
   bool32 is_initialized;
 } GameMemory;
 
 typedef struct GameState GameState;
 
-#endif // ENGINE_GAME_MEMORY_H
+#endif // DE100_GAME_MEMORY_H

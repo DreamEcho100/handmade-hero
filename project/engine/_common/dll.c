@@ -9,7 +9,7 @@
 /**
  * Convert Windows error code to our status code.
  */
-static enum de100_status_code win32_error_to_status(DWORD error_code) {
+file_scoped_fn enum de100_status_code win32_error_to_status(DWORD error_code) {
   switch (error_code) {
   case ERROR_FILE_NOT_FOUND:
   case ERROR_PATH_NOT_FOUND:
@@ -39,7 +39,8 @@ static enum de100_status_code win32_error_to_status(DWORD error_code) {
 /**
  * Get Windows error message and store it in the DLL structure.
  */
-static void win32_get_error_message(struct de100_dll_t *dll, DWORD error_code) {
+file_scoped_fn void win32_get_error_message(struct de100_dll_t *dll,
+                                            DWORD error_code) {
   FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
                  NULL, error_code, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
                  dll->error_message, sizeof(dll->error_message), NULL);

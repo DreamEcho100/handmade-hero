@@ -34,7 +34,8 @@ void prepare_input_frame(GameInput *old_input, GameInput *new_input) {
     new_ctrl->stick_avg_x = old_ctrl->stick_avg_x;
     new_ctrl->stick_avg_y = old_ctrl->stick_avg_y;
 
-    static int new_ctrl_btns_size = (int)ArraySize(new_ctrl->buttons);
+    local_persist_var int new_ctrl_btns_size =
+        (int)ArraySize(new_ctrl->buttons);
 
     // Buttons - preserve state, clear transition count
     for (int btn = 0; btn < new_ctrl_btns_size; btn++) {

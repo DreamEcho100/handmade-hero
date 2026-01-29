@@ -1,5 +1,5 @@
-#ifndef ENGINE_GAME_AUDIO_H
-#define ENGINE_GAME_AUDIO_H
+#ifndef DE100_GAME_AUDIO_H
+#define DE100_GAME_AUDIO_H
 
 #include "../_common/base.h"
 #include "../_common/memory.h"
@@ -37,16 +37,16 @@ typedef struct {
 // Platform allocates memory, tells game how many samples to generate,
 // game fills buffer, platform sends to hardware.
 //
-// Casey's equivalent: game_sound_output_buffer
+// Casey's equivalent: game_audio_output_buffer
 // ═══════════════════════════════════════════════════════════════════════════
 
 typedef struct {
-    int32_t samples_per_second;  // Sample rate (e.g., 48000)
-    int32_t sample_count;        // How many samples to generate THIS call
+    int32 samples_per_second;  // Sample rate (e.g., 48000)
+    int32 sample_count;        // How many samples to generate THIS call
     
     // Two ways to access the buffer (platform chooses which to use):
-    // int16_t *samples;            // Simple pointer (preferred for game code)
+    // int16 *samples;            // Simple pointer (preferred for game code)
     PlatformMemoryBlock samples_block;  // Full block info (for platform)
 } GameAudioOutputBuffer;
 
-#endif // ENGINE_GAME_AUDIO_H
+#endif // DE100_GAME_AUDIO_H

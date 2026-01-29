@@ -700,7 +700,7 @@ Every frame, we upload our CPU-rendered pixels to the GPU texture.
 ```c
 // 📍 Location: project/src/platform/x11/backend.c, lines 162-182
 
-static void update_window_opengl(GameOffscreenBuffer *buffer) {
+static void update_window_opengl(GameBackBuffer *buffer) {
     // Bind our texture
     glBindTexture(GL_TEXTURE_2D, g_gl.texture_id);
 
@@ -1067,19 +1067,19 @@ static OpenGLState g_gl = {0};
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### GameOffscreenBuffer
+### GameBackBuffer
 
 The CPU-side pixel buffer that we render to.
 
 ```c
 // Our game renders pixels here (in RAM)
-typedef struct GameOffscreenBuffer {
+typedef struct GameBackBuffer {
     PlatformMemoryBlock memory;  // Pixel data (RGBA)
     int width;                   // Buffer width
     int height;                  // Buffer height
     int pitch;                   // Bytes per row (width × 4)
     int bytes_per_pixel;         // Always 4 (RGBA)
-} GameOffscreenBuffer;
+} GameBackBuffer;
 ```
 
 **How This Connects to OpenGL:**
@@ -1088,7 +1088,7 @@ typedef struct GameOffscreenBuffer {
 ┌─────────────────────────────────────────────────────────────┐
 │         CPU BUFFER → GPU TEXTURE FLOW                       │
 │                                                             │
-│   GameOffscreenBuffer                  OpenGLState          │
+│   GameBackBuffer                  OpenGLState          │
 │   ┌─────────────────────┐              ┌─────────────────┐  │
 │   │ memory.base ────────│──────────────│→ texture_id     │  │
 │   │ width, height       │   glTexImage2D()               │  │
@@ -1096,7 +1096,7 @@ typedef struct GameOffscreenBuffer {
 │   │ bytes_per_pixel = 4 │              │ GL_RGBA format  │  │
 │   └─────────────────────┘              └─────────────────┘  │
 │                                                             │
-│   The game renders to GameOffscreenBuffer.memory.base,      │
+│   The game renders to GameBackBuffer.memory.base,      │
 │   then glTexImage2D() copies it to the GPU texture.         │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘

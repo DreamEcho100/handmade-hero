@@ -1,13 +1,14 @@
-#ifndef HANDMADE_HERO_GAME_H
-#define HANDMADE_HERO_GAME_H
+#ifndef DE100_HERO_GAME_H
+#define DE100_HERO_GAME_H
 
-#include "../engine/_common/base.h"
-#include "../engine/_common/memory.h"
-#include "../engine/game/audio.h"
-#include "../engine/game/backbuffer.h"
-#include "../engine/game/base.h"
-#include "../engine/game/input.h"
-#include "../engine/game/memory.h"
+#include "../../engine/_common/base.h"
+#include "../../engine/_common/memory.h"
+#include "../../engine/game/audio.h"
+#include "../../engine/game/backbuffer.h"
+#include "../../engine/game/base.h"
+#include "../../engine/game/input.h"
+#include "../../engine/game/memory.h"
+#include "../../engine/game/game-loader.h"
 
 GameControllerInput *GetController(GameInput *Input,
                                    unsigned int ControllerIndex);
@@ -39,4 +40,4 @@ typedef struct {
   int speed;
 } HandMadeHeroGameState;
 
-#endif // HANDMADE_HERO_GAME_H
+#endif // DE100_HERO_GAME_H

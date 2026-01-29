@@ -1,6 +1,6 @@
-#ifndef ENGINE_PLATFORM_H
-#define ENGINE_PLATFORM_H
+#ifndef DE100_PLATFORM_H
+#define DE100_PLATFORM_H
 
 int platform_main();
 
-#endif // ENGINE_PLATFORM_H
+#endif // DE100_PLATFORM_H

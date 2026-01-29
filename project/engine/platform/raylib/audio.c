@@ -30,8 +30,8 @@ RaylibSoundOutput g_raylib_audio_output = {0};
 // ═══════════════════════════════════════════════════════════════════════════
 bool raylib_init_audio(GameAudioOutputBuffer *audio_output,
                        PlatformAudioConfig *audio_config,
-                       int32_t samples_per_second, int32_t buffer_size_frames,
-                       int32_t game_update_hz) {
+                       int32 samples_per_second, int32 buffer_size_frames,
+                       int32 game_update_hz) {
   (void)(buffer_size_frames);
 
   printf("═══════════════════════════════════════════════════════════\n");
@@ -59,11 +59,11 @@ bool raylib_init_audio(GameAudioOutputBuffer *audio_output,
   // But not too big or latency increases
   // ─────────────────────────────────────────────────────────────────────
 
-  int32_t samples_per_frame = samples_per_second / game_update_hz;
+  int32 samples_per_frame = samples_per_second / game_update_hz;
 
   // Use 2 frames worth as buffer size for low latency
   // This means we'll get IsAudioStreamProcessed() every ~2 frames
-  int32_t actual_buffer_size = samples_per_frame * 2;
+  int32 actual_buffer_size = samples_per_frame * 2;
 
   // Clamp to reasonable range
   if (actual_buffer_size < 512)
@@ -82,7 +82,7 @@ bool raylib_init_audio(GameAudioOutputBuffer *audio_output,
   // STEP 3: Configure platform audio config
   // ─────────────────────────────────────────────────────────────────────
   audio_config->samples_per_second = samples_per_second;
-  audio_config->bytes_per_sample = sizeof(int16_t) * 2; // 16-bit stereo
+  audio_config->bytes_per_sample = sizeof(int16) * 2; // 16-bit stereo
   audio_config->running_sample_index = 0;
   audio_config->game_update_hz = game_update_hz;
   audio_config->latency_sample_count = actual_buffer_size;
@@ -91,7 +91,7 @@ bool raylib_init_audio(GameAudioOutputBuffer *audio_output,
   audio_config->safety_sample_count = samples_per_frame / 3;
 
   // Target buffer: 2 frames of audio (provides good latency cushion)
-  int32_t target_buffer_samples = samples_per_frame * 2;
+  int32 target_buffer_samples = samples_per_frame * 2;
   audio_config->secondary_buffer_size =
       target_buffer_samples * audio_config->bytes_per_sample;
 
@@ -137,7 +137,7 @@ bool raylib_init_audio(GameAudioOutputBuffer *audio_output,
   // STEP 6: Allocate sample buffer for game to fill
   // ─────────────────────────────────────────────────────────────────────
   // Only need enough for one buffer write
-  uint32_t buffer_bytes = actual_buffer_size * audio_config->bytes_per_sample;
+  uint32 buffer_bytes = actual_buffer_size * audio_config->bytes_per_sample;
 
   g_raylib_audio_output.sample_buffer = platform_allocate_memory(
       NULL, buffer_bytes,
@@ -194,8 +194,8 @@ bool raylib_init_audio(GameAudioOutputBuffer *audio_output,
 // FIXED: Write audio EVERY frame to keep buffer full, not just when empty.
 // Raylib's internal buffer needs continuous feeding.
 // ═══════════════════════════════════════════════════════════════════════════
-int32_t raylib_get_samples_to_write(PlatformAudioConfig *audio_config,
-                                    GameAudioOutputBuffer *audio_output) {
+int32 raylib_get_samples_to_write(PlatformAudioConfig *audio_config,
+                                  GameAudioOutputBuffer *audio_output) {
   (void)(audio_output);
   if (!audio_config->is_initialized || !g_raylib_audio_output.stream_valid) {
     return 0;
@@ -209,10 +209,10 @@ int32_t raylib_get_samples_to_write(PlatformAudioConfig *audio_config,
 
   // Calculate samples to fill one buffer's worth
   // Use the buffer size we configured the stream with
-  int32_t samples_to_write = g_raylib_audio_output.buffer_size_frames;
+  int32 samples_to_write = g_raylib_audio_output.buffer_size_frames;
 
   // Clamp to our sample buffer capacity
-  int32_t max_samples =
+  int32 max_samples =
       g_raylib_audio_output.sample_buffer_size / audio_config->bytes_per_sample;
   if (samples_to_write > max_samples) {
     samples_to_write = max_samples;
@@ -248,18 +248,12 @@ void raylib_send_samples(PlatformAudioConfig *audio_config,
   audio_config->running_sample_index += source->sample_count;
 
   // DEBUG: Track write statistics
-#if HANDMADE_INTERNAL
-  static int64_t last_log_samples = 0;
-  static int write_count = 0;
-
-  write_count++;
-
+#if DE100_INTERNAL
   if (FRAME_LOG_EVERY_THREE_SECONDS_CHECK) {
-    int64_t samples_written =
+    int64 samples_written =
         audio_config->running_sample_index - last_log_samples;
     printf("[AUDIO] Writes in last 3s: %d, total samples: %lld\n", write_count,
            (long long)samples_written);
-    write_count = 0;
     last_log_samples = audio_config->running_sample_index;
   }
 #endif

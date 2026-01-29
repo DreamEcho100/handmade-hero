@@ -1,5 +1,5 @@
-#ifndef ENGINE_PLATFORM_RAYLIB_BACKEND_H
-#define ENGINE_PLATFORM_RAYLIB_BACKEND_H
+#ifndef DE100_PLATFORM_RAYLIB_BACKEND_H
+#define DE100_PLATFORM_RAYLIB_BACKEND_H
 
 #include "../platform.h"
 
@@ -7,4 +7,4 @@
 // Implements platform_main() using raylib
 
 
-#endif // ENGINE_PLATFORM_RAYLIB_BACKEND_H
+#endif // DE100_PLATFORM_RAYLIB_BACKEND_H

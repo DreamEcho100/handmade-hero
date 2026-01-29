@@ -1,5 +1,5 @@
-#ifndef ENGINE_GAME_INPUT_H
-#define ENGINE_GAME_INPUT_H
+#ifndef DE100_GAME_INPUT_H
+#define DE100_GAME_INPUT_H
 
 #include "../_common/memory.h"
 #include "memory.h"
@@ -236,4 +236,4 @@ typedef struct game_input {
 void prepare_input_frame(GameInput *old_input, GameInput *new_input);
 void process_game_button_state(bool is_down, GameButtonState *new_state);
 
-#endif // ENGINE_GAME_INPUT_H
+#endif // DE100_GAME_INPUT_H

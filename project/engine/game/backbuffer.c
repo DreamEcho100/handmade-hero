@@ -1,13 +1,13 @@
 #include "backbuffer.h"
 #include <stdio.h>
 
-INIT_BACKBUFFER_STATUS init_backbuffer(GameOffscreenBuffer *buffer, int width,
+INIT_BACKBUFFER_STATUS init_backbuffer(GameBackBuffer *buffer, int width,
                                        int height, int bytes_per_pixel) {
   buffer->memory.base = NULL;
   buffer->width = width;
   buffer->height = height;
   buffer->bytes_per_pixel = bytes_per_pixel;
-  buffer->pitch = buffer->width * buffer->bytes_per_pixel;
+  buffer->pitch = width * bytes_per_pixel;
   int initial_initial_buffer_size = buffer->pitch * buffer->height;
   PlatformMemoryBlock memory_block = platform_allocate_memory(
       NULL, initial_initial_buffer_size,

@@ -1,5 +1,5 @@
-#ifndef ENGINE_COMMON_MEMORY_H
-#define ENGINE_COMMON_MEMORY_H
+#ifndef DE100_COMMON_MEMORY_H
+#define DE100_COMMON_MEMORY_H
 
 #include "base.h"
 #include <stddef.h>
@@ -149,4 +149,50 @@ bool platform_memory_is_valid(PlatformMemoryBlock block);
  */
 size_t platform_get_page_size(void);
 
-#endif // ENGINE_COMMON_MEMORY_H
+// ═══════════════════════════════════════════════════════════════════════════
+// MEMORY OPERATIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * @brief Fill memory with a constant byte value.
+ *
+ * @param dest Destination memory address
+ * @param value Byte value to fill (converted to unsigned char)
+ * @param size Number of bytes to fill
+ * @return Pointer to dest, or NULL if dest is NULL
+ */
+void *platform_memset(void *dest, int value, size_t size);
+
+/**
+ * @brief Securely zero memory (guaranteed not to be optimized away).
+ *
+ * Use this for clearing sensitive data like passwords or keys.
+ *
+ * @param dest Destination memory address
+ * @param size Number of bytes to zero
+ * @return Pointer to dest, or NULL if dest is NULL
+ */
+void *platform_secure_zero(void *dest, size_t size);
+
+/**
+ * @brief Copy memory from source to destination (non-overlapping).
+ *
+ * @param dest Destination memory address
+ * @param src Source memory address
+ * @param size Number of bytes to copy
+ * @return Pointer to dest, or NULL on error
+ */
+void *platform_memcpy(void *dest, const void *src, size_t size);
+
+/**
+ * @brief Copy memory, handling overlapping regions correctly.
+ *
+ * @param dest Destination memory address
+ * @param src Source memory address
+ * @param size Number of bytes to copy
+ * @return Pointer to dest, or NULL on error
+ */
+void *platform_memmove(void *dest, const void *src, size_t size);
+
+
+#endif // DE100_COMMON_MEMORY_H

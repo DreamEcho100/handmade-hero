@@ -1,5 +1,5 @@
-#ifndef ENGINE_PLATFORM_X11_AUDIO_H
-#define ENGINE_PLATFORM_X11_AUDIO_H
+#ifndef DE100_PLATFORM_X11_AUDIO_H
+#define DE100_PLATFORM_X11_AUDIO_H
 
 #include "../../_common/base.h"
 #include "../../_common/memory.h"
@@ -122,13 +122,13 @@ typedef struct {
   snd_pcm_t *pcm_handle;
   void *alsa_library;
 
-  uint32_t buffer_size;
+  uint32 buffer_size;
 
   PlatformMemoryBlock sample_buffer;
-  uint32_t sample_buffer_size;
+  uint32 sample_buffer_size;
 
-  int32_t latency_sample_count;
-  int32_t latency_microseconds;
+  int32 latency_sample_count;
+  int32 latency_microseconds;
 
   // Day 20DirectSound has SafetyBytes:
   // - Accounts for frame timing variance
@@ -139,7 +139,7 @@ typedef struct {
   // - Same purpose
   // - Same calculation (but in samples, not bytes)
   // - Formula: (samples_per_second / game_update_hz) / 3
-  int32_t safety_sample_count; // Safety margin (1/3 frame worth of samples)
+  int32 safety_sample_count; // Safety margin (1/3 frame worth of samples)
 } LinuxSoundOutput;
 
 extern LinuxSoundOutput g_linux_audio_output;
@@ -151,7 +151,7 @@ extern LinuxSoundOutput g_linux_audio_output;
 // Equivalent to win32_debug_time_marker but adapted for ALSA
 // ═══════════════════════════════════════════════════════════════
 
-#if HANDMADE_INTERNAL
+#if DE100_INTERNAL
 #include "../../game/backbuffer.h"
 
 typedef struct {
@@ -162,23 +162,23 @@ typedef struct {
   // Unlike DirectSound, ALSA doesn't give us cursors directly
   // We calculate them from running_sample_index and delay
 
-  int64_t output_play_cursor;  // Virtual play cursor (RSI - delay)
-  int64_t output_write_cursor; // This is now the ACTUAL write cursor
-  int64_t output_location;     // Where we started writing (RSI)
-  int64_t output_sample_count; // How many samples we wrote
+  int64 output_play_cursor;  // Virtual play cursor (RSI - delay)
+  int64 output_write_cursor; // This is now the ACTUAL write cursor
+  int64 output_location;     // Where we started writing (RSI)
+  int64 output_sample_count; // How many samples we wrote
 
   // ══════════════════════════════════════════════════════════
   // PREDICTION
   // ══════════════════════════════════════════════════════════
   // Where we PREDICT the play cursor will be at frame flip
-  int64_t expected_flip_play_cursor;
+  int64 expected_flip_play_cursor;
 
   // ══════════════════════════════════════════════════════════
   // CAPTURED AFTER SCREEN FLIP (Flip State)
   // ══════════════════════════════════════════════════════════
   // Actual cursor positions after frame display
-  int64_t flip_play_cursor;  // Actual play cursor after flip
-  int64_t flip_write_cursor; // Actual write cursor after flip
+  int64 flip_play_cursor;  // Actual play cursor after flip
+  int64 flip_write_cursor; // Actual write cursor after flip
 
   // ══════════════════════════════════════════════════════════
   // ALSA-SPECIFIC DATA (for debugging ALSA behavior)
@@ -189,7 +189,7 @@ typedef struct {
   snd_pcm_sframes_t flip_avail_frames;   // ALSA avail at flip time
                                          //
   // ✅ NEW: Store safe write cursor for reference
-  int64_t output_safe_write_cursor; // ← ADD THIS
+  int64 output_safe_write_cursor; // ← ADD THIS
 
 } LinuxDebugAudioMarker;
 
@@ -206,13 +206,13 @@ void linux_debug_capture_flip_state(
     PlatformAudioConfig *audio_config);
 
 // Draw debug visualization (called every frame)
-void linux_debug_sync_display(GameOffscreenBuffer *buffer,
+void linux_debug_sync_display(GameBackBuffer *buffer,
                               GameAudioOutputBuffer *audio_output,
                               PlatformAudioConfig *audio_config,
                               LinuxDebugAudioMarker *markers, int marker_count,
                               int current_marker_index);
 
-#endif // HANDMADE_INTERNAL
+#endif // DE100_INTERNAL
 
 // ═══════════════════════════════════════════════════════════════
 // 🔊 PUBLIC FUNCTION DECLARATIONS
@@ -221,11 +221,11 @@ void linux_debug_sync_display(GameOffscreenBuffer *buffer,
 void linux_load_alsa(void);
 
 bool linux_init_audio(GameAudioOutputBuffer *audio_output,
-                      PlatformAudioConfig *sound_config,
-                      int32_t samples_per_second, int32_t buffer_size_bytes,
-                      int32_t game_update_hz);
+                      PlatformAudioConfig *audio_config,
+                      int32 samples_per_second, int32 buffer_size_bytes,
+                      int32 game_update_hz);
 
-int32_t linux_get_samples_to_write(PlatformAudioConfig *audio_config,
+int32 linux_get_samples_to_write(PlatformAudioConfig *audio_config,
                                    GameAudioOutputBuffer *audio_output);
 void linux_debug_audio_latency(
     // GameAudioOutputBuffer *audio_output,
@@ -235,10 +235,10 @@ void linux_debug_audio_latency(
 void linux_unload_alsa(GameAudioOutputBuffer *audio_output,
                        PlatformAudioConfig *audio_config);
 void linux_audio_fps_change_handling(GameAudioOutputBuffer *audio_output,
-                                     PlatformAudioConfig *sound_config);
+                                     PlatformAudioConfig *audio_config);
 
 void linux_send_samples_to_alsa(PlatformAudioConfig *audio_config,
                                 GameAudioOutputBuffer *source);
 void linux_clear_audio_buffer(PlatformAudioConfig *audio_config);
 
-#endif // ENGINE_PLATFORM_X11_AUDIO_H
+#endif // DE100_PLATFORM_X11_AUDIO_H

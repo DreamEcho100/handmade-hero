@@ -2,6 +2,9 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "./base.h"
+#include "./time.h"
+
 // Platform-specific includes
 #if defined(_WIN32)
 #include <sys/stat.h>
@@ -75,8 +78,8 @@ static void win32_get_error_message(char *buffer, size_t buffer_size,
     }
   }
 }
-#elif defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) ||      \
-    defined(__unix__) || defined(__MACH__)
+
+#else
 /**
  * Convert POSIX errno to our file error code.
  */
@@ -97,7 +100,9 @@ static enum de100_file_error_code errno_to_file_error(int err) {
     return FILE_ERROR_IS_DIRECTORY;
 
   case ENOSPC:
+#if defined(EDQUOT)
   case EDQUOT:
+#endif
     return FILE_ERROR_DISK_FULL;
 
   case ENAMETOOLONG:
@@ -128,29 +133,91 @@ de100_file_time_result_t de100_file_get_mod_time(const char *filename) {
     return result;
   }
 
-  struct stat file_stat;
-  if (stat(filename, &file_stat) == 0) {
-    result.success = true;
-    result.value = file_stat.st_mtime;
-    result.error_code = FILE_SUCCESS;
-    snprintf(result.error_message, sizeof(result.error_message), "Success");
-  } else {
 #if defined(_WIN32)
+  // ─────────────────────────────────────────────────────────────────────────
+  // WINDOWS
+  // ─────────────────────────────────────────────────────────────────────────
+  WIN32_FILE_ATTRIBUTE_DATA file_info;
+
+  if (!GetFileAttributesExA(filename, GetFileExInfoStandard, &file_info)) {
     DWORD error_code = GetLastError();
+    result.success = false;
     result.error_code = win32_error_to_file_error(error_code);
-    win32_get_error_message(result.error_message, sizeof(result.error_message),
-                            error_code);
-#elif defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) ||      \
-    defined(__unix__) || defined(__MACH__)
+
+    char sys_msg[256];
+    win32_get_error_message(sys_msg, sizeof(sys_msg), error_code);
+    snprintf(result.error_message, sizeof(result.error_message),
+             "Failed to get mod time of '%s': %s", filename, sys_msg);
+    return result;
+  }
+
+  ULARGE_INTEGER ull;
+  ull.LowPart = file_info.ftLastWriteTime.dwLowDateTime;
+  ull.HighPart = file_info.ftLastWriteTime.dwHighDateTime;
+
+  result.value.seconds = (int64)(ull.QuadPart / 10000000ULL);
+  result.value.nanoseconds = (int64)((ull.QuadPart % 10000000ULL) * 100);
+
+  result.success = true;
+  result.error_code = FILE_SUCCESS;
+  snprintf(result.error_message, sizeof(result.error_message), "Success");
+
+#elif defined(__APPLE__)
+  // ─────────────────────────────────────────────────────────────────────────
+  // MACOS
+  // ─────────────────────────────────────────────────────────────────────────
+  struct stat file_stat;
+
+  if (stat(filename, &file_stat) != 0) {
+    result.success = false;
     result.error_code = errno_to_file_error(errno);
     snprintf(result.error_message, sizeof(result.error_message),
              "Failed to stat '%s': %s", filename, strerror(errno));
-#endif
-    result.success = false;
-    result.value = 0;
+    return result;
   }
 
+  result.value.seconds = (int64)file_stat.st_mtime;
+  result.value.nanoseconds = (int64)file_stat.st_mtimespec.tv_nsec;
+
+  result.success = true;
+  result.error_code = FILE_SUCCESS;
+  snprintf(result.error_message, sizeof(result.error_message), "Success");
+
+#elif defined(__linux__) || defined(__FreeBSD__) || defined(__unix__)
+  // ─────────────────────────────────────────────────────────────────────────
+  // LINUX / BSD / UNIX
+  // ─────────────────────────────────────────────────────────────────────────
+  struct stat file_stat;
+
+  if (stat(filename, &file_stat) != 0) {
+    result.success = false;
+    result.error_code = errno_to_file_error(errno);
+    snprintf(result.error_message, sizeof(result.error_message),
+             "Failed to stat '%s': %s", filename, strerror(errno));
+    return result;
+  }
+
+  result.value.seconds = (int64)file_stat.st_mtime;
+  result.value.nanoseconds = (int64)file_stat.st_mtim.tv_nsec;
+
+  result.success = true;
+  result.error_code = FILE_SUCCESS;
+  snprintf(result.error_message, sizeof(result.error_message), "Success");
+
+#else
+#error "de100_file_get_mod_time() not implemented for this platform"
+#endif
+
   return result;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// COMPARE FILE MODIFICATION TIMES
+// ═══════════════════════════════════════════════════════════════════════════
+
+real64 de100_file_time_diff(const PlatformTimeSpec *a,
+                            const PlatformTimeSpec *b) {
+  return platform_timespec_diff_seconds(b, a);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -190,8 +257,7 @@ de100_file_result_t de100_file_copy(const char *source, const char *dest) {
   snprintf(result.error_message, sizeof(result.error_message), "Success");
   return result;
 
-#elif defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) ||      \
-    defined(__unix__) || defined(__MACH__)
+#else
   // ─────────────────────────────────────────────────────────────────────
   // UNIX/LINUX/MACOS
   // ─────────────────────────────────────────────────────────────────────
@@ -311,14 +377,12 @@ de100_de100_file_exists_result_t de100_file_exists(const char *filename) {
 
     if (error_code == ERROR_FILE_NOT_FOUND ||
         error_code == ERROR_PATH_NOT_FOUND) {
-      // File doesn't exist - this is not an error
       result.exists = false;
       result.success = true;
       result.error_code = FILE_SUCCESS;
       snprintf(result.error_message, sizeof(result.error_message),
                "File does not exist");
     } else {
-      // Actual error occurred
       result.exists = false;
       result.success = false;
       result.error_code = win32_error_to_file_error(error_code);
@@ -326,7 +390,6 @@ de100_de100_file_exists_result_t de100_file_exists(const char *filename) {
                               sizeof(result.error_message), error_code);
     }
   } else {
-    // File exists
     result.exists = !(attrib & FILE_ATTRIBUTE_DIRECTORY);
     result.success = true;
     result.error_code = FILE_SUCCESS;
@@ -338,12 +401,10 @@ de100_de100_file_exists_result_t de100_file_exists(const char *filename) {
       snprintf(result.error_message, sizeof(result.error_message), "Success");
     }
   }
-#elif defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) ||      \
-    defined(__unix__) || defined(__MACH__)
+#else
   struct stat file_stat;
 
   if (stat(filename, &file_stat) == 0) {
-    // Path exists
     result.exists = S_ISREG(file_stat.st_mode);
     result.success = true;
     result.error_code = FILE_SUCCESS;
@@ -359,14 +420,12 @@ de100_de100_file_exists_result_t de100_file_exists(const char *filename) {
     }
   } else {
     if (errno == ENOENT) {
-      // File doesn't exist - this is not an error
       result.exists = false;
       result.success = true;
       result.error_code = FILE_SUCCESS;
       snprintf(result.error_message, sizeof(result.error_message),
                "File does not exist");
     } else {
-      // Actual error occurred
       result.exists = false;
       result.success = false;
       result.error_code = errno_to_file_error(errno);
@@ -420,8 +479,7 @@ de100_file_size_result_t de100_file_get_size(const char *filename) {
   result.value = size.QuadPart;
   snprintf(result.error_message, sizeof(result.error_message), "Success");
 
-#elif defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) ||      \
-    defined(__unix__) || defined(__MACH__)
+#else
   struct stat file_stat;
 
   if (stat(filename, &file_stat) != 0) {
@@ -470,7 +528,6 @@ de100_file_result_t de100_file_delete(const char *filename) {
   if (!DeleteFileA(filename)) {
     DWORD error_code = GetLastError();
 
-    // File not found is considered success (idempotent)
     if (error_code == ERROR_FILE_NOT_FOUND) {
       result.success = true;
       result.error_code = FILE_SUCCESS;
@@ -493,10 +550,8 @@ de100_file_result_t de100_file_delete(const char *filename) {
   result.error_code = FILE_SUCCESS;
   snprintf(result.error_message, sizeof(result.error_message), "Success");
 
-#elif defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) ||      \
-    defined(__unix__) || defined(__MACH__)
+#else
   if (unlink(filename) != 0) {
-    // File not found is considered success (idempotent)
     if (errno == ENOENT) {
       result.success = true;
       result.error_code = FILE_SUCCESS;

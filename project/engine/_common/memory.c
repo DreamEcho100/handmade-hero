@@ -38,7 +38,8 @@ size_t platform_get_page_size(void) {
 /**
  * Convert Windows error code to our memory error code.
  */
-static PlatformMemoryError win32_error_to_memory_error(DWORD error_code) {
+file_scoped_fn PlatformMemoryError
+win32_error_to_memory_error(DWORD error_code) {
   switch (error_code) {
   case ERROR_NOT_ENOUGH_MEMORY:
   case ERROR_OUTOFMEMORY:
@@ -63,8 +64,8 @@ static PlatformMemoryError win32_error_to_memory_error(DWORD error_code) {
 /**
  * Get Windows error message.
  */
-static void win32_get_error_message(char *buffer, size_t buffer_size,
-                                    DWORD error_code) {
+file_scoped_fn void win32_get_error_message(char *buffer, size_t buffer_size,
+                                            DWORD error_code) {
   FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
                  NULL, error_code, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
                  buffer, (DWORD)buffer_size, NULL);
@@ -82,7 +83,7 @@ static void win32_get_error_message(char *buffer, size_t buffer_size,
 /**
  * Convert memory flags to Windows protection flags.
  */
-static DWORD win32_protection_from_flags(PlatformMemoryFlags flags) {
+file_scoped_fn DWORD win32_protection_from_flags(PlatformMemoryFlags flags) {
   int r = (flags & PLATFORM_MEMORY_READ) != 0;
   int w = (flags & PLATFORM_MEMORY_WRITE) != 0;
   int x = (flags & PLATFORM_MEMORY_EXECUTE) != 0;
@@ -108,7 +109,7 @@ static DWORD win32_protection_from_flags(PlatformMemoryFlags flags) {
 /**
  * Convert POSIX errno to our memory error code.
  */
-static PlatformMemoryError errno_to_memory_error(int err) {
+file_scoped_fn PlatformMemoryError errno_to_memory_error(int err) {
   switch (err) {
   case ENOMEM:
     return PLATFORM_MEMORY_ERROR_OUT_OF_MEMORY;
@@ -131,7 +132,7 @@ static PlatformMemoryError errno_to_memory_error(int err) {
 /**
  * Convert memory flags to POSIX protection flags.
  */
-static int posix_protection_from_flags(PlatformMemoryFlags flags) {
+file_scoped_fn int posix_protection_from_flags(PlatformMemoryFlags flags) {
   int prot = PROT_NONE;
 
   if (flags & PLATFORM_MEMORY_READ)
@@ -234,7 +235,7 @@ PlatformMemoryBlock platform_allocate_memory(void *base_hint, size_t size,
   // Commit usable region (skip first guard page)
   // ─────────────────────────────────────────────────────────────────────
 
-  void *committed = VirtualAlloc((uint8_t *)reserved + page_size, aligned_size,
+  void *committed = VirtualAlloc((uint8 *)reserved + page_size, aligned_size,
                                  MEM_COMMIT, protect);
 
   if (!committed) {
@@ -304,7 +305,7 @@ PlatformMemoryBlock platform_allocate_memory(void *base_hint, size_t size,
   // ─────────────────────────────────────────────────────────────────────
 
   int prot = posix_protection_from_flags(flags);
-  if (mprotect((uint8_t *)reserved + page_size, aligned_size, prot) != 0) {
+  if (mprotect((uint8 *)reserved + page_size, aligned_size, prot) != 0) {
     int saved_errno = errno;
     munmap(reserved, total_size);
 
@@ -321,9 +322,9 @@ PlatformMemoryBlock platform_allocate_memory(void *base_hint, size_t size,
   // ─────────────────────────────────────────────────────────────────────
   // On Linux/POSIX, mmap with MAP_ANONYMOUS guarantees zero-initialized pages
 
-#if defined(HANDMADE_SLOW) && HANDMADE_SLOW
+#if defined(DE100_SLOW) && DE100_SLOW
   if (flags & PLATFORM_MEMORY_ZEROED) {
-    uint8_t *base = (uint8_t *)reserved + page_size;
+    uint8 *base = (uint8 *)reserved + page_size;
     size_t offsets[] = {0, aligned_size / 4, aligned_size / 2,
                         3 * aligned_size / 4, aligned_size - 1};
 
@@ -344,7 +345,7 @@ PlatformMemoryBlock platform_allocate_memory(void *base_hint, size_t size,
   // Success
   // ─────────────────────────────────────────────────────────────────────
 
-  result.base = (uint8_t *)reserved + page_size;
+  result.base = (uint8 *)reserved + page_size;
   result.size = aligned_size;
   result.total_size = total_size;
   result.flags = flags;
@@ -393,7 +394,7 @@ PlatformMemoryError platform_free_memory(PlatformMemoryBlock *block) {
     return PLATFORM_MEMORY_ERROR_UNKNOWN;
   }
 
-  uint8_t *reserved_base = (uint8_t *)block->base - page_size;
+  uint8 *reserved_base = (uint8 *)block->base - page_size;
 
 #if defined(_WIN32)
   // ═════════════════════════════════════════════════════════════════════
@@ -477,4 +478,141 @@ const char *platform_memory_strerror(PlatformMemoryError error) {
 bool platform_memory_is_valid(PlatformMemoryBlock block) {
   return block.is_valid && block.base != NULL &&
          block.error_code == PLATFORM_MEMORY_SUCCESS;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MEMORY OPERATIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * @brief Fill memory with a constant byte value.
+ *
+ * @param dest Destination memory address
+ * @param value Byte value to fill (converted to unsigned char)
+ * @param size Number of bytes to fill
+ * @return Pointer to dest, or NULL if dest is NULL
+ *
+ * @note This is a secure implementation that won't be optimized away
+ *       by the compiler, making it suitable for clearing sensitive data.
+ */
+void *platform_memset(void *dest, int value, size_t size) {
+  if (!dest || size == 0) {
+    return dest;
+  }
+
+#if defined(_WIN32)
+  // Windows provides SecureZeroMemory for security-critical zeroing
+  // For general memset, use FillMemory or standard approach
+  if (value == 0) {
+    // Use volatile to prevent compiler optimization
+    volatile unsigned char *p = (volatile unsigned char *)dest;
+    while (size--) {
+      *p++ = 0;
+    }
+  } else {
+    FillMemory(dest, size, (BYTE)value);
+  }
+#elif defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) ||      \
+    defined(__unix__) || defined(__MACH__)
+  // POSIX: Use explicit_bzero for zeroing (glibc 2.25+, BSD)
+  // or memset_s (C11 Annex K) where available
+  if (value == 0) {
+#if defined(__GLIBC__) && defined(_DEFAULT_SOURCE) &&                          \
+    (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 25))
+    explicit_bzero(dest, size);
+#elif defined(__APPLE__) || defined(__FreeBSD__)
+    memset_s(dest, size, 0, size);
+#else
+    // Fallback: volatile pointer to prevent optimization
+    volatile unsigned char *p = (volatile unsigned char *)dest;
+    while (size--) {
+      *p++ = 0;
+    }
+#endif
+  } else {
+    memset(dest, value, size);
+  }
+#else
+  // Generic fallback
+  memset(dest, value, size);
+#endif
+
+  return dest;
+}
+
+/**
+ * @brief Securely zero memory (guaranteed not to be optimized away).
+ *
+ * @param dest Destination memory address
+ * @param size Number of bytes to zero
+ * @return Pointer to dest, or NULL if dest is NULL
+ */
+void *platform_secure_zero(void *dest, size_t size) {
+  if (!dest || size == 0) {
+    return dest;
+  }
+
+#if defined(_WIN32)
+  SecureZeroMemory(dest, size);
+#elif defined(__APPLE__) || defined(__FreeBSD__)
+  memset_s(dest, size, 0, size);
+#elif defined(__GLIBC__) && defined(_DEFAULT_SOURCE) &&                        \
+    (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 25))
+  explicit_bzero(dest, size);
+#else
+  // Volatile pointer prevents compiler from optimizing this away
+  volatile unsigned char *p = (volatile unsigned char *)dest;
+  while (size--) {
+    *p++ = 0;
+  }
+  // Memory barrier to ensure writes complete
+  __asm__ __volatile__("" : : "r"(dest) : "memory");
+#endif
+
+  return dest;
+}
+
+/**
+ * @brief Copy memory from source to destination.
+ *
+ * @param dest Destination memory address
+ * @param src Source memory address
+ * @param size Number of bytes to copy
+ * @return Pointer to dest, or NULL on error
+ *
+ * @note Behavior is undefined if regions overlap. Use platform_memmove for
+ *       overlapping regions.
+ */
+void *platform_memcpy(void *dest, const void *src, size_t size) {
+  if (!dest || !src || size == 0) {
+    return dest;
+  }
+
+#if defined(_WIN32)
+  CopyMemory(dest, src, size);
+  return dest;
+#else
+  return memcpy(dest, src, size);
+#endif
+}
+
+/**
+ * @brief Copy memory, handling overlapping regions correctly.
+ *
+ * @param dest Destination memory address
+ * @param src Source memory address
+ * @param size Number of bytes to copy
+ * @return Pointer to dest, or NULL on error
+ */
+void *platform_memmove(void *dest, const void *src, size_t size) {
+  if (!dest || !src || size == 0) {
+    return dest;
+  }
+
+#if defined(_WIN32)
+  MoveMemory(dest, src, size);
+  return dest;
+#else
+  return memmove(dest, src, size);
+#endif
 }

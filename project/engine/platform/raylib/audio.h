@@ -1,5 +1,5 @@
-#ifndef ENGINE_PLATFORM_RAYLIB_AUDIO_H
-#define ENGINE_PLATFORM_RAYLIB_AUDIO_H
+#ifndef DE100_PLATFORM_RAYLIB_AUDIO_H
+#define DE100_PLATFORM_RAYLIB_AUDIO_H
 
 #include "../../_common/base.h"
 #include "../../_common/memory.h"
@@ -21,15 +21,15 @@ typedef struct {
   bool stream_playing;
 
   // Buffer configuration
-  uint32_t buffer_size_frames;
+  uint32 buffer_size_frames;
 
   // Sample buffer for game to fill
   PlatformMemoryBlock sample_buffer;
-  uint32_t sample_buffer_size;
+  uint32 sample_buffer_size;
 
   // Track write statistics
-  int64_t total_samples_written;
-  int32_t writes_this_period;
+  int64 total_samples_written;
+  int32 writes_this_period;
   double last_stats_time;
 
 } RaylibSoundOutput;
@@ -42,8 +42,8 @@ extern RaylibSoundOutput g_raylib_audio_output;
 
 bool raylib_init_audio(GameAudioOutputBuffer *audio_output,
                        PlatformAudioConfig *audio_config,
-                       int32_t samples_per_second, int32_t buffer_size_frames,
-                       int32_t game_update_hz);
+                       int32 samples_per_second, int32 buffer_size_frames,
+                       int32 game_update_hz);
 
 void raylib_shutdown_audio(GameAudioOutputBuffer *audio_output,
                            PlatformAudioConfig *audio_config);
@@ -52,7 +52,7 @@ void raylib_shutdown_audio(GameAudioOutputBuffer *audio_output,
  * Check if we should generate audio this frame.
  * Returns number of samples to generate, or 0 if buffer is full.
  */
-int32_t raylib_get_samples_to_write(PlatformAudioConfig *audio_config,
+int32 raylib_get_samples_to_write(PlatformAudioConfig *audio_config,
                                     GameAudioOutputBuffer *audio_output);
 
 /**
@@ -69,4 +69,4 @@ void raylib_audio_fps_change_handling(GameAudioOutputBuffer *audio_output,
                                       PlatformAudioConfig *audio_config);
 void raylib_debug_audio_overlay(void);
 
-#endif // ENGINE_PLATFORM_RAYLIB_AUDIO_H
+#endif // DE100_PLATFORM_RAYLIB_AUDIO_H

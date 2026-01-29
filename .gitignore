@@ -28,3 +28,7 @@ day002_raylib
 
 #
 _ignore/**
+*/**/_ignore
+
+# 
+test-game-in-raylib

@@ -1,5 +1,5 @@
-#ifndef ENGINE_PLATFORM_RAYLIB_INPUTS_KEYBOARD_H
-#define ENGINE_PLATFORM_RAYLIB_INPUTS_KEYBOARD_H
+#ifndef DE100_PLATFORM_RAYLIB_INPUTS_KEYBOARD_H
+#define DE100_PLATFORM_RAYLIB_INPUTS_KEYBOARD_H
 
 #include "../../../game/input.h"
 #include "../../_common/audio.h"
@@ -8,4 +8,4 @@
 void handle_keyboard_inputs(PlatformAudioConfig *audio_config,
                             GameInput *new_game_input);
 
-#endif // ENGINE_PLATFORM_RAYLIB_INPUTS_KEYBOARD_H
+#endif // DE100_PLATFORM_RAYLIB_INPUTS_KEYBOARD_H

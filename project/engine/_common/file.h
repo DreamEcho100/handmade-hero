@@ -1,8 +1,8 @@
 #ifndef DE100_FILE_H
 #define DE100_FILE_H
 
-#include <time.h>
 #include <stdbool.h>
+#include "time.h"
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ERROR CODES
@@ -33,7 +33,7 @@ typedef struct {
 } de100_file_result_t;
 
 typedef struct {
-    time_t value;
+    PlatformTimeSpec value;
     bool success;
     enum de100_file_error_code error_code;
     char error_message[512];
@@ -63,10 +63,19 @@ typedef struct {
  * @param filename Path to the file
  * @return Result containing modification time or error information
  * 
- * On success: result.success = true, result.value = modification time
+ * On success: result.success = true, result.value = modification time as PlatformTimeSpec
  * On error: result.success = false, result.error_code and error_message set
  */
 de100_file_time_result_t de100_file_get_mod_time(const char *filename);
+
+/**
+ * Compare two file modification times.
+ * 
+ * @param a First time value
+ * @param b Second time value
+ * @return Difference in seconds (a - b). Positive if a is newer, negative if b is newer.
+ */
+real64 de100_file_time_diff(const PlatformTimeSpec *a, const PlatformTimeSpec *b);
 
 /**
  * Copy a file from source to destination.

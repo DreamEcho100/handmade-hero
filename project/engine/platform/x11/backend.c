@@ -1,16 +1,16 @@
-#define _POSIX_C_SOURCE                                                        \
-  199309L // Enable POSIX functions like nanosleep, clock_gettime
-
 #include "backend.h"
 
 #include "../../_common/base.h"
 #include "../../_common/file.h"
+#include "../../_common/time.h"
 #include "../../game/backbuffer.h"
 #include "../../game/base.h"
+#include "../../game/config.h"
 #include "../../game/game-loader.h"
 #include "../../game/input.h"
 #include "../../game/memory.h"
 #include "../_common/audio.h"
+#include "../_common/startup.h"
 #include "audio.h"
 #include "inputs/joystick.h"
 #include "inputs/keyboard.h"
@@ -27,7 +27,6 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include <time.h>
 #include <unistd.h>
 #include <x86intrin.h> // For __rdtsc() CPU cycle counter
 
@@ -58,20 +57,21 @@ file_scoped_global_var int last_window_height = 0;
 // Casey's pattern: Don't hardcode FPS, adapt to machine capability!
 // ═══════════════════════════════════════════════════════════════
 typedef struct {
-  int target_fps;           // Current target (starts at monitor refresh rate)
-  int monitor_hz;           // Max we can go (from XRandR)
-  uint32_t frames_sampled;  // How many frames we've counted so far
-  uint32_t frames_missed;   // How many were too slow
-  uint32_t sample_window;   // Evaluate every N frames (e.g., 300 = 5 seconds)
+  // int target_fps;           // Current target (starts at monitor refresh
+  // rate)
+  // int monitor_hz;           // Max we can go (from XRandR)
+  uint32 frames_sampled;    // How many frames we've counted so far
+  uint32 frames_missed;     // How many were too slow
+  uint32 sample_window;     // Evaluate every N frames (e.g., 300 = 5 seconds)
   real32 miss_threshold;    // If >5% frames miss, reduce FPS
   real32 recover_threshold; // If <1% frames miss, try higher FPS
 
   // ✅ NEW: Cooldown to prevent ping-ponging
-  uint32_t frames_since_last_change; // Frames since last FPS change
-  uint32_t cooldown_frames;          // Don't change FPS for N frames
+  uint32 frames_since_last_change; // Frames since last FPS change
+  uint32 cooldown_frames;          // Don't change FPS for N frames
 } AdaptiveFPS;
 
-#if DE100_ENGINE_INTERNAL
+#if DE100_INTERNAL
 // ═══════════════════════════════════════════════════════════════
 // 📊 FRAME TIME STATISTICS (Debug Build Only)
 // ═══════════════════════════════════════════════════════════════
@@ -79,8 +79,8 @@ typedef struct {
 // Only compiled in debug builds (Casey's pattern)
 // ═══════════════════════════════════════════════════════════════
 typedef struct {
-  uint32_t frame_count;     // Total frames rendered
-  uint32_t missed_frames;   // Frames that took >target time
+  uint32 frame_count;       // Total frames rendered
+  uint32 missed_frames;     // Frames that took >target time
   real32 min_frame_time_ms; // Fastest frame
   real32 max_frame_time_ms; // Slowest frame
   real32 avg_frame_time_ms; // Running sum (divide by frame_count at end)
@@ -169,7 +169,7 @@ file_scoped_fn bool init_opengl(Display *display, Window window, int width,
 // 2. Draw fullscreen quad with that texture
 // 3. Swap front/back buffers (this is where VSync happens!)
 // ═══════════════════════════════════════════════════════════════
-file_scoped_fn void update_window_opengl(GameOffscreenBuffer *backbuffer) {
+file_scoped_fn void update_window_opengl(GameBackBuffer *backbuffer) {
   if (!backbuffer->memory.base)
     return;
 
@@ -214,7 +214,7 @@ file_scoped_fn void update_window_opengl(GameOffscreenBuffer *backbuffer) {
 // Uses XRandR extension to query monitor's native refresh rate
 // This becomes our initial FPS target (adaptive FPS may lower it)
 // ═══════════════════════════════════════════════════════════════
-int get_monitor_refresh_rate(Display *display) {
+uint32 get_monitor_refresh_rate(Display *display) {
   XRRScreenConfiguration *screen_config =
       XRRGetScreenInfo(display, RootWindow(display, DefaultScreen(display)));
 
@@ -231,25 +231,13 @@ int get_monitor_refresh_rate(Display *display) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// ⏱️ GET CURRENT TIME (Helper Function)
-// ═══════════════════════════════════════════════════════════════
-// Returns current time in seconds (with nanosecond precision)
-// Used for frame timing and profiling
-// ═══════════════════════════════════════════════════════════════
-static inline real64 get_wall_clock() {
-  struct timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts); // MONOTONIC = never goes backwards!
-  return ts.tv_sec + ts.tv_nsec / 1000000000.0;
-}
-
-// ═══════════════════════════════════════════════════════════════
 // 🎮 HANDLE WINDOW EVENTS
 // ═══════════════════════════════════════════════════════════════
 // Processes X11 window events (resize, close, keyboard, etc.)
 // Like addEventListener() in JavaScript
 // ═══════════════════════════════════════════════════════════════
 inline file_scoped_fn void
-handle_event(GameOffscreenBuffer *backbuffer, Display *display, XEvent *event,
+handle_event(GameBackBuffer *backbuffer, Display *display, XEvent *event,
              GameInput *new_game_input,
              PlatformAudioConfig *platform_audio_config) {
   switch (event->type) {
@@ -326,63 +314,73 @@ handle_event(GameOffscreenBuffer *backbuffer, Display *display, XEvent *event,
 // 🚀 MAIN PLATFORM ENTRY POINT
 // ═══════════════════════════════════════════════════════════════
 int platform_main() {
-  real64 t_start = get_wall_clock();
-  printf("[%.3fs] Starting platform_main\n", get_wall_clock() - t_start);
+  g_initial_game_time = get_wall_clock();
+  printf("[%.3fs] Starting platform_main\n",
+         get_wall_clock() - g_initial_game_time);
 
   // ─────────────────────────────────────────────────────────────────────
   // LOAD GAME CODE
   // ─────────────────────────────────────────────────────────────────────
 
-  char *main_game_so_path = "build/libgame.so";
-  char main_game_temp_so_path[512];
-  snprintf(main_game_temp_so_path, sizeof(main_game_temp_so_path),
-           "build/libgame_temp.so");
-  char *pre_main_game_so_path = "build/lib-init-game.so";
-  char pre_main_game_temp_so_path[512];
-  snprintf(pre_main_game_temp_so_path, sizeof(pre_main_game_temp_so_path),
-           "build/lib-init-game_temp.so");
-
-  LoadGameCodeConfig config = {0};
-  config.main_main_game_lib_name = main_game_so_path;
-  config.temp_main_game_lib_name = main_game_temp_so_path;
-  config.pre_main_game_lib_path = pre_main_game_so_path;
-  config.temp_pre_main_game_lib_path = pre_main_game_temp_so_path;
+  LoadGameCodeConfig load_game_code_config = {0};
+  load_game_code_config.game_main_lib_path = DE100_GAME_MAIN_SHARED_LIB_PATH;
+  load_game_code_config.game_main_lib_tmp_path =
+      DE100_GAME_MAIN_TMP_SHARED_LIB_PATH;
+  load_game_code_config.game_startup_lib_path =
+      DE100_GAME_STARTUP_SHARED_LIB_PATH;
+  load_game_code_config.game_startup_lib_tmp_path =
+      DE100_GAME_STARTUP_TMP_SHARED_LIB_PATH;
+  load_game_code_config.game_init_lib_path = DE100_GAME_INIT_SHARED_LIB_PATH;
+  load_game_code_config.game_init_lib_tmp_path =
+      DE100_GAME_INIT_TMP_SHARED_LIB_PATH;
 
   GameCode game = {0};
-  load_game_code(&game, &config, GAME_CODE_CATEGORY_ANY);
+  load_game_code(&game, &load_game_code_config, GAME_CODE_CATEGORY_ANY);
+  // exit(1);
   if (game.is_valid) {
     printf("✅ Game code loaded successfully\n");
     // NOTE: do on a separate thread
-    de100_file_delete(config.temp_main_game_lib_name);     // Clean up temp file
-    de100_file_delete(config.temp_pre_main_game_lib_path); // Clean up temp file
+    de100_file_delete(
+        load_game_code_config.game_main_lib_tmp_path); // Clean up temp file
+    de100_file_delete(
+        load_game_code_config.game_startup_lib_tmp_path); // Clean up temp file
+    de100_file_delete(
+        load_game_code_config.game_init_lib_tmp_path); // Clean up temp file
   } else {
     printf("❌ Failed to load game code, using stubs\n");
   }
 
+  GameConfig game_config = get_default_game_config();
+  PlatformConfig platform_config = {0};
   GameMemory game_memory = {0};
   GameInput game_inputs[2] = {0};
-  GameOffscreenBuffer game_buffer = {0};
+  GameBackBuffer game_buffer = {0};
   GameInput *new_game_input = &game_inputs[0];
   GameInput *old_game_input = &game_inputs[1];
   GameAudioOutputBuffer game_audio_output = {0};
 
-  game.startup(&game_memory, new_game_input, old_game_input, &game_buffer,
-               &game_audio_output);
+  game.startup(&game_config);
+  platform_game_startup(&game_config, &game_memory, new_game_input,
+                        old_game_input, &game_buffer, &game_audio_output);
   game.init(&game_memory, new_game_input, &game_buffer);
 
   // ═══════════════════════════════════════════════════════════════
   // 🎮 INITIALIZE JOYSTICK (Before main loop!)
   // ═══════════════════════════════════════════════════════════════
-  printf("[%.3fs] Initializing joystick...\n", get_wall_clock() - t_start);
+  printf("[%.3fs] Initializing joystick...\n",
+         get_wall_clock() - g_initial_game_time);
   linux_init_joystick(old_game_input->controllers, new_game_input->controllers);
-  printf("[%.3fs] Joystick initialized\n", get_wall_clock() - t_start);
+  printf("[%.3fs] Joystick initialized\n",
+         get_wall_clock() - g_initial_game_time);
 
   // ═══════════════════════════════════════════════════════════════
   // 🔊 INITIALIZE AUDIO (Casey's Day 7 pattern)
   // ═══════════════════════════════════════════════════════════════
-  printf("[%.3fs] Loading ALSA library...\n", get_wall_clock() - t_start);
+  printf("[%.3fs] Loading ALSA library...\n",
+         get_wall_clock() - g_initial_game_time);
   linux_load_alsa(); // Dynamically load libasound.so
-  printf("[%.3fs] ALSA library loaded\n", get_wall_clock() - t_start);
+  printf("[%.3fs] ALSA library loaded\n",
+         get_wall_clock() - g_initial_game_time);
 
   // ═══════════════════════════════════════════════════════════════
   // 🖥️ CREATE X11 WINDOW + OPENGL CONTEXT
@@ -412,14 +410,12 @@ int platform_main() {
   attrs.event_mask =
       ExposureMask | StructureNotifyMask | KeyPressMask | KeyReleaseMask;
 
-  int width = 1280, height = 720;
-
-  Window window =
-      XCreateWindow(display, root, 0, 0, width, height,
-                    0,             // Border width
-                    visual->depth, // Color depth
-                    InputOutput,   // Window class
-                    visual->visual, CWColormap | CWEventMask, &attrs);
+  Window window = XCreateWindow(
+      display, root, 0, 0, game_config.window_width, game_config.window_height,
+      0,             // Border width
+      visual->depth, // Color depth
+      InputOutput,   // Window class
+      visual->visual, CWColormap | CWEventMask, &attrs);
 
   printf("Created window\n");
 
@@ -427,11 +423,9 @@ int platform_main() {
   // 🎯 SETUP ADAPTIVE FPS
   // ═══════════════════════════════════════════════════════════════
 
-  int monitor_refresh_hz = get_monitor_refresh_rate(display);
+  platform_config.monitor_refresh_hz = get_monitor_refresh_rate(display);
 
   AdaptiveFPS adaptive = {
-      .target_fps = monitor_refresh_hz,
-      .monitor_hz = monitor_refresh_hz,
       .frames_sampled = 0,
       .frames_missed = 0,
       .sample_window = 90,     // ✅ FASTER: 1.5 seconds at 60fps
@@ -441,32 +435,56 @@ int platform_main() {
       .cooldown_frames = 180 // ✅ 3 seconds cooldown
   };
 
-  real32 target_seconds_per_frame = 1.0f / (real32)adaptive.target_fps;
-  g_fps = adaptive.target_fps;
-#if DE100_ENGINE_INTERNAL
-  g_reload_check_interval = g_fps * 2;
-#endif
-
   printf("═══════════════════════════════════════════════════════════\n");
   printf("🎮 ADAPTIVE FRAME RATE CONTROL\n");
   printf("═══════════════════════════════════════════════════════════\n");
-  printf("Monitor refresh: %dHz\n", monitor_refresh_hz);
-  printf("Initial target:  %dHz (%.2fms/frame)\n", adaptive.target_fps,
-         target_seconds_per_frame * 1000.0f);
+  printf("Monitor refresh: %dHz\n", platform_config.monitor_refresh_hz);
+  printf("Initial target:  %dHz (%.2fms/frame)\n", game_config.refresh_rate_hz,
+         game_config.target_seconds_per_frame * 1000.0f);
   printf("Sample window:   %u frames\n", adaptive.sample_window);
   printf("Miss threshold:  %.1f%%\n", adaptive.miss_threshold * 100.0f);
   printf("═══════════════════════════════════════════════════════════\n\n");
 
   PlatformAudioConfig platform_audio_config = {0};
-  int samples_per_second = 48000;
-  int bytes_per_sample = sizeof(int16_t) * 2; // 16-bit stereo
-  int secondary_buffer_size = samples_per_second * bytes_per_sample;
-  int audio_update_hz = 30; // Fixed audio/game logic rate
-  game_audio_output.samples_per_second = samples_per_second;
+
+  // printf("game_config.initial_audio_sample_rate: %d\n",
+  //        game_config.initial_audio_sample_rate);
+  // printf("game_config.audio_game_update_hz: %d\n",
+  //        game_config.audio_game_update_hz);
+  printf("game_config.permanent_storage_size: %lu\n",
+         game_config.permanent_storage_size);
+  printf("game_config.transient_storage_size: %lu\n",
+         game_config.transient_storage_size);
+  printf("game_config.game_flags: %d\n", game_config.game_flags);
+  printf("game_config.window_width: %d\n", game_config.window_width);
+  printf("game_config.window_height: %d\n", game_config.window_height);
+  printf("game_config.refresh_rate_hz: %d\n", game_config.refresh_rate_hz);
+  printf("game_config.prefer_vsync: %d\n", game_config.prefer_vsync);
+  printf("game_config.prefer_borderless: %d\n", game_config.prefer_borderless);
+  printf("game_config.prefer_resizable: %d\n", game_config.prefer_resizable);
+  printf("game_config.prefer_adaptive_fps: %d\n",
+         game_config.prefer_adaptive_fps);
+  printf("game_config.max_controllers: %d\n", game_config.max_controllers);
+  printf("game_config.initial_audio_sample_rate: %d\n",
+         game_config.initial_audio_sample_rate);
+  printf("game_config.audio_buffer_size_frames: %d\n",
+         game_config.audio_buffer_size_frames);
+  printf("game_config.audio_game_update_hz: %d\n",
+         game_config.audio_game_update_hz);
+  printf("game_config.refresh_rate_hz: %d\n", game_config.refresh_rate_hz);
+  printf("game_config.target_seconds_per_frame: %f\n",
+         game_config.target_seconds_per_frame);
+  printf("game_config.refresh_rate_hz: %d\n", game_config.refresh_rate_hz);
+
+  int bytes_per_sample = sizeof(int16) * 2; // 16-bit stereo
+  int secondary_buffer_size =
+      game_config.initial_audio_sample_rate * bytes_per_sample;
+  game_audio_output.samples_per_second = game_config.initial_audio_sample_rate;
   platform_audio_config.bytes_per_sample = bytes_per_sample;
   platform_audio_config.secondary_buffer_size = secondary_buffer_size;
   linux_init_audio(&game_audio_output, &platform_audio_config,
-                   samples_per_second, secondary_buffer_size, audio_update_hz);
+                   game_config.initial_audio_sample_rate, secondary_buffer_size,
+                   game_config.audio_game_update_hz);
 
   // Enable window close button
   Atom wmDelete = XInternAtom(display, "WM_DELETE_WINDOW", False);
@@ -476,33 +494,30 @@ int platform_main() {
   XMapWindow(display, window);
 
   // Initialize OpenGL
-  if (!init_opengl(display, window, width, height)) {
+  if (!init_opengl(display, window, game_config.window_width,
+                   game_config.window_height)) {
     return 1;
   }
-
-#if DE100_ENGINE_INTERNAL
-  // Draw test line at x=100
-  for (int y = 0; y < game_buffer.height; y++) {
-    uint32_t *pixel =
-        (uint32_t *)game_buffer.memory.base + (y * game_buffer.width + 100);
-    *pixel = 0x00FF00FF; // Bright green
-  }
-  printf("[DEBUG] Drew test line at x=100\n");
-#endif
 
   // ═══════════════════════════════════════════════════════════════
   // 🖼️ CREATE BACKBUFFER (Our CPU rendering target)
   // ═══════════════════════════════════════════════════════════════
 
-  init_backbuffer(&game_buffer, width, height, 4); // 4 bytes per pixel (RGBA)
+  init_backbuffer(&game_buffer, game_config.window_width,
+                  game_config.window_height, 4); // 4 bytes per pixel (RGBA)
 
-  int buffer_size = width * height * 4;
+  int buffer_size = game_config.window_width * game_config.window_height * 4;
   game_buffer.memory = platform_allocate_memory(
       NULL, buffer_size,
       PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE | PLATFORM_MEMORY_ZEROED);
-  game_buffer.width = width;
-  game_buffer.height = height;
-  game_buffer.pitch = width * 4;
+
+  if (!platform_memory_is_valid(game_buffer.memory)) {
+    fprintf(stderr, "❌ Failed to allocate backbuffer memory\n");
+    fprintf(stderr, "   Error: %s\n", game_buffer.memory.error_message);
+    fprintf(stderr, "   Code: %s\n",
+            platform_memory_strerror(game_buffer.memory.error_code));
+    return 1;
+  }
 
   printf("Entering main loop...\n");
 
@@ -516,9 +531,9 @@ int platform_main() {
   // At 48kHz: 100ms = 4800 samples = 19200 bytes (stereo 16-bit)
   // ─────────────────────────────────────────────────────────────────────
 
-  int32_t samples_per_frame =
-      game_audio_output.samples_per_second / audio_update_hz;
-  int32_t max_samples_per_call = samples_per_frame * 3;
+  int32 samples_per_frame =
+      game_audio_output.samples_per_second / game_config.audio_game_update_hz;
+  int32 max_samples_per_call = samples_per_frame * 3;
   int sample_buffer_size =
       max_samples_per_call * platform_audio_config.bytes_per_sample;
 
@@ -536,9 +551,6 @@ int platform_main() {
 
   printf("✅ Sound sample buffer allocated: %d bytes\n", sample_buffer_size);
 
-  g_reload_check_interval = adaptive.target_fps * 2; // Check every 2 seconds
-  // const uint32_t RELOAD_CHECK_INTERVAL = 120;
-
   // ═══════════════════════════════════════════════════════════════
   // 🔄 MAIN GAME LOOP (Casey's Day 8+ pattern)
   // ═══════════════════════════════════════════════════════════════
@@ -551,7 +563,7 @@ int platform_main() {
   // ═══════════════════════════════════════════════════════════════
   if (game_buffer.memory.base) {
     while (is_game_running) {
-#if DE100_ENGINE_INTERNAL
+#if DE100_INTERNAL
       if (FRAME_LOG_EVERY_TEN_SECONDS_CHECK) { // Every 30 seconds at 60fps
         printf("[HEALTH CHECK] frame=%u, RSI=%lld, marker_idx=%d\n",
                g_frame_counter,
@@ -559,10 +571,10 @@ int platform_main() {
                g_debug_marker_index);
       }
 #endif
-#if DE100_ENGINE_INTERNAL
+#if DE100_INTERNAL
       if (g_frame_counter <= 10 || FRAME_LOG_EVERY_FIVE_SECONDS_CHECK) {
         // DEBUG: Track RSI changes in main loop
-        static int64_t loop_last_rsi = 0;
+        local_persist_var int64 loop_last_rsi = 0;
 
         if (platform_audio_config.running_sample_index != loop_last_rsi) {
           // Only print first 10 frames for debugging
@@ -578,55 +590,48 @@ int platform_main() {
 #endif
 
       // ═══════════════════════════════════════════════════════════
-      // 🔄 HOT RELOAD CHECK (Casey's Day 21 pattern)
+      // 🔄 HOT RELOAD CHECK (Casey's Day 21/22 pattern)
       // ═══════════════════════════════════════════════════════════
       // Check periodically if game code has been recompiled
       // This allows changing game logic without restarting!
       // ═══════════════════════════════════════════════════════════
-      g_reload_check_counter++;
       if (g_reload_requested ||
-          g_reload_check_counter >= g_reload_check_interval) {
+          game_main_code_needs_reload(
+              &game, load_game_code_config.game_main_lib_path)) {
         if (g_reload_requested) {
           g_reload_requested = false;
           printf("🔄 Hot reload requested by user!\n");
         }
-        g_reload_check_counter = 0;
-        if (main_game_code_needs_reload(&game,
-                                        config.main_main_game_lib_name)) {
-          printf("🔄 Hot reload triggered! at g_frame_counter: %d\n",
-                 g_frame_counter);
-          printf("[HOT RELOAD] Before: update_and_render=%p "
-                 "get_audio_samples=%p\n",
-                 (void *)game.update_and_render,
-                 (void *)game.get_audio_samples);
 
-          unload_game_code(&game);
-          char game_temp_so_path[512];
-          snprintf(game_temp_so_path, sizeof(game_temp_so_path),
-                   "build/libgame_temp.so");
+        printf("🔄 Hot reload triggered! at g_frame_counter: %d\n",
+               g_frame_counter);
+        printf("[HOT RELOAD] Before: update_and_render=%p "
+               "get_audio_samples=%p\n",
+               (void *)game.update_and_render, (void *)game.get_audio_samples);
 
-          printf("[HOT RELOAD] After:  update_and_render=%p "
-                 "get_audio_samples=%p\n",
-                 (void *)game.update_and_render,
-                 (void *)game.get_audio_samples);
+        unload_game_code(&game);
 
-          load_game_code(&game, &config, GAME_CODE_CATEGORY_MAIN);
+        printf("[HOT RELOAD] After:  update_and_render=%p "
+               "get_audio_samples=%p\n",
+               (void *)game.update_and_render, (void *)game.get_audio_samples);
 
-          if (game.is_valid) {
-            printf("✅ Hot reload successful!\n");
+        load_game_code(&game, &load_game_code_config, GAME_CODE_CATEGORY_MAIN);
 
-            // NOTE: do on a separate thread
-            de100_file_delete(game_temp_so_path); // Clean up temp file
-          } else {
-            printf("⚠️  Hot reload failed, using stubs\n");
-          }
+        if (game.is_valid) {
+          printf("✅ Hot reload successful!\n");
+
+          // NOTE: do on a separate thread
+          de100_file_delete(load_game_code_config
+                                .game_main_lib_tmp_path); // Clean up temp file
+        } else {
+          printf("⚠️  Hot reload failed, using stubs\n");
         }
       }
 
-      struct timespec frame_start_time;
-      clock_gettime(CLOCK_MONOTONIC, &frame_start_time);
-#if DE100_ENGINE_INTERNAL
-      uint64_t frame_start_cycles = __rdtsc(); // CPU cycles (for profiling)
+      PlatformTimeSpec frame_start_time;
+      platform_get_timespec(&frame_start_time);
+#if DE100_INTERNAL
+      uint64 frame_start_cycles = __rdtsc(); // CPU cycles (for profiling)
 #endif
 
       // ─────────────────────────────────────────────────────────────
@@ -639,66 +644,55 @@ int platform_main() {
       // ─────────────────────────────────────────────────────────────
       linux_poll_joystick(new_game_input);
 
-      // ─────────────────────────────────────────────────────────────
-      // UPDATE GAME + RENDER (Skip if window inactive or game paused)
-      // ─────────────────────────────────────────────────────────────
-      if (g_window_is_active && !g_game_is_paused) {
-        // Step 1: Update game logic and render graphics
-        game.update_and_render(&game_memory, new_game_input, &game_buffer);
+      // Step 1: Update game logic and render graphics
+      game.update_and_render(&game_memory, new_game_input, &game_buffer);
 
-        // Step 2: Generate audio based on ALSA's needs
-        int32_t samples_to_generate = linux_get_samples_to_write(
-            &platform_audio_config, &game_audio_output);
+      // Step 2: Generate audio based on ALSA's needs
+      int32 samples_to_generate = linux_get_samples_to_write(
+          &platform_audio_config, &game_audio_output);
 
-        // ✅ ADD: Log every 100 frames
-        static int audio_log_count = 0;
-        if (++audio_log_count % 100 == 1) {
-          printf("[MAIN] samples_to_generate=%d, RSI=%ld\n",
-                 samples_to_generate,
-                 (long)platform_audio_config.running_sample_index);
+#if DE100_INTERNAL
+      if (FRAME_LOG_EVERY_THREE_SECONDS_CHECK) {
+        printf("[MAIN] samples_to_generate=%d, RSI=%ld\n", samples_to_generate,
+               (long)platform_audio_config.running_sample_index);
+      }
+#endif
+
+      if (samples_to_generate > 0) {
+        int32 max_samples =
+            sample_buffer_size / platform_audio_config.bytes_per_sample;
+        if (samples_to_generate > max_samples) {
+          // printf("⚠️  Clamping: %d → %d\n", samples_to_generate,
+          // max_samples);
+          samples_to_generate = max_samples;
         }
 
-        if (samples_to_generate > 0) {
-          int32_t max_samples =
-              sample_buffer_size / platform_audio_config.bytes_per_sample;
-          if (samples_to_generate > max_samples) {
-            // printf("⚠️  Clamping: %d → %d\n", samples_to_generate,
-            // max_samples);
-            samples_to_generate = max_samples;
-          }
+        GameAudioOutputBuffer audio_buffer = {
+            .samples_per_second = game_audio_output.samples_per_second,
+            .sample_count = samples_to_generate,
+            .samples_block = audio_samples_block};
 
-          GameAudioOutputBuffer audio_buffer = {
-              .samples_per_second = game_audio_output.samples_per_second,
-              .sample_count = samples_to_generate,
-              .samples_block = audio_samples_block};
-
-          game.get_audio_samples(&game_memory, &audio_buffer);
-          linux_send_samples_to_alsa(&platform_audio_config, &audio_buffer);
-        }
-
-        // ─────────────────────────────────────────────────────────────
-        // PROCESS X11 EVENTS
-        // ─────────────────────────────────────────────────────────────
-        XEvent event;
-        while (XPending(display) > 0) {
-          XNextEvent(display, &event);
-          // GameAudioState game_audio_state =
-          //     (GameState)(game_memory.permanent_storage.base);
-          handle_event(&game_buffer, display, &event, new_game_input,
-                       &platform_audio_config
-                       // Where to store and get `game_audio_state`?
-                       // I mean it should be initilized inside the game render
-                       // first time but how to access it?
-          );
-        }
-
-      } else if (!g_window_is_active || g_game_is_paused) {
-        // Window in background or paused: sleep to save CPU
-        struct timespec sleep_spec = {0, 16000000}; // 16ms
-        nanosleep(&sleep_spec, NULL);
+        game.get_audio_samples(&game_memory, &audio_buffer);
+        linux_send_samples_to_alsa(&platform_audio_config, &audio_buffer);
       }
 
-#if DE100_ENGINE_INTERNAL
+      // ─────────────────────────────────────────────────────────────
+      // PROCESS X11 EVENTS
+      // ─────────────────────────────────────────────────────────────
+      XEvent event;
+      while (XPending(display) > 0) {
+        XNextEvent(display, &event);
+        // GameAudioState game_audio_state =
+        //     (GameState)(game_memory.permanent_storage.base);
+        handle_event(&game_buffer, display, &event, new_game_input,
+                     &platform_audio_config
+                     // Where to store and get `game_audio_state`?
+                     // I mean it should be initilized inside the game render
+                     // first time but how to access it?
+        );
+      }
+
+#if DE100_INTERNAL
       // ═══════════════════════════════════════════════════════════════
       // DRAW DEBUG VISUALIZATION (ALWAYS, even when paused!)
       // ═══════════════════════════════════════════════════════════════
@@ -718,7 +712,7 @@ int platform_main() {
       update_window_opengl(&game_buffer);
       XSync(display, False);
 
-#if DE100_ENGINE_INTERNAL
+#if DE100_INTERNAL
       // ═══════════════════════════════════════════════════════════════
       // CAPTURE FLIP STATE (after display)
       // ═══════════════════════════════════════════════════════════════
@@ -728,11 +722,10 @@ int platform_main() {
       // ─────────────────────────────────────────────────────────────
       // MEASURE WORK TIME
       // ─────────────────────────────────────────────────────────────
-      struct timespec work_end_time;
-      clock_gettime(CLOCK_MONOTONIC, &work_end_time);
-      real32 work_seconds =
-          (work_end_time.tv_sec - frame_start_time.tv_sec) +
-          (work_end_time.tv_nsec - frame_start_time.tv_nsec) / 1000000000.0f;
+      PlatformTimeSpec work_end_time;
+      platform_get_timespec(&work_end_time);
+      real32 work_seconds = (real32)platform_timespec_diff_seconds(
+          &frame_start_time, &work_end_time);
 
       // ─────────────────────────────────────────────────────────────
       // ADAPTIVE SLEEP (Casey's Day 18 pattern)
@@ -745,48 +738,45 @@ int platform_main() {
 
       real32 seconds_elapsed = work_seconds;
 
-      if (seconds_elapsed < target_seconds_per_frame) {
+      if (seconds_elapsed < game_config.target_seconds_per_frame) {
         real32 test_seconds =
-            target_seconds_per_frame - 0.003f; // Leave 3ms margin
+            game_config.target_seconds_per_frame - 0.003f; // Leave 3ms margin
 
         // Phase 1: Coarse sleep
         while (seconds_elapsed < test_seconds) {
-          struct timespec sleep_spec = {0, 1000000}; // 1ms
-          nanosleep(&sleep_spec, NULL);
+          platform_sleep_ms(1);
 
-          struct timespec current_time;
-          clock_gettime(CLOCK_MONOTONIC, &current_time);
-          seconds_elapsed =
-              (current_time.tv_sec - frame_start_time.tv_sec) +
-              (current_time.tv_nsec - frame_start_time.tv_nsec) / 1000000000.0f;
+          PlatformTimeSpec current_time;
+          platform_get_timespec(&current_time);
+          seconds_elapsed = (real32)platform_timespec_diff_seconds(
+              &frame_start_time, &current_time);
         }
 
         // Phase 2: Spin-wait for precise timing
-        while (seconds_elapsed < target_seconds_per_frame) {
-          struct timespec current_time;
-          clock_gettime(CLOCK_MONOTONIC, &current_time);
-          seconds_elapsed =
-              (current_time.tv_sec - frame_start_time.tv_sec) +
-              (current_time.tv_nsec - frame_start_time.tv_nsec) / 1000000000.0f;
+        while (seconds_elapsed < game_config.target_seconds_per_frame) {
+          PlatformTimeSpec current_time;
+          platform_get_timespec(&current_time);
+          seconds_elapsed = (real32)platform_timespec_diff_seconds(
+              &frame_start_time, &current_time);
         }
       }
 
       // ─────────────────────────────────────────────────────────────
       // MEASURE TOTAL FRAME TIME
       // ─────────────────────────────────────────────────────────────
-      struct timespec frame_final_time;
-      clock_gettime(CLOCK_MONOTONIC, &frame_final_time);
-#if DE100_ENGINE_INTERNAL
-      uint64_t frame_final_cycles = __rdtsc();
+      PlatformTimeSpec frame_final_time;
+      platform_get_timespec(&frame_final_time);
+#if DE100_INTERNAL
+      uint64 frame_final_cycles = __rdtsc();
 #endif
 
-      real32 total_frame_time =
-          (frame_final_time.tv_sec - frame_start_time.tv_sec) +
-          (frame_final_time.tv_nsec - frame_start_time.tv_nsec) / 1000000000.0f;
+      real32 total_frame_time = (real32)platform_timespec_diff_seconds(
+          &frame_start_time, &frame_final_time);
 
       real32 frame_time_ms = total_frame_time * 1000.0f;
-      real32 target_frame_time_ms = target_seconds_per_frame * 1000.0f;
-#if DE100_ENGINE_INTERNAL
+      real32 target_frame_time_ms =
+          game_config.target_seconds_per_frame * 1000.0f;
+#if DE100_INTERNAL
       real32 sleep_time = total_frame_time - work_seconds;
       real32 fps = 1.0f / total_frame_time;
       real32 mcpf = (frame_final_cycles - frame_start_cycles) / 1000000.0f;
@@ -795,13 +785,13 @@ int platform_main() {
       // ─────────────────────────────────────────────────────────────
       // REPORT MISSED FRAMES (Only serious misses >5ms)
       // ─────────────────────────────────────────────────────────────
-      if (frame_time_ms > (target_frame_time_ms + 5.0f) && g_window_is_active) {
+      if (frame_time_ms > (target_frame_time_ms + 5.0f)) {
         printf("⚠️  MISSED FRAME! %.2fms (target: %.2fms, over by: %.2fms)\n",
                frame_time_ms, target_frame_time_ms,
                frame_time_ms - target_frame_time_ms);
       }
 
-#if DE100_ENGINE_INTERNAL
+#if DE100_INTERNAL
       // Update debug statistics
       g_frame_stats.frame_count++;
       if (frame_time_ms < g_frame_stats.min_frame_time_ms ||
@@ -813,7 +803,7 @@ int platform_main() {
       }
       g_frame_stats.avg_frame_time_ms += frame_time_ms;
 
-      if (total_frame_time > (target_seconds_per_frame + 0.002f)) {
+      if (total_frame_time > (game_config.target_seconds_per_frame + 0.002f)) {
         g_frame_stats.missed_frames++;
       }
 #endif
@@ -831,13 +821,12 @@ int platform_main() {
 
       adaptive.frames_sampled++;
       adaptive.frames_since_last_change++;
-#if DE100_ENGINE_INTERNAL
+#if DE100_INTERNAL
       g_frame_counter++;
 #endif
 
       // Track if this frame missed (with larger tolerance for variance)
-      bool frame_missed =
-          (frame_time_ms > (target_frame_time_ms + 3.0f)) && g_window_is_active;
+      bool frame_missed = (frame_time_ms > (target_frame_time_ms + 3.0f));
       if (frame_missed) {
         adaptive.frames_missed++;
       }
@@ -847,14 +836,14 @@ int platform_main() {
       // ═══════════════════════════════════════════════════════════
       // This allows fast recovery when switching from power save to performance
 
-      static uint32_t consecutive_good_frames = 0;
-      static real32 recent_frame_times[10] = {0};
-      static int recent_frame_index = 0;
+      local_persist_var uint32 consecutive_good_frames = 0;
+      local_persist_var real32 recent_frame_times[10] = {0};
+      local_persist_var int recent_frame_index = 0;
 
       recent_frame_times[recent_frame_index] = frame_time_ms;
       recent_frame_index = (recent_frame_index + 1) % 10;
 
-      if (!frame_missed && g_window_is_active) {
+      if (!frame_missed) {
         consecutive_good_frames++;
       } else {
         consecutive_good_frames = 0;
@@ -863,7 +852,7 @@ int platform_main() {
       // Quick recovery: 30 consecutive good frames AND we're below monitor rate
       // AND cooldown has passed
       if (consecutive_good_frames >= 30 &&
-          adaptive.target_fps < adaptive.monitor_hz &&
+          game_config.refresh_rate_hz < platform_config.monitor_refresh_hz &&
           adaptive.frames_since_last_change >= 90) { // 1.5 second cooldown
 
         // Check if recent frames have headroom (averaging under 80% of target)
@@ -876,44 +865,45 @@ int platform_main() {
         real32 headroom_threshold = target_frame_time_ms * 0.80f;
 
         if (avg_recent < headroom_threshold) {
-          int old_target = adaptive.target_fps;
+          uint32 old_target = game_config.refresh_rate_hz;
 
           // Jump up one tier
-          switch (adaptive.target_fps) {
+          switch (game_config.refresh_rate_hz) {
           case FPS_30:
-            adaptive.target_fps = FPS_45;
+            game_config.refresh_rate_hz = FPS_45;
             break;
           case FPS_45:
-            adaptive.target_fps = FPS_60;
+            game_config.refresh_rate_hz = FPS_60;
             break;
           case FPS_60:
-            adaptive.target_fps = FPS_90;
+            game_config.refresh_rate_hz = FPS_90;
             break;
           case FPS_90:
-            adaptive.target_fps = FPS_120;
+            game_config.refresh_rate_hz = FPS_120;
             break;
           default:
-            adaptive.target_fps = adaptive.monitor_hz;
+            game_config.refresh_rate_hz = platform_config.monitor_refresh_hz;
             break;
           }
 
-          if (adaptive.target_fps > adaptive.monitor_hz) {
-            adaptive.target_fps = adaptive.monitor_hz;
+          if (game_config.refresh_rate_hz >
+              platform_config.monitor_refresh_hz) {
+            game_config.refresh_rate_hz = platform_config.monitor_refresh_hz;
           }
 
-          if (adaptive.target_fps != old_target) {
-            target_seconds_per_frame = 1.0f / (real32)adaptive.target_fps;
+          if (game_config.refresh_rate_hz != old_target) {
+            game_config.target_seconds_per_frame =
+                1.0f / (real32)game_config.refresh_rate_hz;
             adaptive.frames_since_last_change = 0;
             adaptive.frames_sampled = 0;
             adaptive.frames_missed = 0;
             consecutive_good_frames = 0;
 
-            g_fps = adaptive.target_fps;
-#if DE100_ENGINE_INTERNAL
-            g_reload_check_interval = g_fps * 2;
+            g_fps = game_config.refresh_rate_hz;
+#if DE100_INTERNAL
             printf("🚀 QUICK RECOVERY: %d → %d Hz (avg: %.1fms, headroom: "
                    "%.1fms)\n",
-                   old_target, adaptive.target_fps, avg_recent,
+                   old_target, game_config.refresh_rate_hz, avg_recent,
                    headroom_threshold);
 #endif
           }
@@ -930,11 +920,11 @@ int platform_main() {
         real32 miss_rate =
             (real32)adaptive.frames_missed / (real32)adaptive.frames_sampled;
 
-#if DE100_ENGINE_INTERNAL
+#if DE100_INTERNAL
         printf("\n[ADAPTIVE] Sample: %u frames, %u missed (%.1f%%), target: %d "
                "FPS\n",
                adaptive.frames_sampled, adaptive.frames_missed,
-               miss_rate * 100.0f, adaptive.target_fps);
+               miss_rate * 100.0f, game_config.refresh_rate_hz);
 #endif
 
         // ═══════════════════════════════════════════════════════════
@@ -942,36 +932,34 @@ int platform_main() {
         // ═══════════════════════════════════════════════════════════
 
         if (miss_rate > adaptive.miss_threshold) {
-          int old_target = adaptive.target_fps;
+          uint32 old_target = game_config.refresh_rate_hz;
 
-          switch (adaptive.target_fps) {
+          switch (game_config.refresh_rate_hz) {
           case FPS_120:
-            adaptive.target_fps = FPS_90;
+            game_config.refresh_rate_hz = FPS_90;
             break;
           case FPS_90:
-            adaptive.target_fps = FPS_60;
+            game_config.refresh_rate_hz = FPS_60;
             break;
           case FPS_60:
-            adaptive.target_fps = FPS_45;
+            game_config.refresh_rate_hz = FPS_45;
             break;
           case FPS_45:
-            adaptive.target_fps = FPS_30;
+            game_config.refresh_rate_hz = FPS_30;
             break;
           default:
-            adaptive.target_fps = FPS_30;
+            game_config.refresh_rate_hz = FPS_30;
             break;
           }
 
-          if (adaptive.target_fps != old_target) {
-            target_seconds_per_frame = 1.0f / (real32)adaptive.target_fps;
+          if (game_config.refresh_rate_hz != old_target) {
+            game_config.target_seconds_per_frame =
+                1.0f / (real32)game_config.refresh_rate_hz;
             adaptive.frames_since_last_change = 0;
 
-            g_fps = adaptive.target_fps;
-#if DE100_ENGINE_INTERNAL
-            g_reload_check_interval = g_fps * 2;
-#endif
+            g_fps = game_config.refresh_rate_hz;
             printf("⚠️  ADAPTIVE: %d → %d Hz (miss rate: %.1f%%)\n", old_target,
-                   adaptive.target_fps, miss_rate * 100.0f);
+                   game_config.refresh_rate_hz, miss_rate * 100.0f);
           }
         }
 
@@ -980,42 +968,44 @@ int platform_main() {
         // ═══════════════════════════════════════════════════════════
 
         else if (miss_rate < adaptive.recover_threshold &&
-                 adaptive.target_fps < adaptive.monitor_hz) {
+                 game_config.refresh_rate_hz <
+                     platform_config.monitor_refresh_hz) {
 
-          int old_target = adaptive.target_fps;
+          uint32 old_target = game_config.refresh_rate_hz;
 
-          switch (adaptive.target_fps) {
+          switch (game_config.refresh_rate_hz) {
           case FPS_30:
-            adaptive.target_fps = FPS_45;
+            game_config.refresh_rate_hz = FPS_45;
             break;
           case FPS_45:
-            adaptive.target_fps = FPS_60;
+            game_config.refresh_rate_hz = FPS_60;
             break;
           case FPS_60:
-            adaptive.target_fps = FPS_90;
+            game_config.refresh_rate_hz = FPS_90;
             break;
           case FPS_90:
-            adaptive.target_fps = FPS_120;
+            game_config.refresh_rate_hz = FPS_120;
             break;
           default:
-            adaptive.target_fps = adaptive.monitor_hz;
+            game_config.refresh_rate_hz = platform_config.monitor_refresh_hz;
             break;
           }
 
-          if (adaptive.target_fps > adaptive.monitor_hz) {
-            adaptive.target_fps = adaptive.monitor_hz;
+          if (game_config.refresh_rate_hz >
+              platform_config.monitor_refresh_hz) {
+            game_config.refresh_rate_hz = platform_config.monitor_refresh_hz;
           }
 
-          if (adaptive.target_fps != old_target) {
-            target_seconds_per_frame = 1.0f / (real32)adaptive.target_fps;
+          if (game_config.refresh_rate_hz != old_target) {
+            game_config.target_seconds_per_frame =
+                1.0f / (real32)game_config.refresh_rate_hz;
             adaptive.frames_since_last_change = 0;
 
-            g_fps = adaptive.target_fps;
-#if DE100_ENGINE_INTERNAL
-            g_reload_check_interval = g_fps * 2;
-#endif
+            g_fps = game_config.refresh_rate_hz;
+#if DE100_INTERNAL
             printf("✅ ADAPTIVE: %d → %d Hz (miss rate: %.1f%%)\n", old_target,
-                   adaptive.target_fps, miss_rate * 100.0f);
+                   game_config.refresh_rate_hz, miss_rate * 100.0f);
+#endif
           }
         }
 
@@ -1031,7 +1021,7 @@ int platform_main() {
         adaptive.frames_missed = 0;
       }
 
-#if DE100_ENGINE_INTERNAL
+#if DE100_INTERNAL
       // Print stats every 5 seconds (300 frames at 60fps)
       if (FRAME_LOG_EVERY_FIVE_SECONDS_CHECK) {
         printf("[X11] %.2fms/f, %.2ff/s, %.2fmc/f (work: %.2fms, sleep: "
@@ -1047,7 +1037,7 @@ int platform_main() {
         printf("[Adaptive] Target: %d FPS | Sampled: %u/%u | Misses: %u "
                "(%.1f%%) "
                "| Next eval in: %u frames\n",
-               adaptive.target_fps, adaptive.frames_sampled,
+               game_config.refresh_rate_hz, adaptive.frames_sampled,
                adaptive.sample_window, adaptive.frames_missed,
                current_miss_rate * 100.0f,
                adaptive.sample_window - adaptive.frames_sampled);
@@ -1072,12 +1062,13 @@ int platform_main() {
   // By default, we DON'T manually clean up process-lifetime resources
   // The OS does it faster when the process exits (<1ms vs 17ms)
   //
-  // Only clean up if DE100_ENGINE_SANITIZE_WAVE_1_MEMORY is enabled
+  // Only clean up if DE100_SANITIZE_WAVE_1_MEMORY is enabled
   // (useful for memory leak detection tools like Valgrind)
   // ═══════════════════════════════════════════════════════════════
 
-#if DE100_ENGINE_SANITIZE_WAVE_1_MEMORY
-  printf("[%.3fs] Exiting, freeing memory...\n", get_wall_clock() - t_start);
+#if DE100_SANITIZE_WAVE_1_MEMORY
+  printf("[%.3fs] Exiting, freeing memory...\n",
+         get_wall_clock() - g_initial_game_time);
 
   linux_close_joysticks();
   linux_unload_alsa(&game_audio_output, &platform_audio_config);
@@ -1092,13 +1083,14 @@ int platform_main() {
   glXMakeCurrent(display, None, NULL);
   glXDestroyContext(display, g_gl.gl_context);
   XFreeColormap(display, colormap);
+  XFree(visual);
   XDestroyWindow(display, window);
   XCloseDisplay(display);
 
-  printf("[%.3fs] Memory freed\n", get_wall_clock() - t_start);
+  printf("[%.3fs] Memory freed\n", get_wall_clock() - g_initial_game_time);
 #endif
 
-#if DE100_ENGINE_INTERNAL
+#if DE100_INTERNAL
   // Print final statistics
   printf("\n═══════════════════════════════════════════════════════════\n");
   printf("📊 FRAME TIME STATISTICS\n");

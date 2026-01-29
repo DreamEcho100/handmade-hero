@@ -1,17 +1,17 @@
-#if HANDMADE_INTERNAL
+#if DE100_INTERNAL
 #include "debug-file-io.h"
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h> // fprintf
 #include <string.h>
 
-uint32_t safe_truncate_uint64(long value) {
-  ASSERT(value >= 0); // Negative = error!
+uint32 safe_truncate_uint64(long value) {
+  DEV_ASSERT(value >= 0); // Negative = error!
 
   // TODO: Defines for maximum values UInt32Max
-  ASSERT(value <= 0xFFFFFFFF); // Too large for uint32
+  DEV_ASSERT(value <= 0xFFFFFFFF); // Too large for uint32
 
-  uint32_t result = (uint32_t)value;
+  uint32 result = (uint32)value;
   return (result);
 }
 
@@ -62,7 +62,7 @@ void debug_platform_free_file_memory(PlatformMemoryBlock *memory_block) {
   platform_free_memory(memory_block);
 }
 
-bool32 debug_platform_write_entire_file(char *filename, uint32_t memory_size,
+bool32 debug_platform_write_entire_file(char *filename, uint32 memory_size,
                                         void *memory) {
   bool32 result = false;
 
