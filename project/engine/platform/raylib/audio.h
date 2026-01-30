@@ -6,7 +6,7 @@
 #include "../../game/audio.h"
 #include "../../game/game-loader.h"
 #include "../../game/memory.h"
-#include "../_common/audio.h"
+#include "../_common/config.h"
 #include <raylib.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -24,7 +24,7 @@ typedef struct {
   uint32 buffer_size_frames;
 
   // Sample buffer for game to fill
-  PlatformMemoryBlock sample_buffer;
+  MemoryBlock sample_buffer;
   uint32 sample_buffer_size;
 
   // Track write statistics

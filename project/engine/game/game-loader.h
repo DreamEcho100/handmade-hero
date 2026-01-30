@@ -127,7 +127,7 @@ typedef GAME_GET_AUDIO_SAMPLES(game_get_audio_samples_t);
 // ═══════════════════════════════════════════════════════════════════════════
 
 typedef struct {
-  struct de100_dll_t game_code_lib;
+  DllHandle game_code_lib;
   PlatformTimeSpec last_write_time;
 
   game_update_and_render_t *update_and_render;

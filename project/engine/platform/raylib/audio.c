@@ -139,21 +139,17 @@ bool raylib_init_audio(GameAudioOutputBuffer *audio_output,
   // Only need enough for one buffer write
   uint32 buffer_bytes = actual_buffer_size * audio_config->bytes_per_sample;
 
-  g_raylib_audio_output.sample_buffer = platform_allocate_memory(
-      NULL, buffer_bytes,
-      PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE | PLATFORM_MEMORY_ZEROED);
+  g_raylib_audio_output.sample_buffer =
+      memory_alloc(NULL, buffer_bytes,
+                   MEMORY_FLAG_READ | MEMORY_FLAG_WRITE | MEMORY_FLAG_ZEROED);
 
-  if (!platform_memory_is_valid(g_raylib_audio_output.sample_buffer)) {
+  if (!memory_is_valid(g_raylib_audio_output.sample_buffer)) {
     fprintf(stderr, "❌ Audio: Failed to allocate sample buffer\n");
     UnloadAudioStream(g_raylib_audio_output.stream);
     CloseAudioDevice();
     audio_config->is_initialized = false;
-
-    fprintf(stderr, "   Error: %s\n",
-            g_raylib_audio_output.sample_buffer.error_message);
     fprintf(stderr, "   Code: %s\n",
-            platform_memory_strerror(
-                g_raylib_audio_output.sample_buffer.error_code));
+            memory_error_str(g_raylib_audio_output.sample_buffer.error_code));
     return false;
   }
 
@@ -161,9 +157,9 @@ bool raylib_init_audio(GameAudioOutputBuffer *audio_output,
       g_raylib_audio_output.buffer_size_frames *
       audio_config->bytes_per_sample * 4;
 
-  g_raylib_audio_output.sample_buffer = platform_allocate_memory(
-      NULL, g_raylib_audio_output.sample_buffer_size,
-      PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE | PLATFORM_MEMORY_ZEROED);
+  g_raylib_audio_output.sample_buffer =
+      memory_alloc(NULL, g_raylib_audio_output.sample_buffer_size,
+                   MEMORY_FLAG_READ | MEMORY_FLAG_WRITE | MEMORY_FLAG_ZEROED);
 
   printf("✅ Audio: Sample buffer allocated (%d bytes)\n", buffer_bytes);
 
@@ -344,14 +340,14 @@ void raylib_shutdown_audio(GameAudioOutputBuffer *audio_output,
     g_raylib_audio_output.stream_valid = false;
   }
 
-  if (platform_memory_is_valid(g_raylib_audio_output.sample_buffer)) {
-    platform_free_memory(&g_raylib_audio_output.sample_buffer);
+  if (memory_is_valid(g_raylib_audio_output.sample_buffer)) {
+    memory_free(&g_raylib_audio_output.sample_buffer);
   }
 
   CloseAudioDevice();
 
   audio_config->is_initialized = false;
-  platform_free_memory(&audio_output->samples_block);
+  memory_free(&audio_output->samples_block);
   audio_output->sample_count = 0;
 
   printf("✅ Audio: Shutdown complete\n");

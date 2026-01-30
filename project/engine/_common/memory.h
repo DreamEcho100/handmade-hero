@@ -2,197 +2,144 @@
 #define DE100_COMMON_MEMORY_H
 
 #include "base.h"
-#include <stddef.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ERROR CODES
 // ═══════════════════════════════════════════════════════════════════════════
 
 typedef enum {
-    PLATFORM_MEMORY_SUCCESS = 0,
-    PLATFORM_MEMORY_ERROR_OUT_OF_MEMORY,
-    PLATFORM_MEMORY_ERROR_INVALID_SIZE,
-    PLATFORM_MEMORY_ERROR_INVALID_ADDRESS,
-    PLATFORM_MEMORY_ERROR_PERMISSION_DENIED,
-    PLATFORM_MEMORY_ERROR_ADDRESS_IN_USE,
-    PLATFORM_MEMORY_ERROR_ALIGNMENT_FAILED,
-    PLATFORM_MEMORY_ERROR_PROTECTION_FAILED,
-    PLATFORM_MEMORY_ERROR_INVALID_BLOCK,
-    PLATFORM_MEMORY_ERROR_ALREADY_FREED,
-    PLATFORM_MEMORY_ERROR_UNKNOWN
-} PlatformMemoryError;
+    MEMORY_OK = 0,
+    
+    // Allocation errors
+    MEMORY_ERR_OUT_OF_MEMORY,
+    MEMORY_ERR_INVALID_SIZE,
+    MEMORY_ERR_SIZE_OVERFLOW,
+    
+    // Address errors
+    MEMORY_ERR_INVALID_ADDRESS,
+    MEMORY_ERR_ADDRESS_IN_USE,
+    MEMORY_ERR_ALIGNMENT_FAILED,
+    
+    // Permission errors
+    MEMORY_ERR_PERMISSION_DENIED,
+    MEMORY_ERR_PROTECTION_FAILED,
+    
+    // Block errors
+    MEMORY_ERR_NULL_BLOCK,
+    MEMORY_ERR_INVALID_BLOCK,
+    MEMORY_ERR_ALREADY_FREED,
+    
+    // System errors
+    MEMORY_ERR_PAGE_SIZE_FAILED,
+    MEMORY_ERR_PLATFORM_ERROR,
+    
+    MEMORY_ERR_COUNT  // Sentinel for bounds checking
+} MemoryError;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MEMORY FLAGS
 // ═══════════════════════════════════════════════════════════════════════════
 
-/**
- * @brief Virtual memory allocation flags.
- *
- * These flags describe the intended usage and access permissions of
- * a virtual memory block. They are translated internally to the
- * appropriate platform-specific virtual memory APIs.
- *
- * @note
- * Not all flags are supported equally on all platforms. Unsupported
- * flags are safely ignored.
- */
-typedef enum PlatformMemoryFlags {
-    PLATFORM_MEMORY_NONE = 0,
-
-    /** Memory is readable */
-    PLATFORM_MEMORY_READ = 1 << 0,
-
-    /** Memory is writable */
-    PLATFORM_MEMORY_WRITE = 1 << 1,
-
-    /** Memory is executable */
-    PLATFORM_MEMORY_EXECUTE = 1 << 2,
-
-    /** Memory should be zero-initialized (best-effort) */
-    PLATFORM_MEMORY_ZEROED = 1 << 3,
-
-    /** Memory is intended for transient / short-lived usage */
-    PLATFORM_MEMORY_TRANSIENT = 1 << 4,
-
-    /** Memory should use large pages if available (best-effort) */
-    PLATFORM_MEMORY_LARGE_PAGES = 1 << 5,
-
-    /* Addressing semantics */
-    /** Try requested base, allow relocation */
-    PLATFORM_MEMORY_BASE_HINT = 1 << 8,
+typedef enum {
+    MEMORY_FLAG_NONE = 0,
     
-    /** Must map exactly at requested base */
-    PLATFORM_MEMORY_BASE_FIXED = 1 << 9
-} PlatformMemoryFlags;
+    // Protection flags
+    MEMORY_FLAG_READ    = 1 << 0,
+    MEMORY_FLAG_WRITE   = 1 << 1,
+    MEMORY_FLAG_EXECUTE = 1 << 2,
+    
+    // Initialization flags
+    MEMORY_FLAG_ZEROED  = 1 << 3,
+    
+    // Addressing flags
+    MEMORY_FLAG_BASE_HINT  = 1 << 4,  // Try base, allow relocation
+    MEMORY_FLAG_BASE_FIXED = 1 << 5,  // Must use exact base address
+    
+    // Optimization hints (best-effort)
+    MEMORY_FLAG_LARGE_PAGES = 1 << 6,
+    MEMORY_FLAG_TRANSIENT   = 1 << 7,
+} MemoryFlags;
+
+// Common flag combinations
+#define MEMORY_FLAG_RW (MEMORY_FLAG_READ | MEMORY_FLAG_WRITE)
+#define MEMORY_FLAG_RWX (MEMORY_FLAG_READ | MEMORY_FLAG_WRITE | MEMORY_FLAG_EXECUTE)
+#define MEMORY_FLAG_RW_ZEROED (MEMORY_FLAG_RW | MEMORY_FLAG_ZEROED)
 
 // ═══════════════════════════════════════════════════════════════════════════
-// MEMORY BLOCK STRUCTURE
+// MEMORY BLOCK
+// ═══════════════════════════════════════════════════════════════════════════
+
+typedef struct {
+    void        *base;        // Pointer to usable memory (after guard page)
+    size_t       size;        // Usable size (page-aligned)
+    size_t       total_size;  // Total size including guard pages
+    MemoryFlags  flags;       // Flags used for allocation
+    MemoryError  error_code;       // Error code (MEMORY_OK if valid)
+    bool         is_valid;    // Quick validity check
+} MemoryBlock;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CORE API
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * @brief Represents a contiguous virtual memory allocation with guard pages.
+ * Allocate virtual memory with guard pages.
+ *
+ * @param base_hint  Preferred base address (NULL for any)
+ * @param size       Requested size in bytes (will be page-aligned)
+ * @param flags      Protection and behavior flags
+ * @return           MemoryBlock (check .is_valid or .error)
+ *
+ * Memory layout:
+ *   [Guard Page][Usable Memory][Guard Page]
+ *   └─ PROT_NONE ─┘└─ Your data ─┘└─ PROT_NONE ─┘
  */
-typedef struct PlatformMemoryBlock {
-    void *base;                     /**< Pointer to usable memory region */
-    size_t size;                    /**< Usable size (page-aligned) */
-    size_t total_size;              /**< Total reserved size including guard pages */
-    PlatformMemoryFlags flags;      /**< Allocation flags */
-    PlatformMemoryError error_code; /**< Error code (SUCCESS if valid) */
-    char error_message[512];        /**< Detailed error message */
-    bool is_valid;                  /**< True if allocation succeeded */
-} PlatformMemoryBlock;
+MemoryBlock memory_alloc(void *base_hint, size_t size, MemoryFlags flags);
+
+/**
+ * Free a memory block.
+ *
+ * @param block  Pointer to block (will be zeroed after free)
+ * @return       Error code
+ *
+ * Idempotent: safe to call multiple times on same block.
+ */
+MemoryError memory_free(MemoryBlock *block);
 
 // ═══════════════════════════════════════════════════════════════════════════
-// API FUNCTIONS
+// UTILITIES
 // ═══════════════════════════════════════════════════════════════════════════
 
-/**
- * @brief Allocates a virtual memory block with optional base address control.
- *
- * @param base_hint
- * Optional base address preference.
- * - NULL → no preference
- * - non-NULL → interpreted according to flags
- *
- * @param size
- * Requested usable size in bytes. Must be > 0.
- *
- * @param flags
- * Allocation and protection flags.
- *
- * @return PlatformMemoryBlock
- * Check block.is_valid to determine success.
- * On error, block.base == NULL and error_code/error_message are set.
- * 
- * @note
- * The returned block includes guard pages. Use block.base for the usable region.
- * The total allocation size is block.total_size.
- */
-PlatformMemoryBlock platform_allocate_memory(void *base_hint, size_t size,
-                                             PlatformMemoryFlags flags);
+/** Get system page size (cached after first call). */
+size_t memory_page_size(void);
 
-/**
- * @brief Frees a virtual memory block.
- * 
- * @param block Pointer to the memory block to free
- * @return Error code indicating success or failure
- * 
- * This function is idempotent - calling it multiple times on the same
- * block is safe (subsequent calls will return success immediately).
- * 
- * After freeing, block->base will be set to NULL and is_valid to false.
- */
-PlatformMemoryError platform_free_memory(PlatformMemoryBlock *block);
+/** Check if block is valid and usable. */
+bool memory_is_valid(MemoryBlock block);
 
-/**
- * @brief Get a human-readable error message for an error code.
- * 
- * @param error Error code
- * @return Static string describing the error
- */
-const char *platform_memory_strerror(PlatformMemoryError error);
+/** Get human-readable error message. */
+const char *memory_error_str(MemoryError error);
 
-/**
- * @brief Check if a memory block is valid.
- * 
- * @param block Memory block to check
- * @return true if the block is valid and usable, false otherwise
- */
-bool platform_memory_is_valid(PlatformMemoryBlock block);
-
-/**
- * @brief Get the system page size.
- * 
- * @return Page size in bytes, or 0 on error
- */
-size_t platform_get_page_size(void);
+// #if DE100_INTERNAL && DE100_SLOW
+/** Get detailed error message with context (dev builds only). */
+const char *memory_error_str_detailed(MemoryError error);
+// #endif
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MEMORY OPERATIONS
 // ═══════════════════════════════════════════════════════════════════════════
 
-/**
- * @brief Fill memory with a constant byte value.
- *
- * @param dest Destination memory address
- * @param value Byte value to fill (converted to unsigned char)
- * @param size Number of bytes to fill
- * @return Pointer to dest, or NULL if dest is NULL
- */
-void *platform_memset(void *dest, int value, size_t size);
+/** Fill memory with byte value. Returns dest. */
+void *mem_set(void *dest, int value, size_t size);
 
-/**
- * @brief Securely zero memory (guaranteed not to be optimized away).
- *
- * Use this for clearing sensitive data like passwords or keys.
- *
- * @param dest Destination memory address
- * @param size Number of bytes to zero
- * @return Pointer to dest, or NULL if dest is NULL
- */
-void *platform_secure_zero(void *dest, size_t size);
+/** Copy memory (non-overlapping). Returns dest. */
+void *mem_copy(void *dest, const void *src, size_t size);
 
-/**
- * @brief Copy memory from source to destination (non-overlapping).
- *
- * @param dest Destination memory address
- * @param src Source memory address
- * @param size Number of bytes to copy
- * @return Pointer to dest, or NULL on error
- */
-void *platform_memcpy(void *dest, const void *src, size_t size);
+/** Copy memory (overlapping safe). Returns dest. */
+void *mem_move(void *dest, const void *src, size_t size);
 
-/**
- * @brief Copy memory, handling overlapping regions correctly.
- *
- * @param dest Destination memory address
- * @param src Source memory address
- * @param size Number of bytes to copy
- * @return Pointer to dest, or NULL on error
- */
-void *platform_memmove(void *dest, const void *src, size_t size);
-
+/** Zero memory (compiler won't optimize away). Returns dest. */
+void *mem_zero_secure(void *dest, size_t size);
 
 #endif // DE100_COMMON_MEMORY_H

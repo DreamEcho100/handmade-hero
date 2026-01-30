@@ -1,94 +1,201 @@
 #include "path.h"
-#include <errno.h>
+
 #include <stdio.h>
 #include <string.h>
 
-// Platform-specific includes
+// ═══════════════════════════════════════════════════════════════════════════
+// PLATFORM-SPECIFIC INCLUDES
+// ═══════════════════════════════════════════════════════════════════════════
+
 #if defined(__linux__)
+#include <errno.h>
 #include <limits.h>
 #include <unistd.h>
 #elif defined(__APPLE__)
+#include <errno.h>
 #include <mach-o/dyld.h>
 #include <sys/syslimits.h>
 #elif defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
 #include <windows.h>
+#else
+#error "Unsupported platform for path operations"
 #endif
 
 // ═══════════════════════════════════════════════════════════════════════════
-// HELPER: Convert errno to our error code
+// DEBUG ERROR DETAIL STORAGE (Thread-Local)
 // ═══════════════════════════════════════════════════════════════════════════
 
-static enum de100_path_error_code errno_to_path_error(int err) {
-  switch (err) {
-  case EINVAL:
+#if DE100_INTERNAL && DE100_SLOW
+
+#if defined(_WIN32)
+static __declspec(thread) char g_last_error_detail[1024];
+#else
+static __thread char g_last_error_detail[1024];
+#endif
+
+#define SET_ERROR_DETAIL(...)                                                  \
+  snprintf(g_last_error_detail, sizeof(g_last_error_detail), __VA_ARGS__)
+
+#define CLEAR_ERROR_DETAIL() (g_last_error_detail[0] = '\0')
+
+#else
+
+#define SET_ERROR_DETAIL(...) ((void)0)
+#define CLEAR_ERROR_DETAIL() ((void)0)
+
+#endif // DE100_INTERNAL && DE100_SLOW
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PLATFORM ERROR TRANSLATION
+// ═══════════════════════════════════════════════════════════════════════════
+
+#if defined(_WIN32)
+
+file_scoped_fn inline PathErrorCode
+win32_error_to_path_error(DWORD error_code) {
+  switch (error_code) {
+  case ERROR_SUCCESS:
+    return PATH_SUCCESS;
+
+  case ERROR_INVALID_PARAMETER:
+  case ERROR_INVALID_NAME:
+  case ERROR_BAD_PATHNAME:
     return PATH_ERROR_INVALID_ARGUMENT;
-  case ENAMETOOLONG:
+
+  case ERROR_INSUFFICIENT_BUFFER:
+  case ERROR_FILENAME_EXCED_RANGE:
     return PATH_ERROR_BUFFER_TOO_SMALL;
-  case ENOENT:
-  case ENOTDIR:
+
+  case ERROR_FILE_NOT_FOUND:
+  case ERROR_PATH_NOT_FOUND:
     return PATH_ERROR_NOT_FOUND;
-  case EACCES:
-  case EPERM:
+
+  case ERROR_ACCESS_DENIED:
     return PATH_ERROR_PERMISSION_DENIED;
+
   default:
     return PATH_ERROR_UNKNOWN;
   }
+}
+
+#if DE100_INTERNAL && DE100_SLOW
+file_scoped_fn inline void win32_set_error_detail(const char *operation,
+                                                  DWORD error_code) {
+  char sys_msg[512];
+  FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                 NULL, error_code, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                 sys_msg, sizeof(sys_msg), NULL);
+
+  // Remove trailing newline
+  size_t len = strlen(sys_msg);
+  while (len > 0 && (sys_msg[len - 1] == '\n' || sys_msg[len - 1] == '\r')) {
+    sys_msg[--len] = '\0';
+  }
+
+  SET_ERROR_DETAIL("[%s] %s (Win32 error %lu)", operation, sys_msg, error_code);
+}
+#endif
+
+#else // POSIX
+
+file_scoped_fn inline PathErrorCode errno_to_path_error(int err) {
+  switch (err) {
+  case 0:
+    return PATH_SUCCESS;
+
+  case EINVAL:
+    return PATH_ERROR_INVALID_ARGUMENT;
+
+  case ENAMETOOLONG:
+    return PATH_ERROR_BUFFER_TOO_SMALL;
+
+  case ENOENT:
+  case ENOTDIR:
+    return PATH_ERROR_NOT_FOUND;
+
+  case EACCES:
+  case EPERM:
+    return PATH_ERROR_PERMISSION_DENIED;
+
+  default:
+    return PATH_ERROR_UNKNOWN;
+  }
+}
+
+#if DE100_INTERNAL && DE100_SLOW
+file_scoped_fn inline void posix_set_error_detail(const char *operation,
+                                                  int err) {
+  SET_ERROR_DETAIL("[%s] %s (errno %d)", operation, strerror(err), err);
+}
+#endif
+
+#endif // Platform selection
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RESULT HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
+
+file_scoped_fn inline PathResult make_path_error(PathErrorCode code) {
+  PathResult result = {0};
+  result.success = false;
+  result.error_code = code;
+  return result;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // GET EXECUTABLE PATH
 // ═══════════════════════════════════════════════════════════════════════════
 
-de100_path_result_t de100_get_executable_path(void) {
-  de100_path_result_t result = {0};
+PathResult path_get_executable(void) {
+  PathResult result = {0};
 
 #if defined(__linux__)
   // ─────────────────────────────────────────────────────────────────────
-  // LINUX IMPLEMENTATION
+  // LINUX: Read /proc/self/exe symlink
   // ─────────────────────────────────────────────────────────────────────
   //
-  // /proc/self/exe is a symbolic link maintained by the Linux kernel.
+  // /proc/self/exe is a symbolic link maintained by the kernel.
   // It always points to the executable of the current process.
   //
-  // readlink() reads the TARGET of a symlink (where it points to)
-  // without following the link. It returns the number of bytes written.
-  //
-  // IMPORTANT: readlink() does NOT null-terminate the result!
-  // We must do that ourselves.
-  //
-  // Web Dev Analogy:
-  //   This is like fs.readlinkSync('/proc/self/exe') in Node.js
+  // readlink() reads the TARGET of a symlink without following it.
+  // IMPORTANT: readlink() does NOT null-terminate!
   // ─────────────────────────────────────────────────────────────────────
 
   ssize_t len =
       readlink("/proc/self/exe", result.path, sizeof(result.path) - 1);
 
   if (len == -1) {
-    result.success = false;
-    result.error_code = errno_to_path_error(errno);
-    snprintf(result.error_message, sizeof(result.error_message),
-             "readlink(/proc/self/exe) failed: %s", strerror(errno));
+    int err = errno;
+    result.error_code = errno_to_path_error(err);
+
+#if DE100_INTERNAL && DE100_SLOW
+    posix_set_error_detail("path_get_executable:readlink", err);
+#endif
     return result;
   }
 
-  // Null-terminate (readlink doesn't do this!)
+  // Null-terminate (readlink doesn't!)
   result.path[len] = '\0';
   result.length = (size_t)len;
   result.success = true;
   result.error_code = PATH_SUCCESS;
 
+  CLEAR_ERROR_DETAIL();
+
 #elif defined(__APPLE__)
   // ─────────────────────────────────────────────────────────────────────
-  // MACOS IMPLEMENTATION
+  // MACOS: Use _NSGetExecutablePath
   // ─────────────────────────────────────────────────────────────────────
 
   uint32_t size = sizeof(result.path);
+
   if (_NSGetExecutablePath(result.path, &size) != 0) {
-    result.success = false;
     result.error_code = PATH_ERROR_BUFFER_TOO_SMALL;
-    snprintf(result.error_message, sizeof(result.error_message),
-             "Buffer too small, need %u bytes", size);
+
+    SET_ERROR_DETAIL("[path_get_executable] Buffer too small, need %u bytes",
+                     size);
     return result;
   }
 
@@ -96,24 +203,36 @@ de100_path_result_t de100_get_executable_path(void) {
   result.success = true;
   result.error_code = PATH_SUCCESS;
 
+  CLEAR_ERROR_DETAIL();
+
 #elif defined(_WIN32)
   // ─────────────────────────────────────────────────────────────────────
-  // WINDOWS IMPLEMENTATION
+  // WINDOWS: Use GetModuleFileNameA
   // ─────────────────────────────────────────────────────────────────────
   //
-  // This is what Casey uses in Day 22:
+  // Casey's Day 22:
   //   GetModuleFileNameA(0, EXEFileName, sizeof(EXEFileName));
   //
-  // The first parameter (0 or NULL) means "get path of current process"
+  // First parameter NULL = get path of current process
   // ─────────────────────────────────────────────────────────────────────
 
   DWORD len = GetModuleFileNameA(NULL, result.path, sizeof(result.path));
 
   if (len == 0) {
-    result.success = false;
-    result.error_code = PATH_ERROR_UNKNOWN;
-    snprintf(result.error_message, sizeof(result.error_message),
-             "GetModuleFileNameA failed with error %lu", GetLastError());
+    DWORD error_code = GetLastError();
+    result.error_code = win32_error_to_path_error(error_code);
+
+#if DE100_INTERNAL && DE100_SLOW
+    win32_set_error_detail("path_get_executable:GetModuleFileNameA",
+                           error_code);
+#endif
+    return result;
+  }
+
+  // Check for truncation
+  if (len >= sizeof(result.path) - 1) {
+    result.error_code = PATH_ERROR_BUFFER_TOO_SMALL;
+    SET_ERROR_DETAIL("[path_get_executable] Path truncated at %lu chars", len);
     return result;
   }
 
@@ -121,11 +240,10 @@ de100_path_result_t de100_get_executable_path(void) {
   result.success = true;
   result.error_code = PATH_SUCCESS;
 
+  CLEAR_ERROR_DETAIL();
+
 #else
-  result.success = false;
-  result.error_code = PATH_ERROR_UNKNOWN;
-  snprintf(result.error_message, sizeof(result.error_message),
-           "Unsupported platform");
+#error "path_get_executable not implemented for this platform"
 #endif
 
   return result;
@@ -135,29 +253,40 @@ de100_path_result_t de100_get_executable_path(void) {
 // GET EXECUTABLE DIRECTORY
 // ═══════════════════════════════════════════════════════════════════════════
 
-de100_path_result_t de100_get_executable_directory(void) {
-  de100_path_result_t result = {0};
+PathResult path_get_executable_directory(void) {
+  PathResult result = {0};
 
   // Step 1: Get full executable path
-  de100_path_result_t exe_path = de100_get_executable_path();
+  PathResult exe_path = path_get_executable();
 
   if (!exe_path.success) {
-    result.success = false;
     result.error_code = exe_path.error_code;
-    snprintf(result.error_message, sizeof(result.error_message),
-             "Failed to get executable path: %s", exe_path.error_message);
+
+#if DE100_INTERNAL && DE100_SLOW
+    const char *detail = path_get_last_error_detail();
+    if (detail) {
+      SET_ERROR_DETAIL(
+          "[path_get_executable_directory] Failed to get exe path: %s", detail);
+    }
+#endif
     return result;
   }
 
   // Step 2: Copy the path
-  strncpy(result.path, exe_path.path, sizeof(result.path) - 1);
-  result.path[sizeof(result.path) - 1] = '\0';
+  // Using memcpy + explicit null-term is faster than snprintf for known-good
+  // data
+  size_t copy_len = exe_path.length;
+  if (copy_len >= sizeof(result.path)) {
+    copy_len = sizeof(result.path) - 1;
+  }
+  memcpy(result.path, exe_path.path, copy_len);
+  result.path[copy_len] = '\0';
 
   // ─────────────────────────────────────────────────────────────────────
   // Step 3: Find the last directory separator
   // ─────────────────────────────────────────────────────────────────────
   //
-  // This is Casey's algorithm:
+  // Casey's algorithm (Day 22):
   //
   //   char *OnePastLastSlash = EXEFileName;
   //   for(char *Scan = EXEFileName; *Scan; ++Scan) {
@@ -166,13 +295,13 @@ de100_path_result_t de100_get_executable_directory(void) {
   //       }
   //   }
   //
-  // We adapt it for Unix (forward slashes) and keep Windows support.
+  // We adapt for Unix (forward slashes) and keep Windows support.
   //
   // Example:
   //   Input:  "/home/user/project/build/handmade"
   //   Output: "/home/user/project/build/"
   //                                     ↑
-  //                          We truncate HERE (after last /)
+  //                          Truncate HERE (after last /)
   // ─────────────────────────────────────────────────────────────────────
 
   char *last_separator = NULL;
@@ -196,8 +325,8 @@ de100_path_result_t de100_get_executable_directory(void) {
     *(last_separator + 1) = '\0';
     result.length = (size_t)(last_separator - result.path + 1);
   } else {
-    // No separator found - use current directory
-    // This shouldn't happen for absolute paths, but handle it anyway
+    // No separator found - use current directory notation
+    // This shouldn't happen for absolute paths, but handle it
     result.path[0] = '.';
 #if defined(_WIN32)
     result.path[1] = '\\';
@@ -206,10 +335,20 @@ de100_path_result_t de100_get_executable_directory(void) {
 #endif
     result.path[2] = '\0';
     result.length = 2;
+
+    SET_ERROR_DETAIL("[path_get_executable_directory] No separator found in "
+                     "'%s', using './'",
+                     exe_path.path);
   }
 
   result.success = true;
   result.error_code = PATH_SUCCESS;
+
+  // Only clear if we didn't set a warning above
+  if (last_separator != NULL) {
+    CLEAR_ERROR_DETAIL();
+  }
+
   return result;
 }
 
@@ -217,39 +356,42 @@ de100_path_result_t de100_get_executable_directory(void) {
 // PATH JOIN
 // ═══════════════════════════════════════════════════════════════════════════
 
-de100_path_result_t de100_path_join(const char *directory,
-                                    const char *filename) {
-  de100_path_result_t result = {0};
+PathResult path_join(const char *directory, const char *filename) {
+  PathResult result = {0};
 
   // ─────────────────────────────────────────────────────────────────────
   // Validate inputs
   // ─────────────────────────────────────────────────────────────────────
 
   if (!directory || !filename) {
-    result.success = false;
-    result.error_code = PATH_ERROR_INVALID_ARGUMENT;
-    snprintf(result.error_message, sizeof(result.error_message),
-             "NULL argument: directory=%p, filename=%p", (void *)directory,
-             (void *)filename);
-    return result;
+    SET_ERROR_DETAIL("[path_join] NULL argument: directory=%p, filename=%p",
+                     (void *)directory, (void *)filename);
+    return make_path_error(PATH_ERROR_INVALID_ARGUMENT);
   }
 
   size_t dir_len = strlen(directory);
   size_t file_len = strlen(filename);
 
+  // Empty directory is invalid
+  if (dir_len == 0) {
+    SET_ERROR_DETAIL("[path_join] Empty directory string");
+    return make_path_error(PATH_ERROR_INVALID_ARGUMENT);
+  }
+
   // ─────────────────────────────────────────────────────────────────────
   // Check if directory already ends with separator
   // ─────────────────────────────────────────────────────────────────────
 
+  char last_char = directory[dir_len - 1];
   bool has_trailing_separator = false;
-  if (dir_len > 0) {
-    char last_char = directory[dir_len - 1];
+
 #if defined(_WIN32)
-    has_trailing_separator = (last_char == '\\' || last_char == '/');
+  has_trailing_separator = (last_char == '\\' || last_char == '/');
+  char separator = '\\';
 #else
-    has_trailing_separator = (last_char == '/');
+  has_trailing_separator = (last_char == '/');
+  char separator = '/';
 #endif
-  }
 
   // ─────────────────────────────────────────────────────────────────────
   // Calculate required length and check bounds
@@ -259,62 +401,97 @@ de100_path_result_t de100_path_join(const char *directory,
   size_t total_len = dir_len + separator_len + file_len;
 
   if (total_len >= sizeof(result.path)) {
-    result.success = false;
-    result.error_code = PATH_ERROR_BUFFER_TOO_SMALL;
-    snprintf(result.error_message, sizeof(result.error_message),
-             "Path too long: need %zu bytes, have %zu", total_len + 1,
-             sizeof(result.path));
-    return result;
+    SET_ERROR_DETAIL("[path_join] Path too long: need %zu bytes, have %zu",
+                     total_len + 1, sizeof(result.path));
+    return make_path_error(PATH_ERROR_BUFFER_TOO_SMALL);
   }
 
   // ─────────────────────────────────────────────────────────────────────
   // Build the joined path
   // ─────────────────────────────────────────────────────────────────────
   //
-  // This is equivalent to Casey's CatStrings:
-  //
-  //   CatStrings(OnePastLastSlash - EXEFileName, EXEFileName,
-  //              sizeof(SourceGameCodeDLLFilename) - 1,
-  //              SourceGameCodeDLLFilename, sizeof(SourceGameCodeDLLFullPath),
-  //              SourceGameCodeDLLFullPath);
-  //
-  // We use snprintf for safety and clarity.
+  // Using memcpy for performance (we already validated lengths)
   // ─────────────────────────────────────────────────────────────────────
 
-  if (has_trailing_separator) {
-    snprintf(result.path, sizeof(result.path), "%s%s", directory, filename);
-  } else {
-#if defined(_WIN32)
-    snprintf(result.path, sizeof(result.path), "%s\\%s", directory, filename);
-#else
-    snprintf(result.path, sizeof(result.path), "%s/%s", directory, filename);
-#endif
+  char *write_ptr = result.path;
+
+  // Copy directory
+  memcpy(write_ptr, directory, dir_len);
+  write_ptr += dir_len;
+
+  // Add separator if needed
+  if (!has_trailing_separator) {
+    *write_ptr++ = separator;
   }
 
-  result.length = strlen(result.path);
+  // Copy filename
+  memcpy(write_ptr, filename, file_len);
+  write_ptr += file_len;
+
+  // Null-terminate
+  *write_ptr = '\0';
+
+  result.length = (size_t)(write_ptr - result.path);
   result.success = true;
   result.error_code = PATH_SUCCESS;
+
+  CLEAR_ERROR_DETAIL();
+
   return result;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ERROR STRING
+// ERROR STRING TRANSLATION
 // ═══════════════════════════════════════════════════════════════════════════
 
-const char *de100_path_strerror(enum de100_path_error_code code) {
+const char *path_strerror(PathErrorCode code) {
   switch (code) {
   case PATH_SUCCESS:
     return "Success";
+
   case PATH_ERROR_INVALID_ARGUMENT:
-    return "Invalid argument";
+    return "Invalid argument (NULL pointer or empty string)";
+
   case PATH_ERROR_BUFFER_TOO_SMALL:
-    return "Buffer too small";
+    return "Path buffer too small (path exceeds maximum length)";
+
   case PATH_ERROR_NOT_FOUND:
-    return "Path not found";
+    return "Path not found (file or directory does not exist)";
+
   case PATH_ERROR_PERMISSION_DENIED:
-    return "Permission denied";
+    return "Permission denied (insufficient privileges to access path)";
+
   case PATH_ERROR_UNKNOWN:
   default:
-    return "Unknown error";
+    return "Unknown path error";
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DEBUG UTILITIES
+// ═══════════════════════════════════════════════════════════════════════════
+
+#if DE100_INTERNAL && DE100_SLOW
+
+const char *path_get_last_error_detail(void) {
+  if (g_last_error_detail[0] == '\0') {
+    return NULL;
+  }
+  return g_last_error_detail;
+}
+
+void path_debug_log_result(const char *operation, PathResult result) {
+  if (result.success) {
+    fprintf(stderr, "[PATH] %s = '%s' (len=%zu)\n", operation, result.path,
+            result.length);
+  } else {
+    const char *detail = path_get_last_error_detail();
+    fprintf(stderr, "[PATH] %s = FAILED: %s\n", operation,
+            path_strerror(result.error_code));
+    if (detail) {
+      fprintf(stderr, "       Detail: %s\n", detail);
+    }
+  }
+}
+
+#endif // DE100_INTERNAL && DE100_SLOW

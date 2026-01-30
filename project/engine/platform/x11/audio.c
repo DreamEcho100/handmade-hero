@@ -58,7 +58,7 @@
  * @section gotchas GOTCHAS & LESSONS LEARNED
  *
  * **1. Buffer Reallocation Bug:**
- * DO NOT call platform_allocate_memory() twice for the same buffer!
+ * DO NOT call memory_alloc() twice for the same buffer!
  * The second call replaces the pointer, causing the original large buffer
  * to be lost. If the second allocation is smaller, you get buffer overflow.
  * FIX: Allocate once with correct size, use memset() to zero portions.
@@ -83,7 +83,7 @@
  *
  * **6. Linux mmap() Already Zeros Memory:**
  * MAP_ANONYMOUS guarantees zero-initialized pages on Linux.
- * PLATFORM_MEMORY_ZEROED flag is mainly for documentation/Windows compat.
+ * MEMORY_FLAG_ZEROED flag is mainly for documentation/Windows compat.
  *
  * @see _ignore/handmade_hero/.../handmade_hero_day_020_source/ for reference
  * @see https://www.alsa-project.org/alsa-doc/alsa-lib/pcm.html
@@ -503,17 +503,14 @@ bool linux_init_audio(GameAudioOutputBuffer *audio_output,
       g_linux_audio_output.sample_buffer_size * audio_config->bytes_per_sample;
 
   // LATFORM_MEMORY_ZEROED here if you want it pre-zeroed
-  g_linux_audio_output.sample_buffer = platform_allocate_memory(
-      NULL, sample_buffer_bytes,
-      PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE | PLATFORM_MEMORY_ZEROED);
+  g_linux_audio_output.sample_buffer =
+      memory_alloc(NULL, sample_buffer_bytes,
+                   MEMORY_FLAG_READ | MEMORY_FLAG_WRITE | MEMORY_FLAG_ZEROED);
 
-  if (!platform_memory_is_valid(g_linux_audio_output.sample_buffer)) {
+  if (!memory_is_valid(g_linux_audio_output.sample_buffer)) {
     fprintf(stderr, "❌ Sound: Cannot allocate sample buffer\n");
-    fprintf(stderr, "   Error: %s\n",
-            g_linux_audio_output.sample_buffer.error_message);
     fprintf(stderr, "   Code: %s\n",
-            platform_memory_strerror(
-                g_linux_audio_output.sample_buffer.error_code));
+            memory_error_str(g_linux_audio_output.sample_buffer.error_code));
     SndPcmClose(g_linux_audio_output.pcm_handle);
     audio_config->is_initialized = false;
     return false;
@@ -763,8 +760,8 @@ void linux_unload_alsa(GameAudioOutputBuffer *audio_output,
   printf("Unloading ALSA audio...\n");
 
   // Free sample buffer
-  platform_free_memory(&g_linux_audio_output.sample_buffer);
-  platform_free_memory(&audio_output->samples_block);
+  memory_free(&g_linux_audio_output.sample_buffer);
+  memory_free(&audio_output->samples_block);
 
   // Close PCM device
   if (g_linux_audio_output.pcm_handle) {
@@ -895,19 +892,20 @@ void linux_clear_audio_buffer(PlatformAudioConfig *audio_config) {
       audio_config->secondary_buffer_size / audio_config->bytes_per_sample;
 
   // Allocate temporary silence buffer
-  PlatformMemoryBlock silence_block = platform_allocate_memory(
-      NULL, audio_config->secondary_buffer_size,
-      PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE | PLATFORM_MEMORY_ZEROED);
+  MemoryBlock silence_block =
+      memory_alloc(NULL, audio_config->secondary_buffer_size,
+                   MEMORY_FLAG_READ | MEMORY_FLAG_WRITE | MEMORY_FLAG_ZEROED);
 
-  if (!platform_memory_is_valid(silence_block)) {
-    fprintf(stderr, "❌ Cannot allocate silence buffer: %s\n",
-            silence_block.error_message);
+  if (!memory_is_valid(silence_block)) {
+    fprintf(stderr, "❌ Cannot allocate silence buffer\n");
+    fprintf(stderr, "   Code: %s\n",
+            memory_error_str(silence_block.error_code));
     return;
   }
 
   // Write silence
   SndPcmWritei(g_linux_audio_output.pcm_handle, silence_block.base, frames);
-  platform_free_memory(&silence_block);
+  memory_free(&silence_block);
 }
 
 #if DE100_INTERNAL
@@ -984,9 +982,9 @@ void linux_debug_capture_flip_state(PlatformAudioConfig *audio_config) {
 //
 // ═══════════════════════════════════════════════════════════════
 
-file_scoped_fn void linux_debug_draw_vertical(GameBackBuffer *buffer, int x,
-                                              int top, int bottom,
-                                              uint32 color) {
+file_scoped_fn inline void linux_debug_draw_vertical(GameBackBuffer *buffer,
+                                                     int x, int top, int bottom,
+                                                     uint32 color) {
   // Bounds checking
   if (x < 0 || x >= buffer->width) {
     return;
@@ -1022,7 +1020,7 @@ file_scoped_fn void linux_debug_draw_vertical(GameBackBuffer *buffer, int x,
 //
 // ═══════════════════════════════════════════════════════════════
 
-file_scoped_fn void
+file_scoped_fn inline void
 linux_draw_audio_buffer_marker(GameBackBuffer *buffer,
                                GameAudioOutputBuffer *audio_output,
                                real32 coefficient, int pad_x, int top,

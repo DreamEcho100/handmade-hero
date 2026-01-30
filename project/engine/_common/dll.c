@@ -1,317 +1,424 @@
 #include "dll.h"
+
+#include <stdio.h>
 #include <string.h>
 
 // ═══════════════════════════════════════════════════════════════════════════
-// HELPER FUNCTIONS
+// DEBUG ERROR DETAIL STORAGE (Thread-Local)
+// ═══════════════════════════════════════════════════════════════════════════
+
+#if DE100_INTERNAL && DE100_SLOW
+
+#if defined(_WIN32)
+static __declspec(thread) char g_last_error_detail[1024];
+#else
+static __thread char g_last_error_detail[1024];
+#endif
+
+#define SET_ERROR_DETAIL(...)                                                  \
+  snprintf(g_last_error_detail, sizeof(g_last_error_detail), __VA_ARGS__)
+
+#define CLEAR_ERROR_DETAIL() (g_last_error_detail[0] = '\0')
+
+#else
+
+#define SET_ERROR_DETAIL(...) ((void)0)
+#define CLEAR_ERROR_DETAIL() ((void)0)
+
+#endif // DE100_INTERNAL && DE100_SLOW
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PLATFORM ERROR TRANSLATION
 // ═══════════════════════════════════════════════════════════════════════════
 
 #if defined(_WIN32)
-/**
- * Convert Windows error code to our status code.
- */
-file_scoped_fn enum de100_status_code win32_error_to_status(DWORD error_code) {
+
+file_scoped_fn DllErrorCode win32_error_to_dll_error(DWORD error_code) {
   switch (error_code) {
+  case ERROR_SUCCESS:
+    return DLL_SUCCESS;
+
   case ERROR_FILE_NOT_FOUND:
   case ERROR_PATH_NOT_FOUND:
   case ERROR_MOD_NOT_FOUND:
-    return DE100_DLL_ERROR_FILE_NOT_FOUND;
+    return DLL_ERROR_FILE_NOT_FOUND;
 
   case ERROR_BAD_EXE_FORMAT:
   case ERROR_INVALID_DLL:
-    return DE100_DLL_ERROR_INVALID_FORMAT;
+    return DLL_ERROR_INVALID_FORMAT;
 
   case ERROR_ACCESS_DENIED:
   case ERROR_SHARING_VIOLATION:
-    return DE100_DLL_ERROR_ACCESS_DENIED;
+    return DLL_ERROR_ACCESS_DENIED;
 
   case ERROR_NOT_ENOUGH_MEMORY:
   case ERROR_OUTOFMEMORY:
-    return DE100_DLL_ERROR_OUT_OF_MEMORY;
+    return DLL_ERROR_OUT_OF_MEMORY;
 
   case ERROR_INVALID_HANDLE:
-    return DE100_DLL_ERROR_INVALID_HANDLE;
+    return DLL_ERROR_INVALID_HANDLE;
 
   default:
-    return DE100_DLL_ERROR_UNKNOWN;
+    return DLL_ERROR_UNKNOWN;
   }
 }
 
-/**
- * Get Windows error message and store it in the DLL structure.
- */
-file_scoped_fn void win32_get_error_message(struct de100_dll_t *dll,
-                                            DWORD error_code) {
+#if DE100_INTERNAL && DE100_SLOW
+file_scoped_fn void win32_set_error_detail(const char *operation,
+                                           const char *path, DWORD error_code) {
+  char sys_msg[512];
   FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
                  NULL, error_code, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-                 dll->error_message, sizeof(dll->error_message), NULL);
+                 sys_msg, sizeof(sys_msg), NULL);
 
-  // Remove trailing newline if present
-  size_t len = strlen(dll->error_message);
-  if (len > 0 && dll->error_message[len - 1] == '\n') {
-    dll->error_message[len - 1] = '\0';
-    if (len > 1 && dll->error_message[len - 2] == '\r') {
-      dll->error_message[len - 2] = '\0';
-    }
+  // Remove trailing newline
+  size_t len = strlen(sys_msg);
+  while (len > 0 && (sys_msg[len - 1] == '\n' || sys_msg[len - 1] == '\r')) {
+    sys_msg[--len] = '\0';
   }
+
+  SET_ERROR_DETAIL("[%s] '%s': %s (Win32 error %lu)", operation,
+                   path ? path : "(null)", sys_msg, error_code);
 }
 #endif
 
-// ═══════════════════════════════════════════════════════════════════════════
-// DLOPEN
-// ═══════════════════════════════════════════════════════════════════════════
+#else // POSIX
 
-struct de100_dll_t de100_dlopen(const char *file, int flags) {
-  struct de100_dll_t dll;
-  memset(&dll, 0, sizeof(dll));
-
-  if (!file) {
-    dll.last_error = DE100_DLL_ERROR_FILE_NOT_FOUND;
-    snprintf(dll.error_message, sizeof(dll.error_message),
-             "NULL file path provided");
-    return dll;
+file_scoped_fn DllErrorCode posix_dlerror_to_dll_error(const char *error_str) {
+  if (!error_str) {
+    return DLL_ERROR_UNKNOWN;
   }
 
-#if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) ||        \
-    defined(__unix__) || defined(__MACH__)
+  // Parse common error patterns from dlerror()
+  if (strstr(error_str, "No such file") || strstr(error_str, "cannot open") ||
+      strstr(error_str, "not found")) {
+    return DLL_ERROR_FILE_NOT_FOUND;
+  }
+
+  if (strstr(error_str, "invalid ELF header") ||
+      strstr(error_str, "wrong ELF class") ||
+      strstr(error_str, "file too short") ||
+      strstr(error_str, "not a dynamic")) {
+    return DLL_ERROR_INVALID_FORMAT;
+  }
+
+  if (strstr(error_str, "Permission denied")) {
+    return DLL_ERROR_ACCESS_DENIED;
+  }
+
+  if (strstr(error_str, "Cannot allocate memory") ||
+      strstr(error_str, "out of memory")) {
+    return DLL_ERROR_OUT_OF_MEMORY;
+  }
+
+  if (strstr(error_str, "undefined symbol") ||
+      strstr(error_str, "symbol not found")) {
+    return DLL_ERROR_SYMBOL_NOT_FOUND;
+  }
+
+  return DLL_ERROR_UNKNOWN;
+}
+
+#if DE100_INTERNAL && DE100_SLOW
+file_scoped_fn void posix_set_error_detail(const char *operation,
+                                           const char *path,
+                                           const char *dlerror_msg) {
+  SET_ERROR_DETAIL("[%s] '%s': %s", operation, path ? path : "(null)",
+                   dlerror_msg ? dlerror_msg : "Unknown error");
+}
+#endif
+
+#endif // Platform selection
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RESULT HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
+
+file_scoped_fn DllHandle make_dll_error(DllErrorCode code) {
+  DllHandle result = {0};
+  result.handle = NULL;
+  result.error_code = code;
+  result.is_valid = false;
+  return result;
+}
+
+file_scoped_fn DllHandle make_dll_success(void *handle) {
+  DllHandle result = {0};
+#if defined(_WIN32)
+  result.handle = (HMODULE)handle;
+#else
+  result.handle = handle;
+#endif
+  result.error_code = DLL_SUCCESS;
+  result.is_valid = true;
+  CLEAR_ERROR_DETAIL();
+  return result;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DLL OPEN
+// ═══════════════════════════════════════════════════════════════════════════
+
+DllHandle dll_open(const char *filepath, int flags) {
   // ─────────────────────────────────────────────────────────────────────
-  // UNIX/LINUX/MACOS
+  // Validate input
+  // ─────────────────────────────────────────────────────────────────────
+  if (!filepath) {
+    SET_ERROR_DETAIL("[dll_open] NULL filepath provided");
+    return make_dll_error(DLL_ERROR_FILE_NOT_FOUND);
+  }
+
+  if (filepath[0] == '\0') {
+    SET_ERROR_DETAIL("[dll_open] Empty filepath provided");
+    return make_dll_error(DLL_ERROR_FILE_NOT_FOUND);
+  }
+
+#if defined(_WIN32)
+  // ─────────────────────────────────────────────────────────────────────
+  // WINDOWS: LoadLibraryA
+  // ─────────────────────────────────────────────────────────────────────
+  (void)flags; // Windows doesn't use RTLD_* flags
+
+  SetLastError(0);
+  HMODULE handle = LoadLibraryA(filepath);
+
+  if (!handle) {
+    DWORD error_code = GetLastError();
+#if DE100_INTERNAL && DE100_SLOW
+    win32_set_error_detail("dll_open:LoadLibraryA", filepath, error_code);
+#endif
+    return make_dll_error(win32_error_to_dll_error(error_code));
+  }
+
+  return make_dll_success((void *)handle);
+
+#else
+  // ─────────────────────────────────────────────────────────────────────
+  // POSIX: dlopen
   // ─────────────────────────────────────────────────────────────────────
   dlerror(); // Clear any existing error
 
-  dll.dll_handle = dlopen(file, flags);
+  void *handle = dlopen(filepath, flags);
 
-  if (!dll.dll_handle) {
+  if (!handle) {
     const char *error_str = dlerror();
+    DllErrorCode code = posix_dlerror_to_dll_error(error_str);
 
-    // Try to determine error type from message
-    if (error_str) {
-      strncpy(dll.error_message, error_str, sizeof(dll.error_message) - 1);
-      dll.error_message[sizeof(dll.error_message) - 1] = '\0';
-
-      // Parse common error patterns
-      if (strstr(error_str, "No such file") ||
-          strstr(error_str, "cannot open")) {
-        dll.last_error = DE100_DLL_ERROR_FILE_NOT_FOUND;
-      } else if (strstr(error_str, "invalid ELF header") ||
-                 strstr(error_str, "wrong ELF class") ||
-                 strstr(error_str, "file too short")) {
-        dll.last_error = DE100_DLL_ERROR_INVALID_FORMAT;
-      } else if (strstr(error_str, "Permission denied")) {
-        dll.last_error = DE100_DLL_ERROR_ACCESS_DENIED;
-      } else if (strstr(error_str, "Cannot allocate memory")) {
-        dll.last_error = DE100_DLL_ERROR_OUT_OF_MEMORY;
-      } else {
-        dll.last_error = DE100_DLL_ERROR_UNKNOWN;
-      }
-    } else {
-      dll.last_error = DE100_DLL_ERROR_UNKNOWN;
-      snprintf(dll.error_message, sizeof(dll.error_message),
-               "dlopen failed with no error message");
-    }
-  } else {
-    dll.last_error = DE100_DLL_SUCCESS;
-    snprintf(dll.error_message, sizeof(dll.error_message), "Success");
-  }
-
-#elif defined(_WIN32)
-  // ─────────────────────────────────────────────────────────────────────
-  // WINDOWS
-  // ─────────────────────────────────────────────────────────────────────
-  SetLastError(0); // Clear any existing error
-
-  dll.dll_handle = LoadLibraryA(file);
-
-  if (!dll.dll_handle) {
-    DWORD error_code = GetLastError();
-    dll.last_error = win32_error_to_status(error_code);
-    win32_get_error_message(&dll, error_code);
-  } else {
-    dll.last_error = DE100_DLL_SUCCESS;
-    snprintf(dll.error_message, sizeof(dll.error_message), "Success");
-  }
-
-#else
-  dll.last_error = DE100_DLL_ERROR_UNKNOWN;
-  snprintf(dll.error_message, sizeof(dll.error_message),
-           "Unsupported platform");
+#if DE100_INTERNAL && DE100_SLOW
+    posix_set_error_detail("dll_open:dlopen", filepath, error_str);
 #endif
+    return make_dll_error(code);
+  }
 
-  return dll;
+  return make_dll_success(handle);
+
+#endif
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// DLSYM
+// DLL SYM
 // ═══════════════════════════════════════════════════════════════════════════
 
-void *de100_dlsym(struct de100_dll_t *dll, const char *symbol) {
+void *dll_sym(DllHandle *dll, const char *symbol_name) {
+  // ─────────────────────────────────────────────────────────────────────
+  // Validate input
+  // ─────────────────────────────────────────────────────────────────────
   if (!dll) {
     return NULL;
   }
 
-  if (!dll->dll_handle) {
-    dll->last_error = DE100_DLL_ERROR_INVALID_HANDLE;
-    snprintf(dll->error_message, sizeof(dll->error_message),
-             "Invalid DLL handle (NULL)");
+  if (!dll->handle || !dll->is_valid) {
+    dll->error_code = DLL_ERROR_INVALID_HANDLE;
+    SET_ERROR_DETAIL("[dll_sym] Invalid DLL handle (NULL or not loaded)");
     return NULL;
   }
 
-  if (!symbol) {
-    dll->last_error = DE100_DLL_ERROR_SYMBOL_NOT_FOUND;
-    snprintf(dll->error_message, sizeof(dll->error_message),
-             "NULL symbol name provided");
+  if (!symbol_name || symbol_name[0] == '\0') {
+    dll->error_code = DLL_ERROR_SYMBOL_NOT_FOUND;
+    SET_ERROR_DETAIL("[dll_sym] NULL or empty symbol name");
     return NULL;
   }
 
-#if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) ||        \
-    defined(__unix__) || defined(__MACH__)
+#if defined(_WIN32)
   // ─────────────────────────────────────────────────────────────────────
-  // UNIX/LINUX/MACOS
-  // ─────────────────────────────────────────────────────────────────────
-  dlerror(); // Clear any existing error
-
-  void *sym = dlsym(dll->dll_handle, symbol);
-
-  const char *error_str = dlerror();
-  if (error_str) {
-    dll->last_error = DE100_DLL_ERROR_SYMBOL_NOT_FOUND;
-    snprintf(dll->error_message, sizeof(dll->error_message),
-             "Symbol '%s' not found: %s", symbol, error_str);
-    return NULL;
-  }
-
-  dll->last_error = DE100_DLL_SUCCESS;
-  snprintf(dll->error_message, sizeof(dll->error_message), "Success");
-  return sym;
-
-#elif defined(_WIN32)
-  // ─────────────────────────────────────────────────────────────────────
-  // WINDOWS
+  // WINDOWS: GetProcAddress
   // ─────────────────────────────────────────────────────────────────────
   SetLastError(0);
 
-  void *sym = (void *)GetProcAddress(dll->dll_handle, symbol);
+  FARPROC sym = GetProcAddress(dll->handle, symbol_name);
 
   if (!sym) {
     DWORD error_code = GetLastError();
-    dll->last_error = DE100_DLL_ERROR_SYMBOL_NOT_FOUND;
+    dll->error_code = DLL_ERROR_SYMBOL_NOT_FOUND;
 
-    if (error_code != 0) {
-      char temp_msg[256];
-      win32_get_error_message(dll, error_code);
-      snprintf(temp_msg, sizeof(temp_msg), "Symbol '%s' not found: %s", symbol,
-               dll->error_message);
-      strncpy(dll->error_message, temp_msg, sizeof(dll->error_message) - 1);
-    } else {
-      snprintf(dll->error_message, sizeof(dll->error_message),
-               "Symbol '%s' not found", symbol);
-    }
+#if DE100_INTERNAL && DE100_SLOW
+    char detail[256];
+    snprintf(detail, sizeof(detail), "symbol '%s'", symbol_name);
+    win32_set_error_detail("dll_sym:GetProcAddress", detail, error_code);
+#endif
     return NULL;
   }
 
-  dll->last_error = DE100_DLL_SUCCESS;
-  snprintf(dll->error_message, sizeof(dll->error_message), "Success");
-  return sym;
+  dll->error_code = DLL_SUCCESS;
+  CLEAR_ERROR_DETAIL();
+  return (void *)sym;
 
 #else
-  dll->last_error = DE100_DLL_ERROR_UNKNOWN;
-  snprintf(dll->error_message, sizeof(dll->error_message),
-           "Unsupported platform");
-  return NULL;
-#endif
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// DLCLOSE
-// ═══════════════════════════════════════════════════════════════════════════
-
-enum de100_dll_status_code de100_dlclose(struct de100_dll_t *dll) {
-  if (!dll) {
-    return DE100_DLL_ERROR_INVALID_HANDLE;
-  }
-
-  if (!dll->dll_handle) {
-    dll->last_error = DE100_DLL_ERROR_INVALID_HANDLE;
-    snprintf(dll->error_message, sizeof(dll->error_message),
-             "Invalid DLL handle (NULL)");
-    return DE100_DLL_ERROR_INVALID_HANDLE;
-  }
-
-#if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) ||        \
-    defined(__unix__) || defined(__MACH__)
   // ─────────────────────────────────────────────────────────────────────
-  // UNIX/LINUX/MACOS
+  // POSIX: dlsym
   // ─────────────────────────────────────────────────────────────────────
   dlerror(); // Clear any existing error
 
-  if (dlclose(dll->dll_handle) != 0) {
-    const char *error_str = dlerror();
-    dll->last_error = DE100_DLL_ERROR_UNKNOWN;
+  void *sym = dlsym(dll->handle, symbol_name);
 
-    if (error_str) {
-      strncpy(dll->error_message, error_str, sizeof(dll->error_message) - 1);
-      dll->error_message[sizeof(dll->error_message) - 1] = '\0';
-    } else {
-      snprintf(dll->error_message, sizeof(dll->error_message),
-               "dlclose failed with no error message");
-    }
+  // Note: dlsym can return NULL for valid symbols (e.g., a NULL pointer)
+  // We must check dlerror() to distinguish error from valid NULL
+  const char *error_str = dlerror();
 
-    return dll->last_error;
+  if (error_str) {
+    dll->error_code = DLL_ERROR_SYMBOL_NOT_FOUND;
+
+#if DE100_INTERNAL && DE100_SLOW
+    char detail[256];
+    snprintf(detail, sizeof(detail), "symbol '%s'", symbol_name);
+    posix_set_error_detail("dll_sym:dlsym", detail, error_str);
+#endif
+    return NULL;
   }
 
-#elif defined(_WIN32)
+  dll->error_code = DLL_SUCCESS;
+  CLEAR_ERROR_DETAIL();
+  return sym;
+
+#endif
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DLL CLOSE
+// ═══════════════════════════════════════════════════════════════════════════
+
+DllErrorCode dll_close(DllHandle *dll) {
   // ─────────────────────────────────────────────────────────────────────
-  // WINDOWS
+  // Validate input
+  // ─────────────────────────────────────────────────────────────────────
+  if (!dll) {
+    return DLL_ERROR_INVALID_HANDLE;
+  }
+
+  // Already closed - idempotent operation
+  if (!dll->handle) {
+    dll->is_valid = false;
+    dll->error_code = DLL_SUCCESS;
+    CLEAR_ERROR_DETAIL();
+    return DLL_SUCCESS;
+  }
+
+#if defined(_WIN32)
+  // ─────────────────────────────────────────────────────────────────────
+  // WINDOWS: FreeLibrary
   // ─────────────────────────────────────────────────────────────────────
   SetLastError(0);
 
-  if (!FreeLibrary(dll->dll_handle)) {
+  if (!FreeLibrary(dll->handle)) {
     DWORD error_code = GetLastError();
-    dll->last_error = win32_error_to_status(error_code);
-    win32_get_error_message(dll, error_code);
-    return dll->last_error;
+    dll->error_code = win32_error_to_dll_error(error_code);
+
+#if DE100_INTERNAL && DE100_SLOW
+    win32_set_error_detail("dll_close:FreeLibrary", NULL, error_code);
+#endif
+    return dll->error_code;
   }
 
 #else
-  dll->last_error = DE100_DLL_ERROR_UNKNOWN;
-  snprintf(dll->error_message, sizeof(dll->error_message),
-           "Unsupported platform");
-  return dll->last_error;
+  // ─────────────────────────────────────────────────────────────────────
+  // POSIX: dlclose
+  // ─────────────────────────────────────────────────────────────────────
+  dlerror(); // Clear any existing error
+
+  if (dlclose(dll->handle) != 0) {
+    const char *error_str = dlerror();
+    dll->error_code = DLL_ERROR_UNKNOWN;
+
+#if DE100_INTERNAL && DE100_SLOW
+    posix_set_error_detail("dll_close:dlclose", NULL, error_str);
+#endif
+    return dll->error_code;
+  }
+
 #endif
 
-  dll->dll_handle = NULL;
-  dll->last_error = DE100_DLL_SUCCESS;
-  snprintf(dll->error_message, sizeof(dll->error_message), "Success");
-  return DE100_DLL_SUCCESS;
+  // Success - mark as closed
+  dll->handle = NULL;
+  dll->is_valid = false;
+  dll->error_code = DLL_SUCCESS;
+  CLEAR_ERROR_DETAIL();
+
+  return DLL_SUCCESS;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ERROR HANDLING UTILITIES
+// ERROR STRING TRANSLATION
 // ═══════════════════════════════════════════════════════════════════════════
 
-const char *de100_dlstrerror(enum de100_dll_status_code code) {
+const char *dll_strerror(DllErrorCode code) {
   switch (code) {
-  case DE100_DLL_SUCCESS:
+  case DLL_SUCCESS:
     return "Success";
-  case DE100_DLL_ERROR_FILE_NOT_FOUND:
-    return "File not found or path invalid";
-  case DE100_DLL_ERROR_INVALID_FORMAT:
-    return "Invalid library format or architecture mismatch";
-  case DE100_DLL_ERROR_SYMBOL_NOT_FOUND:
+
+  case DLL_ERROR_FILE_NOT_FOUND:
+    return "Library file not found or path invalid";
+
+  case DLL_ERROR_INVALID_FORMAT:
+    return "Invalid library format (wrong architecture, corrupted, or not a "
+           "shared library)";
+
+  case DLL_ERROR_SYMBOL_NOT_FOUND:
     return "Symbol not found in library";
-  case DE100_DLL_ERROR_ALREADY_LOADED:
+
+  case DLL_ERROR_ALREADY_LOADED:
     return "Library already loaded";
-  case DE100_DLL_ERROR_ACCESS_DENIED:
-    return "Access denied or permission error";
-  case DE100_DLL_ERROR_OUT_OF_MEMORY:
-    return "Out of memory";
-  case DE100_DLL_ERROR_INVALID_HANDLE:
-    return "Invalid library handle";
-  case DE100_DLL_ERROR_UNKNOWN:
+
+  case DLL_ERROR_ACCESS_DENIED:
+    return "Access denied (permission error or file locked)";
+
+  case DLL_ERROR_OUT_OF_MEMORY:
+    return "Out of memory while loading library";
+
+  case DLL_ERROR_INVALID_HANDLE:
+    return "Invalid library handle (NULL or already closed)";
+
+  case DLL_ERROR_UNKNOWN:
   default:
-    return "Unknown error";
+    return "Unknown DLL error";
   }
 }
 
-bool de100_dlvalid(struct de100_dll_t dll) {
-  return dll.dll_handle != NULL && dll.last_error == DE100_DLL_SUCCESS;
+// ═══════════════════════════════════════════════════════════════════════════
+// DEBUG UTILITIES
+// ═══════════════════════════════════════════════════════════════════════════
+
+#if DE100_INTERNAL && DE100_SLOW
+
+const char *dll_get_last_error_detail(void) {
+  if (g_last_error_detail[0] == '\0') {
+    return NULL;
+  }
+  return g_last_error_detail;
 }
+
+void dll_debug_log_result(const char *operation, const char *path,
+                          DllHandle dll) {
+  if (dll.is_valid) {
+    fprintf(stderr, "[DLL] %s('%s') = OK (handle=%p)\n", operation,
+            path ? path : "(null)", (void *)dll.handle);
+  } else {
+    const char *detail = dll_get_last_error_detail();
+    fprintf(stderr, "[DLL] %s('%s') = FAILED: %s\n", operation,
+            path ? path : "(null)", dll_strerror(dll.error_code));
+    if (detail) {
+      fprintf(stderr, "      Detail: %s\n", detail);
+    }
+  }
+}
+
+#endif // DE100_INTERNAL && DE100_SLOW

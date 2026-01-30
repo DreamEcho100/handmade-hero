@@ -9,6 +9,12 @@
 
 // #define DE100_INTERNAL 0
 
+#ifndef DE100_POSIX
+#define DE100_POSIX                                                            \
+  defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) ||          \
+      defined(__unix__) || defined(__MACH__)
+#endif
+
 /* ========================= DEBUG BREAK ========================= */
 
 #if defined(_MSC_VER) || defined(__MINGW32__) || defined(__MINGW64__) ||       \

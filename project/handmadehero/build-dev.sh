@@ -64,16 +64,22 @@ while [[ $# -gt 0 ]]; do
         -r|--run)
             RUN_AFTER_BUILD=true
         ;;
+        -R|--run-only)
+            RUN_AFTER_BUILD=true
+            BUILD_GAME=false
+            BUILD_PLATFORM=false
+        ;;
         --help|-h)
             echo "Usage: $0 [options]"
             echo ""
             echo "Options:"
             echo "  -r, --run         Run the game after building"
+            echo "  -R, --run-only    Run the game without building"
             echo "  --backend=NAME    Set backend (x11, macos, win32, raylib, auto)"
             echo "  --sanitize        Enable address/leak/undefined sanitizers"
             echo "  --build-game      Build game libraries only"
             echo "  --build-platform  Build platform executable only"
-            echo "  --help            Show this help"
+            echo "  -h, --help        Show this help"
             echo ""
             echo "Examples:"
             echo "  $0                    # Build everything"

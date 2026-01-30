@@ -4,7 +4,7 @@
 #include "../../_common/base.h"
 #include "../../_common/memory.h"
 #include "../../game/audio.h"
-#include "../_common/audio.h"
+#include "../_common/config.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -124,7 +124,7 @@ typedef struct {
 
   uint32 buffer_size;
 
-  PlatformMemoryBlock sample_buffer;
+  MemoryBlock sample_buffer;
   uint32 sample_buffer_size;
 
   int32 latency_sample_count;

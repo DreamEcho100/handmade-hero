@@ -1,9 +1,16 @@
 #include "memory.h"
-#include <stdint.h>
-#include <stdio.h>
+
+// #if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) ||        \
+//     defined(__unix__) || defined(__MACH__)
+// #define _GNU_SOURCE
+// #endif
+
 #include <string.h>
 
-// Platform-specific includes
+// ═══════════════════════════════════════════════════════════════════════════
+// PLATFORM INCLUDES
+// ═══════════════════════════════════════════════════════════════════════════
+
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -13,80 +20,191 @@
 #include <errno.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#else
+#error "Unsupported platform"
 #endif
 
 // ═══════════════════════════════════════════════════════════════════════════
-// HELPER FUNCTIONS
+// CACHED PAGE SIZE
 // ═══════════════════════════════════════════════════════════════════════════
 
-size_t platform_get_page_size(void) {
+file_scoped_global_var size_t g_page_size = 0;
+
+size_t memory_page_size(void) {
+  if (g_page_size == 0) {
 #if defined(_WIN32)
-  SYSTEM_INFO info;
-  GetSystemInfo(&info);
-  return (size_t)info.dwPageSize;
-#elif defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) ||      \
-    defined(__unix__) || defined(__MACH__)
-  long page_size = sysconf(_SC_PAGESIZE);
-  if (page_size < 0) {
-    return 0;
-  }
-  return (size_t)page_size;
+    SYSTEM_INFO info;
+    GetSystemInfo(&info);
+    g_page_size = (size_t)info.dwPageSize;
+#elif defined(DE100_POSIX)
+    long ps = sysconf(_SC_PAGESIZE);
+    g_page_size = (ps > 0) ? (size_t)ps : 4096;
 #endif
+  }
+  return g_page_size;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ERROR MESSAGES
+// ═══════════════════════════════════════════════════════════════════════════
+
+file_scoped_global_var const char *g_memory_error_messages[] = {
+    [MEMORY_OK] = "Success",
+    [MEMORY_ERR_OUT_OF_MEMORY] = "Out of memory",
+    [MEMORY_ERR_INVALID_SIZE] = "Invalid size (zero or negative)",
+    [MEMORY_ERR_SIZE_OVERFLOW] = "Size overflow (too large)",
+    [MEMORY_ERR_INVALID_ADDRESS] = "Invalid address",
+    [MEMORY_ERR_ADDRESS_IN_USE] = "Address already in use",
+    [MEMORY_ERR_ALIGNMENT_FAILED] = "Alignment failed",
+    [MEMORY_ERR_PERMISSION_DENIED] = "Permission denied",
+    [MEMORY_ERR_PROTECTION_FAILED] = "Failed to set memory protection",
+    [MEMORY_ERR_NULL_BLOCK] = "NULL block pointer",
+    [MEMORY_ERR_INVALID_BLOCK] = "Invalid block (corrupted or uninitialized)",
+    [MEMORY_ERR_ALREADY_FREED] = "Block already freed",
+    [MEMORY_ERR_PAGE_SIZE_FAILED] = "Failed to get system page size",
+    [MEMORY_ERR_PLATFORM_ERROR] = "Platform-specific error",
+};
+
+const char *memory_error_str(MemoryError error) {
+  if (error >= 0 && error < MEMORY_ERR_COUNT) {
+    return g_memory_error_messages[error];
+  }
+  return "Unknown error";
+}
+
+// #if DE100_INTERNAL && DE100_SLOW
+file_scoped_global_var const char *g_memory_error_details[] = {
+    [MEMORY_OK] = "Operation completed successfully.",
+
+    [MEMORY_ERR_OUT_OF_MEMORY] =
+        "The system cannot allocate the requested memory.\n"
+        "Possible causes:\n"
+        "  - Physical RAM exhausted\n"
+        "  - Virtual address space exhausted (32-bit process)\n"
+        "  - Per-process memory limit reached\n"
+        "  - System commit limit reached (Windows)\n"
+        "Try: Reduce allocation size or free unused memory.",
+
+    [MEMORY_ERR_INVALID_SIZE] = "Size parameter is invalid.\n"
+                                "Requirements:\n"
+                                "  - Size must be > 0\n"
+                                "  - Size will be rounded up to page boundary\n"
+                                "Check: Ensure you're not passing 0 or a "
+                                "negative value cast to size_t.",
+
+    [MEMORY_ERR_SIZE_OVERFLOW] =
+        "Size calculation overflowed.\n"
+        "The requested size plus guard pages exceeds SIZE_MAX.\n"
+        "This typically means you're requesting an impossibly large "
+        "allocation.\n"
+        "Check: Verify size calculation doesn't overflow before calling.",
+
+    [MEMORY_ERR_INVALID_ADDRESS] =
+        "The base address hint is invalid.\n"
+        "Possible causes:\n"
+        "  - Address not page-aligned\n"
+        "  - Address in reserved system range\n"
+        "  - Address conflicts with existing mapping\n"
+        "Try: Use NULL for base_hint to let the OS choose.",
+
+    [MEMORY_ERR_ADDRESS_IN_USE] =
+        "The requested address range is already mapped.\n"
+        "This occurs with MEMORY_FLAG_BASE_FIXED when the address is taken.\n"
+        "Try: Use MEMORY_FLAG_BASE_HINT instead, or choose different address.",
+
+    [MEMORY_ERR_ALIGNMENT_FAILED] =
+        "Failed to align memory to required boundary.\n"
+        "This is rare and indicates a system issue.\n"
+        "Check: Verify page size is a power of 2.",
+
+    [MEMORY_ERR_PERMISSION_DENIED] =
+        "Permission denied for memory operation.\n"
+        "Possible causes:\n"
+        "  - SELinux/AppArmor blocking mmap\n"
+        "  - Trying to allocate executable memory without permission\n"
+        "  - System policy restricting memory allocation\n"
+        "Try: Check system security policies.",
+
+    [MEMORY_ERR_PROTECTION_FAILED] =
+        "Failed to set memory protection flags.\n"
+        "The memory was allocated but mprotect/VirtualProtect failed.\n"
+        "Possible causes:\n"
+        "  - Requesting EXECUTE on non-executable memory policy\n"
+        "  - System security restrictions\n"
+        "Note: Memory has been freed to prevent partial allocation.",
+
+    [MEMORY_ERR_NULL_BLOCK] =
+        "NULL pointer passed for block parameter.\n"
+        "The block pointer itself is NULL, not the block's base.\n"
+        "Check: Ensure you're passing &block, not block.base.",
+
+    [MEMORY_ERR_INVALID_BLOCK] =
+        "Block structure is invalid or corrupted.\n"
+        "Possible causes:\n"
+        "  - Uninitialized MemoryBlock variable\n"
+        "  - Block was corrupted by buffer overflow\n"
+        "  - Block from different allocator\n"
+        "Check: Ensure block was returned by memory_alloc().",
+
+    [MEMORY_ERR_ALREADY_FREED] =
+        "Block has already been freed.\n"
+        "Double-free detected. This is safe (idempotent) but indicates a bug.\n"
+        "Check: Review ownership and lifetime of this block.",
+
+    [MEMORY_ERR_PAGE_SIZE_FAILED] =
+        "Failed to determine system page size.\n"
+        "This is a critical system error that should never happen.\n"
+        "Possible causes:\n"
+        "  - sysconf(_SC_PAGESIZE) failed on POSIX\n"
+        "  - GetSystemInfo failed on Windows\n"
+        "Check: System may be in an unstable state.",
+
+    [MEMORY_ERR_PLATFORM_ERROR] =
+        "Platform-specific error occurred.\n"
+        "The underlying OS call failed for an unmapped reason.\n"
+        "Check: Use platform debugging tools (strace, Process Monitor).",
+};
+
+const char *memory_error_str_detailed(MemoryError error) {
+  if (error >= 0 && error < MEMORY_ERR_COUNT) {
+    return g_memory_error_details[error];
+  }
+  return "Unknown error code. This indicates a bug in error handling.";
+}
+// #endif // DE100_INTERNAL && DE100_SLOW
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PLATFORM HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
+
 #if defined(_WIN32)
-/**
- * Convert Windows error code to our memory error code.
- */
-file_scoped_fn PlatformMemoryError
-win32_error_to_memory_error(DWORD error_code) {
-  switch (error_code) {
+
+file_scoped_fn inline MemoryError win32_error_to_memory_error(DWORD err) {
+  switch (err) {
   case ERROR_NOT_ENOUGH_MEMORY:
   case ERROR_OUTOFMEMORY:
   case ERROR_COMMITMENT_LIMIT:
-    return PLATFORM_MEMORY_ERROR_OUT_OF_MEMORY;
+    return MEMORY_ERR_OUT_OF_MEMORY;
 
   case ERROR_INVALID_ADDRESS:
   case ERROR_INVALID_PARAMETER:
-    return PLATFORM_MEMORY_ERROR_INVALID_ADDRESS;
+    return MEMORY_ERR_INVALID_ADDRESS;
 
   case ERROR_ACCESS_DENIED:
-    return PLATFORM_MEMORY_ERROR_PERMISSION_DENIED;
+    return MEMORY_ERR_PERMISSION_DENIED;
 
   case ERROR_ALREADY_EXISTS:
-    return PLATFORM_MEMORY_ERROR_ADDRESS_IN_USE;
+    return MEMORY_ERR_ADDRESS_IN_USE;
 
   default:
-    return PLATFORM_MEMORY_ERROR_UNKNOWN;
+    return MEMORY_ERR_PLATFORM_ERROR;
   }
 }
 
-/**
- * Get Windows error message.
- */
-file_scoped_fn void win32_get_error_message(char *buffer, size_t buffer_size,
-                                            DWORD error_code) {
-  FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-                 NULL, error_code, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-                 buffer, (DWORD)buffer_size, NULL);
-
-  // Remove trailing newline
-  size_t len = strlen(buffer);
-  if (len > 0 && buffer[len - 1] == '\n') {
-    buffer[len - 1] = '\0';
-    if (len > 1 && buffer[len - 2] == '\r') {
-      buffer[len - 2] = '\0';
-    }
-  }
-}
-
-/**
- * Convert memory flags to Windows protection flags.
- */
-file_scoped_fn DWORD win32_protection_from_flags(PlatformMemoryFlags flags) {
-  int r = (flags & PLATFORM_MEMORY_READ) != 0;
-  int w = (flags & PLATFORM_MEMORY_WRITE) != 0;
-  int x = (flags & PLATFORM_MEMORY_EXECUTE) != 0;
+file_scoped_fn inline DWORD win32_protection_flags(MemoryFlags flags) {
+  bool r = (flags & MEMORY_FLAG_READ) != 0;
+  bool w = (flags & MEMORY_FLAG_WRITE) != 0;
+  bool x = (flags & MEMORY_FLAG_EXECUTE) != 0;
 
   if (x) {
     if (w)
@@ -100,519 +218,432 @@ file_scoped_fn DWORD win32_protection_from_flags(PlatformMemoryFlags flags) {
     if (r)
       return PAGE_READONLY;
   }
-
   return PAGE_NOACCESS;
 }
 
-#elif defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) ||      \
-    defined(__unix__) || defined(__MACH__)
-/**
- * Convert POSIX errno to our memory error code.
- */
-file_scoped_fn PlatformMemoryError errno_to_memory_error(int err) {
+#elif defined(DE100_POSIX)
+
+file_scoped_fn inline MemoryError posix_error_to_memory_error(int err) {
   switch (err) {
   case ENOMEM:
-    return PLATFORM_MEMORY_ERROR_OUT_OF_MEMORY;
+    return MEMORY_ERR_OUT_OF_MEMORY;
 
   case EINVAL:
-    return PLATFORM_MEMORY_ERROR_INVALID_ADDRESS;
+    return MEMORY_ERR_INVALID_ADDRESS;
 
   case EACCES:
   case EPERM:
-    return PLATFORM_MEMORY_ERROR_PERMISSION_DENIED;
+    return MEMORY_ERR_PERMISSION_DENIED;
 
   case EEXIST:
-    return PLATFORM_MEMORY_ERROR_ADDRESS_IN_USE;
+    return MEMORY_ERR_ADDRESS_IN_USE;
 
   default:
-    return PLATFORM_MEMORY_ERROR_UNKNOWN;
+    return MEMORY_ERR_PLATFORM_ERROR;
   }
 }
 
-/**
- * Convert memory flags to POSIX protection flags.
- */
-file_scoped_fn int posix_protection_from_flags(PlatformMemoryFlags flags) {
+file_scoped_fn inline int posix_protection_flags(MemoryFlags flags) {
   int prot = PROT_NONE;
-
-  if (flags & PLATFORM_MEMORY_READ)
+  if (flags & MEMORY_FLAG_READ)
     prot |= PROT_READ;
-  if (flags & PLATFORM_MEMORY_WRITE)
+  if (flags & MEMORY_FLAG_WRITE)
     prot |= PROT_WRITE;
-  if (flags & PLATFORM_MEMORY_EXECUTE)
+  if (flags & MEMORY_FLAG_EXECUTE)
     prot |= PROT_EXEC;
-
   return prot;
 }
+
 #endif
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ALLOCATE MEMORY
+// ALLOCATION
 // ═══════════════════════════════════════════════════════════════════════════
 
-PlatformMemoryBlock platform_allocate_memory(void *base_hint, size_t size,
-                                             PlatformMemoryFlags flags) {
-  PlatformMemoryBlock result = {0};
+MemoryBlock memory_alloc(void *base_hint, size_t size, MemoryFlags flags) {
+  MemoryBlock result = {0};
 
   // ─────────────────────────────────────────────────────────────────────
-  // Validate input
+  // Validate size
   // ─────────────────────────────────────────────────────────────────────
 
   if (size == 0) {
-    result.is_valid = false;
-    result.error_code = PLATFORM_MEMORY_ERROR_INVALID_SIZE;
-    snprintf(result.error_message, sizeof(result.error_message),
-             "Invalid size: 0 bytes requested");
+    result.error_code = MEMORY_ERR_INVALID_SIZE;
     return result;
   }
 
-  size_t page_size = platform_get_page_size();
+  size_t page_size = memory_page_size();
   if (page_size == 0) {
-    result.is_valid = false;
-    result.error_code = PLATFORM_MEMORY_ERROR_UNKNOWN;
-    snprintf(result.error_message, sizeof(result.error_message),
-             "Failed to get system page size");
+    result.error_code = MEMORY_ERR_PAGE_SIZE_FAILED;
     return result;
   }
 
   // ─────────────────────────────────────────────────────────────────────
-  // Calculate sizes
+  // Calculate sizes (with overflow check)
   // ─────────────────────────────────────────────────────────────────────
 
-  // Align size to page boundary
+  // Align to page boundary: (size + page_size - 1) & ~(page_size - 1)
   size_t aligned_size = (size + page_size - 1) & ~(page_size - 1);
 
-  // Total size includes guard pages (one before, one after)
-  size_t total_size = aligned_size + 2 * page_size;
+  // Total = aligned + 2 guard pages
+  size_t total_size = aligned_size + (2 * page_size);
 
-  // Check for overflow
+  // Overflow check
   if (total_size < aligned_size) {
-    result.is_valid = false;
-    result.error_code = PLATFORM_MEMORY_ERROR_INVALID_SIZE;
-    snprintf(result.error_message, sizeof(result.error_message),
-             "Size too large: would overflow (requested: %zu bytes)", size);
+    result.error_code = MEMORY_ERR_SIZE_OVERFLOW;
     return result;
   }
 
 #if defined(_WIN32)
   // ═════════════════════════════════════════════════════════════════════
-  // WINDOWS IMPLEMENTATION
+  // WINDOWS
   // ═════════════════════════════════════════════════════════════════════
 
-  DWORD protect = win32_protection_from_flags(flags);
-
-  void *request_base = NULL;
-  if (flags & (PLATFORM_MEMORY_BASE_FIXED | PLATFORM_MEMORY_BASE_HINT)) {
-    request_base = base_hint;
+  void *request_addr = NULL;
+  if (flags & (MEMORY_FLAG_BASE_FIXED | MEMORY_FLAG_BASE_HINT)) {
+    request_addr = base_hint;
   }
 
-  // ─────────────────────────────────────────────────────────────────────
-  // Reserve address space
-  // ─────────────────────────────────────────────────────────────────────
-
+  // Reserve entire range (including guard pages) with no access
   void *reserved =
-      VirtualAlloc(request_base, total_size, MEM_RESERVE, PAGE_NOACCESS);
+      VirtualAlloc(request_addr, total_size, MEM_RESERVE, PAGE_NOACCESS);
 
-  if (!reserved && (flags & PLATFORM_MEMORY_BASE_HINT)) {
-    // If hint failed, try without specific address
+  // If hint failed, try without specific address
+  if (!reserved && (flags & MEMORY_FLAG_BASE_HINT)) {
     reserved = VirtualAlloc(NULL, total_size, MEM_RESERVE, PAGE_NOACCESS);
   }
 
   if (!reserved) {
-    DWORD error_code = GetLastError();
-    result.is_valid = false;
-    result.error_code = win32_error_to_memory_error(error_code);
-
-    char sys_msg[256];
-    win32_get_error_message(sys_msg, sizeof(sys_msg), error_code);
-    snprintf(result.error_message, sizeof(result.error_message),
-             "VirtualAlloc(RESERVE) failed for %zu bytes: %s", total_size,
-             sys_msg);
+    result.error = win32_error_to_memory_error(GetLastError());
     return result;
   }
 
-  // ─────────────────────────────────────────────────────────────────────
   // Commit usable region (skip first guard page)
-  // ─────────────────────────────────────────────────────────────────────
+  void *usable = (uint8 *)reserved + page_size;
+  DWORD protect = win32_protection_flags(flags);
 
-  void *committed = VirtualAlloc((uint8 *)reserved + page_size, aligned_size,
-                                 MEM_COMMIT, protect);
-
+  void *committed = VirtualAlloc(usable, aligned_size, MEM_COMMIT, protect);
   if (!committed) {
-    DWORD error_code = GetLastError();
+    result.error = win32_error_to_memory_error(GetLastError());
     VirtualFree(reserved, 0, MEM_RELEASE);
-
-    result.is_valid = false;
-    result.error_code = win32_error_to_memory_error(error_code);
-
-    char sys_msg[256];
-    win32_get_error_message(sys_msg, sizeof(sys_msg), error_code);
-    snprintf(result.error_message, sizeof(result.error_message),
-             "VirtualAlloc(COMMIT) failed for %zu bytes: %s", aligned_size,
-             sys_msg);
     return result;
   }
 
-  // ─────────────────────────────────────────────────────────────────────
-  // Zero memory if requested
-  // ─────────────────────────────────────────────────────────────────────
-
-  if (flags & PLATFORM_MEMORY_ZEROED) {
+  // Zero if requested (VirtualAlloc already zeros, but be explicit)
+  if (flags & MEMORY_FLAG_ZEROED) {
     ZeroMemory(committed, aligned_size);
   }
 
-  // ─────────────────────────────────────────────────────────────────────
-  // Success
-  // ─────────────────────────────────────────────────────────────────────
-
   result.base = committed;
-  result.size = aligned_size;
-  result.total_size = total_size;
-  result.flags = flags;
-  result.is_valid = true;
-  result.error_code = PLATFORM_MEMORY_SUCCESS;
-  snprintf(result.error_message, sizeof(result.error_message),
-           "Successfully allocated %zu bytes (%zu total with guards) at %p",
-           aligned_size, total_size, committed);
 
-#elif defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) ||      \
-    defined(__unix__) || defined(__MACH__)
+#elif defined(DE100_POSIX)
   // ═════════════════════════════════════════════════════════════════════
-  // POSIX IMPLEMENTATION (Linux, macOS, BSD, etc.)
+  // POSIX (Linux, macOS, BSD)
   // ═════════════════════════════════════════════════════════════════════
 
   int mmap_flags = MAP_PRIVATE | MAP_ANONYMOUS;
-  if (flags & PLATFORM_MEMORY_BASE_FIXED) {
+  if (flags & MEMORY_FLAG_BASE_FIXED) {
     mmap_flags |= MAP_FIXED;
   }
 
-  // ─────────────────────────────────────────────────────────────────────
-  // Reserve address space with no access (guard pages included)
-  // ─────────────────────────────────────────────────────────────────────
-
+  // Reserve entire range with no access (guard pages)
   void *reserved = mmap(base_hint, total_size, PROT_NONE, mmap_flags, -1, 0);
 
   if (reserved == MAP_FAILED) {
-    result.is_valid = false;
-    result.error_code = errno_to_memory_error(errno);
-    snprintf(result.error_message, sizeof(result.error_message),
-             "mmap failed for %zu bytes: %s", total_size, strerror(errno));
+    result.error_code = posix_error_to_memory_error(errno);
     return result;
   }
 
-  // ─────────────────────────────────────────────────────────────────────
   // Set protection on usable region (skip first guard page)
-  // ─────────────────────────────────────────────────────────────────────
+  void *usable = (uint8 *)reserved + page_size;
+  int prot = posix_protection_flags(flags);
 
-  int prot = posix_protection_from_flags(flags);
-  if (mprotect((uint8 *)reserved + page_size, aligned_size, prot) != 0) {
-    int saved_errno = errno;
+  if (mprotect(usable, aligned_size, prot) != 0) {
+    result.error_code = posix_error_to_memory_error(errno);
     munmap(reserved, total_size);
-
-    result.is_valid = false;
-    result.error_code = errno_to_memory_error(saved_errno);
-    snprintf(result.error_message, sizeof(result.error_message),
-             "mprotect failed for %zu bytes: %s", aligned_size,
-             strerror(saved_errno));
     return result;
   }
 
-  // ─────────────────────────────────────────────────────────────────────
-  // Verify zero-initialization (debug builds only)
-  // ─────────────────────────────────────────────────────────────────────
-  // On Linux/POSIX, mmap with MAP_ANONYMOUS guarantees zero-initialized pages
+  // Note: mmap with MAP_ANONYMOUS guarantees zero-initialized pages
+  // No explicit zeroing needed
 
-#if defined(DE100_SLOW) && DE100_SLOW
-  if (flags & PLATFORM_MEMORY_ZEROED) {
-    uint8 *base = (uint8 *)reserved + page_size;
-    size_t offsets[] = {0, aligned_size / 4, aligned_size / 2,
-                        3 * aligned_size / 4, aligned_size - 1};
-
-    for (size_t i = 0; i < sizeof(offsets) / sizeof(offsets[0]); ++i) {
-      if (base[offsets[i]] != 0) {
-        munmap(reserved, total_size);
-        result.is_valid = false;
-        result.error_code = PLATFORM_MEMORY_ERROR_UNKNOWN;
-        snprintf(result.error_message, sizeof(result.error_message),
-                 "Memory not zero-initialized at offset %zu", offsets[i]);
-        return result;
-      }
+#if DE100_INTERNAL && DE100_SLOW
+  // Verify zero-initialization in dev builds
+  if (flags & MEMORY_FLAG_ZEROED) {
+    uint8 *p = (uint8 *)usable;
+    size_t check_offsets[] = {0, aligned_size / 4, aligned_size / 2,
+                              3 * aligned_size / 4, aligned_size - 1};
+    for (size_t i = 0; i < ArraySize(check_offsets); i++) {
+      DEV_ASSERT_MSG(p[check_offsets[i]] == 0,
+                     "mmap returned non-zero memory!");
     }
   }
 #endif
 
+  result.base = usable;
+
+#endif
+
   // ─────────────────────────────────────────────────────────────────────
   // Success
   // ─────────────────────────────────────────────────────────────────────
 
-  result.base = (uint8 *)reserved + page_size;
   result.size = aligned_size;
   result.total_size = total_size;
   result.flags = flags;
+  result.error_code = MEMORY_OK;
   result.is_valid = true;
-  result.error_code = PLATFORM_MEMORY_SUCCESS;
-  snprintf(result.error_message, sizeof(result.error_message),
-           "Successfully allocated %zu bytes (%zu total with guards) at %p",
-           aligned_size, total_size, result.base);
-#endif
 
   return result;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// FREE MEMORY
+// FREE
 // ═══════════════════════════════════════════════════════════════════════════
 
-PlatformMemoryError platform_free_memory(PlatformMemoryBlock *block) {
+MemoryError memory_free(MemoryBlock *block) {
   // ─────────────────────────────────────────────────────────────────────
-  // Validate input
+  // Validate
   // ─────────────────────────────────────────────────────────────────────
 
   if (!block) {
-    return PLATFORM_MEMORY_ERROR_INVALID_BLOCK;
+    return MEMORY_ERR_NULL_BLOCK;
   }
 
-  // Already freed or never allocated - idempotent operation
+  // Idempotent: already freed is OK
   if (!block->base || !block->is_valid) {
     block->base = NULL;
     block->is_valid = false;
-    block->error_code = PLATFORM_MEMORY_SUCCESS;
-    snprintf(block->error_message, sizeof(block->error_message),
-             "Block already freed or never allocated");
-    return PLATFORM_MEMORY_SUCCESS;
+    block->error_code = MEMORY_OK;
+#if DE100_INTERNAL && DE100_SLOW
+    printf("memory_free: Block already freed or invalid\n");
+#endif
+    return MEMORY_OK;
   }
 
   // ─────────────────────────────────────────────────────────────────────
-  // Calculate reserved base address (before first guard page)
+  // Calculate original reserved base
   // ─────────────────────────────────────────────────────────────────────
 
-  size_t page_size = platform_get_page_size();
+  size_t page_size = memory_page_size();
   if (page_size == 0) {
-    block->error_code = PLATFORM_MEMORY_ERROR_UNKNOWN;
-    snprintf(block->error_message, sizeof(block->error_message),
-             "Failed to get system page size during free");
-    return PLATFORM_MEMORY_ERROR_UNKNOWN;
+    block->error_code = MEMORY_ERR_PAGE_SIZE_FAILED;
+    return MEMORY_ERR_PAGE_SIZE_FAILED;
   }
 
-  uint8 *reserved_base = (uint8 *)block->base - page_size;
+  void *reserved_base = (uint8 *)block->base - page_size;
 
 #if defined(_WIN32)
-  // ═════════════════════════════════════════════════════════════════════
-  // WINDOWS IMPLEMENTATION
-  // ═════════════════════════════════════════════════════════════════════
-
   if (!VirtualFree(reserved_base, 0, MEM_RELEASE)) {
-    DWORD error_code = GetLastError();
-    block->error_code = win32_error_to_memory_error(error_code);
-
-    char sys_msg[256];
-    win32_get_error_message(sys_msg, sizeof(sys_msg), error_code);
-    snprintf(block->error_message, sizeof(block->error_message),
-             "VirtualFree failed for %zu bytes at %p: %s", block->total_size,
-             (void *)reserved_base, sys_msg);
-
-    return block->error_code;
+    block->error = win32_error_to_memory_error(GetLastError());
+    return block->error;
   }
-
-#elif defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) ||      \
-    defined(__unix__) || defined(__MACH__)
-  // ═════════════════════════════════════════════════════════════════════
-  // POSIX IMPLEMENTATION
-  // ═════════════════════════════════════════════════════════════════════
-
+#elif defined(DE100_POSIX)
   if (munmap(reserved_base, block->total_size) != 0) {
-    block->error_code = errno_to_memory_error(errno);
-    snprintf(block->error_message, sizeof(block->error_message),
-             "munmap failed for %zu bytes at %p: %s", block->total_size,
-             (void *)reserved_base, strerror(errno));
-
+    block->error_code = posix_error_to_memory_error(errno);
     return block->error_code;
   }
 #endif
 
   // ─────────────────────────────────────────────────────────────────────
-  // Mark block as freed
+  // Clear block
   // ─────────────────────────────────────────────────────────────────────
 
   block->base = NULL;
+  block->size = 0;
+  block->total_size = 0;
   block->is_valid = false;
-  block->error_code = PLATFORM_MEMORY_SUCCESS;
-  snprintf(block->error_message, sizeof(block->error_message),
-           "Successfully freed %zu bytes", block->total_size);
+  block->error_code = MEMORY_OK;
 
-  return PLATFORM_MEMORY_SUCCESS;
+  return MEMORY_OK;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// UTILITY FUNCTIONS
+// UTILITIES
 // ═══════════════════════════════════════════════════════════════════════════
 
-const char *platform_memory_strerror(PlatformMemoryError error) {
-  switch (error) {
-  case PLATFORM_MEMORY_SUCCESS:
-    return "Success";
-  case PLATFORM_MEMORY_ERROR_OUT_OF_MEMORY:
-    return "Out of memory or address space exhausted";
-  case PLATFORM_MEMORY_ERROR_INVALID_SIZE:
-    return "Invalid size parameter";
-  case PLATFORM_MEMORY_ERROR_INVALID_ADDRESS:
-    return "Invalid address or alignment";
-  case PLATFORM_MEMORY_ERROR_PERMISSION_DENIED:
-    return "Permission denied or insufficient privileges";
-  case PLATFORM_MEMORY_ERROR_ADDRESS_IN_USE:
-    return "Address already in use";
-  case PLATFORM_MEMORY_ERROR_ALIGNMENT_FAILED:
-    return "Memory alignment failed";
-  case PLATFORM_MEMORY_ERROR_PROTECTION_FAILED:
-    return "Failed to set memory protection";
-  case PLATFORM_MEMORY_ERROR_INVALID_BLOCK:
-    return "Invalid memory block";
-  case PLATFORM_MEMORY_ERROR_ALREADY_FREED:
-    return "Memory already freed";
-  case PLATFORM_MEMORY_ERROR_UNKNOWN:
-  default:
-    return "Unknown error";
-  }
-}
-
-bool platform_memory_is_valid(PlatformMemoryBlock block) {
-  return block.is_valid && block.base != NULL &&
-         block.error_code == PLATFORM_MEMORY_SUCCESS;
+bool memory_is_valid(MemoryBlock block) {
+  return block.is_valid && block.base != NULL && block.error_code == MEMORY_OK;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MEMORY OPERATIONS
 // ═══════════════════════════════════════════════════════════════════════════
 
-/**
- * @brief Fill memory with a constant byte value.
- *
- * @param dest Destination memory address
- * @param value Byte value to fill (converted to unsigned char)
- * @param size Number of bytes to fill
- * @return Pointer to dest, or NULL if dest is NULL
- *
- * @note This is a secure implementation that won't be optimized away
- *       by the compiler, making it suitable for clearing sensitive data.
- */
-void *platform_memset(void *dest, int value, size_t size) {
-  if (!dest || size == 0) {
+void *mem_set(void *dest, int value, size_t size) {
+  if (!dest || size == 0)
     return dest;
-  }
-
-#if defined(_WIN32)
-  // Windows provides SecureZeroMemory for security-critical zeroing
-  // For general memset, use FillMemory or standard approach
-  if (value == 0) {
-    // Use volatile to prevent compiler optimization
-    volatile unsigned char *p = (volatile unsigned char *)dest;
-    while (size--) {
-      *p++ = 0;
-    }
-  } else {
-    FillMemory(dest, size, (BYTE)value);
-  }
-#elif defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) ||      \
-    defined(__unix__) || defined(__MACH__)
-  // POSIX: Use explicit_bzero for zeroing (glibc 2.25+, BSD)
-  // or memset_s (C11 Annex K) where available
-  if (value == 0) {
-#if defined(__GLIBC__) && defined(_DEFAULT_SOURCE) &&                          \
-    (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 25))
-    explicit_bzero(dest, size);
-#elif defined(__APPLE__) || defined(__FreeBSD__)
-    memset_s(dest, size, 0, size);
-#else
-    // Fallback: volatile pointer to prevent optimization
-    volatile unsigned char *p = (volatile unsigned char *)dest;
-    while (size--) {
-      *p++ = 0;
-    }
-#endif
-  } else {
-    memset(dest, value, size);
-  }
-#else
-  // Generic fallback
-  memset(dest, value, size);
-#endif
-
-  return dest;
+  return memset(dest, value, size);
 }
 
-/**
- * @brief Securely zero memory (guaranteed not to be optimized away).
- *
- * @param dest Destination memory address
- * @param size Number of bytes to zero
- * @return Pointer to dest, or NULL if dest is NULL
- */
-void *platform_secure_zero(void *dest, size_t size) {
-  if (!dest || size == 0) {
+void *mem_copy(void *dest, const void *src, size_t size) {
+  if (!dest || !src || size == 0)
     return dest;
-  }
+  return memcpy(dest, src, size);
+}
+
+void *mem_move(void *dest, const void *src, size_t size) {
+  if (!dest || !src || size == 0)
+    return dest;
+  return memmove(dest, src, size);
+}
+
+void *mem_zero_secure(void *dest, size_t size) {
+  if (!dest || size == 0)
+    return dest;
 
 #if defined(_WIN32)
   SecureZeroMemory(dest, size);
 #elif defined(__APPLE__) || defined(__FreeBSD__)
   memset_s(dest, size, 0, size);
-#elif defined(__GLIBC__) && defined(_DEFAULT_SOURCE) &&                        \
+#elif defined(_GNU_SOURCE) && defined(__GLIBC__) &&                            \
     (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 25))
   explicit_bzero(dest, size);
 #else
-  // Volatile pointer prevents compiler from optimizing this away
-  volatile unsigned char *p = (volatile unsigned char *)dest;
-  while (size--) {
+  volatile uint8_t *p = (volatile uint8_t *)dest;
+  while (size--)
     *p++ = 0;
-  }
-  // Memory barrier to ensure writes complete
-  __asm__ __volatile__("" : : "r"(dest) : "memory");
 #endif
 
   return dest;
 }
 
-/**
- * @brief Copy memory from source to destination.
- *
- * @param dest Destination memory address
- * @param src Source memory address
- * @param size Number of bytes to copy
- * @return Pointer to dest, or NULL on error
- *
- * @note Behavior is undefined if regions overlap. Use platform_memmove for
- *       overlapping regions.
- */
-void *platform_memcpy(void *dest, const void *src, size_t size) {
-  if (!dest || !src || size == 0) {
-    return dest;
-  }
+// TODO: Should the follwoing be implemented?
+// //
+// ═══════════════════════════════════════════════════════════════════════════
+// // MEMORY OPERATIONS
+// //
+// ═══════════════════════════════════════════════════════════════════════════
 
-#if defined(_WIN32)
-  CopyMemory(dest, src, size);
-  return dest;
-#else
-  return memcpy(dest, src, size);
-#endif
-}
+// /**
+//  * @brief Fill memory with a constant byte value.
+//  *
+//  * @param dest Destination memory address
+//  * @param value Byte value to fill (converted to unsigned char)
+//  * @param size Number of bytes to fill
+//  * @return Pointer to dest, or NULL if dest is NULL
+//  *
+//  * @note This is a secure implementation that won't be optimized away
+//  *       by the compiler, making it suitable for clearing sensitive data.
+//  */
+// void *platform_memset(void *dest, int value, size_t size) {
+//   if (!dest || size == 0) {
+//     return dest;
+//   }
 
-/**
- * @brief Copy memory, handling overlapping regions correctly.
- *
- * @param dest Destination memory address
- * @param src Source memory address
- * @param size Number of bytes to copy
- * @return Pointer to dest, or NULL on error
- */
-void *platform_memmove(void *dest, const void *src, size_t size) {
-  if (!dest || !src || size == 0) {
-    return dest;
-  }
+// #if defined(_WIN32)
+//   // Windows provides SecureZeroMemory for security-critical zeroing
+//   // For general memset, use FillMemory or standard approach
+//   if (value == 0) {
+//     // Use volatile to prevent compiler optimization
+//     volatile unsigned char *p = (volatile unsigned char *)dest;
+//     while (size--) {
+//       *p++ = 0;
+//     }
+//   } else {
+//     FillMemory(dest, size, (BYTE)value);
+//   }
+// #elif defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) || \
+//     defined(__unix__) || defined(__MACH__)
+//   // POSIX: Use explicit_bzero for zeroing (glibc 2.25+, BSD)
+//   // or memset_s (C11 Annex K) where available
+//   if (value == 0) {
+// #if defined(__GLIBC__) && defined(_DEFAULT_SOURCE) && \
+//     (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 25))
+//     explicit_bzero(dest, size);
+// #elif defined(__APPLE__) || defined(__FreeBSD__)
+//     memset_s(dest, size, 0, size);
+// #else
+//     // Fallback: volatile pointer to prevent optimization
+//     volatile unsigned char *p = (volatile unsigned char *)dest;
+//     while (size--) {
+//       *p++ = 0;
+//     }
+// #endif
+//   } else {
+//     memset(dest, value, size);
+//   }
+// #else
+//   // Generic fallback
+//   memset(dest, value, size);
+// #endif
 
-#if defined(_WIN32)
-  MoveMemory(dest, src, size);
-  return dest;
-#else
-  return memmove(dest, src, size);
-#endif
-}
+//   return dest;
+// }
+
+// /**
+//  * @brief Securely zero memory (guaranteed not to be optimized away).
+//  *
+//  * @param dest Destination memory address
+//  * @param size Number of bytes to zero
+//  * @return Pointer to dest, or NULL if dest is NULL
+//  */
+// void *platform_secure_zero(void *dest, size_t size) {
+//   if (!dest || size == 0) {
+//     return dest;
+//   }
+
+// #if defined(_WIN32)
+//   SecureZeroMemory(dest, size);
+// #elif defined(__APPLE__) || defined(__FreeBSD__)
+//   memset_s(dest, size, 0, size);
+// #elif defined(__GLIBC__) && defined(_DEFAULT_SOURCE) && \
+//     (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 25))
+//   explicit_bzero(dest, size);
+// #else
+//   // Volatile pointer prevents compiler from optimizing this away
+//   volatile unsigned char *p = (volatile unsigned char *)dest;
+//   while (size--) {
+//     *p++ = 0;
+//   }
+//   // Memory barrier to ensure writes complete
+//   __asm__ __volatile__("" : : "r"(dest) : "memory");
+// #endif
+
+//   return dest;
+// }
+
+// /**
+//  * @brief Copy memory from source to destination.
+//  *
+//  * @param dest Destination memory address
+//  * @param src Source memory address
+//  * @param size Number of bytes to copy
+//  * @return Pointer to dest, or NULL on error
+//  *
+//  * @note Behavior is undefined if regions overlap. Use platform_memmove for
+//  *       overlapping regions.
+//  */
+// void *platform_memcpy(void *dest, const void *src, size_t size) {
+//   if (!dest || !src || size == 0) {
+//     return dest;
+//   }
+
+// #if defined(_WIN32)
+//   CopyMemory(dest, src, size);
+//   return dest;
+// #else
+//   return memcpy(dest, src, size);
+// #endif
+// }
+
+// /**
+//  * @brief Copy memory, handling overlapping regions correctly.
+//  *
+//  * @param dest Destination memory address
+//  * @param src Source memory address
+//  * @param size Number of bytes to copy
+//  * @return Pointer to dest, or NULL on error
+//  */
+// void *platform_memmove(void *dest, const void *src, size_t size) {
+//   if (!dest || !src || size == 0) {
+//     return dest;
+//   }
+
+// #if defined(_WIN32)
+//   MoveMemory(dest, src, size);
+//   return dest;
+// #else
+//   return memmove(dest, src, size);
+// #endif
+// }

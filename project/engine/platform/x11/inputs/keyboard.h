@@ -3,7 +3,7 @@
 
 #include "../../../game/input.h"
 #include "../../../game/audio.h"
-#include "../../_common/audio.h"
+#include "../../_common/config.h"
 #include <X11/Xlib.h>
 
 void handleEventKeyPress(XEvent *event, GameInput *new_game_input,

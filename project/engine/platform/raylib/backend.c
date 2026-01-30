@@ -6,7 +6,6 @@
 #include "../../game/game-loader.h"
 #include "../../game/input.h"
 #include "../../game/memory.h"
-#include "../_common/audio.h"
 #include "audio.h"
 #include "inputs/joystick.h"
 #include "inputs/keyboard.h"
@@ -32,9 +31,9 @@ file_scoped_global_var BackBufferMeta g_game_buffer_meta = {0};
 // 🖼️ BACKBUFFER MANAGEMENT
 // ═══════════════════════════════════════════════════════════════════════════
 
-file_scoped_fn void resize_back_buffer(GameBackBuffer *backbuffer,
-                                       BackBufferMeta *backbuffer_meta,
-                                       int width, int height) {
+file_scoped_fn inline void resize_back_buffer(GameBackBuffer *backbuffer,
+                                              BackBufferMeta *backbuffer_meta,
+                                              int width, int height) {
   printf("Resizing backbuffer → %dx%d\n", width, height);
 
   if (width <= 0 || height <= 0) {
@@ -51,7 +50,7 @@ file_scoped_fn void resize_back_buffer(GameBackBuffer *backbuffer,
 
   // Free old memory
   if (backbuffer->memory.base && old_width > 0 && old_height > 0) {
-    platform_free_memory(&backbuffer->memory);
+    memory_free(&backbuffer->memory);
   }
 
   // Free old texture
@@ -62,19 +61,15 @@ file_scoped_fn void resize_back_buffer(GameBackBuffer *backbuffer,
 
   // Allocate new memory
   int buffer_size = width * height * backbuffer->bytes_per_pixel;
-  PlatformMemoryBlock backbuffer_memory = platform_allocate_memory(
-      NULL, buffer_size,
-      PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE | PLATFORM_MEMORY_ZEROED);
+  MemoryBlock backbuffer_memory =
+      memory_alloc(NULL, buffer_size,
+                   MEMORY_FLAG_READ | MEMORY_FLAG_WRITE | MEMORY_FLAG_ZEROED);
 
-  if (!platform_memory_is_valid(backbuffer_memory)) {
+  if (!memory_is_valid(backbuffer_memory)) {
     fprintf(stderr, "❌ Failed to allocate backbuffer: %s\n",
-            backbuffer_memory.error_message);
-    fprintf(stderr, "   Error: %s\n", backbuffer_memory.error_message);
-    fprintf(stderr, "   Code: %s\n",
-            platform_memory_strerror(backbuffer_memory.error_code));
+            memory_error_str(backbuffer_memory.error_code));
     return;
   }
-
   backbuffer->memory = backbuffer_memory;
 
   // Create Raylib texture
@@ -90,7 +85,7 @@ file_scoped_fn void resize_back_buffer(GameBackBuffer *backbuffer,
   printf("✅ Raylib texture created successfully\n");
 }
 
-file_scoped_fn void
+file_scoped_fn inline void
 update_window_from_backbuffer(GameBackBuffer *backbuffer,
                               BackBufferMeta *backbuffer_meta) {
 
@@ -124,31 +119,29 @@ int platform_main() {
   uint64 permanent_storage_size = MEGABYTES(64);
   uint64 transient_storage_size = GIGABYTES(1);
 
-  PlatformMemoryBlock permanent_storage = platform_allocate_memory(
-      base_address, permanent_storage_size,
-      PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE | PLATFORM_MEMORY_ZEROED);
+  MemoryBlock permanent_storage =
+      memory_alloc(base_address, permanent_storage_size,
+                   MEMORY_FLAG_READ | MEMORY_FLAG_WRITE | MEMORY_FLAG_ZEROED);
 
-  if (!platform_memory_is_valid(permanent_storage)) {
+  if (!memory_is_valid(permanent_storage)) {
     fprintf(stderr, "❌ ERROR: Could not allocate permanent storage\n");
-    platform_free_memory(&permanent_storage);
-    fprintf(stderr, "   Error: %s\n", permanent_storage.error_message);
-    fprintf(stderr, "   Code: %s\n",
-            platform_memory_strerror(permanent_storage.error_code));
+    memory_free(&permanent_storage);
+    fprintf(stderr, "   Error: %s\n",
+            memory_error_str(permanent_storage.error_code));
     return 1;
   }
 
   void *transient_base =
       (uint8 *)permanent_storage.base + permanent_storage.size;
-  PlatformMemoryBlock transient_storage = platform_allocate_memory(
-      transient_base, transient_storage_size,
-      PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE | PLATFORM_MEMORY_ZEROED);
+  MemoryBlock transient_storage =
+      memory_alloc(transient_base, transient_storage_size,
+                   MEMORY_FLAG_READ | MEMORY_FLAG_WRITE | MEMORY_FLAG_ZEROED);
 
-  if (!platform_memory_is_valid(transient_storage)) {
+  if (!memory_is_valid(transient_storage)) {
     fprintf(stderr, "❌ ERROR: Could not allocate transient storage\n");
-    platform_free_memory(&permanent_storage);
-    fprintf(stderr, "   Error: %s\n", transient_storage.error_message);
-    fprintf(stderr, "   Code: %s\n",
-            platform_memory_strerror(transient_storage.error_code));
+    memory_free(&permanent_storage);
+    fprintf(stderr, "   Error: %s\n",
+            memory_error_str(transient_storage.error_code));
     return 1;
   }
 
@@ -341,13 +334,13 @@ int platform_main() {
   }
 
   if (game_buffer.memory.base) {
-    platform_free_memory(&game_buffer.memory);
+    memory_free(&game_buffer.memory);
   }
 
   raylib_shutdown_audio(&game_audio_output, &platform_audio_config);
 
-  platform_free_memory(&transient_storage);
-  platform_free_memory(&permanent_storage);
+  memory_free(&transient_storage);
+  memory_free(&permanent_storage);
 
   CloseWindow();
   printf("✅ Cleanup complete\n");

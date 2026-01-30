@@ -1,4 +1,5 @@
 #include "adaptive-fps.h"
+#include "config.h"
 
 void adaptive_fps_init(AdaptiveFPS *adaptive) {
   adaptive->frames_sampled = 0;

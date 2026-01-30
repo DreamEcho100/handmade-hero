@@ -1,6 +1,7 @@
 #ifndef DE100_PATH_H
 #define DE100_PATH_H
 
+#include "base.h"
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -8,48 +9,48 @@
 // PATH UTILITIES
 // ═══════════════════════════════════════════════════════════════════════════
 //
-// These functions provide cross-platform path handling, equivalent to
-// Casey's Day 22 path resolution code.
+// Cross-platform path handling, equivalent to Casey's Day 22 path resolution.
 //
 // Casey's Windows approach:
 //   1. GetModuleFileNameA() to get EXE path
 //   2. Scan for last backslash to find directory
 //   3. CatStrings() to join directory + filename
 //
-// Our Linux approach:
-//   1. readlink("/proc/self/exe") to get EXE path
-//   2. Scan for last forward slash to find directory
-//   3. de100_path_join() to join directory + filename
+// Our approach:
+//   1. Platform-specific executable path retrieval
+//   2. Scan for last separator to find directory
+//   3. path_join() to combine directory + filename
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
 // Maximum path length we support
-#define DE100_PATH_MAX 4096
+#define PATH_MAX_LENGTH 4096
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ERROR CODES
 // ═══════════════════════════════════════════════════════════════════════════
 
-enum de100_path_error_code {
+typedef enum {
     PATH_SUCCESS = 0,
     PATH_ERROR_INVALID_ARGUMENT,
     PATH_ERROR_BUFFER_TOO_SMALL,
     PATH_ERROR_NOT_FOUND,
     PATH_ERROR_PERMISSION_DENIED,
-    PATH_ERROR_UNKNOWN
-};
+    PATH_ERROR_UNKNOWN,
+    
+    PATH_ERROR_COUNT  // Sentinel for validation
+} PathErrorCode;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// RESULT STRUCTURE
+// RESULT STRUCTURE (Lean - No Error Message Buffer)
 // ═══════════════════════════════════════════════════════════════════════════
 
 typedef struct {
-    char path[DE100_PATH_MAX];
+    char path[PATH_MAX_LENGTH];
     size_t length;
     bool success;
-    enum de100_path_error_code error_code;
-    char error_message[256];
-} de100_path_result_t;
+    PathErrorCode error_code;
+} PathResult;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // API FUNCTIONS
@@ -62,44 +63,72 @@ typedef struct {
  * macOS:   Uses _NSGetExecutablePath
  * Windows: Uses GetModuleFileNameA
  *
- * @return Result containing executable path or error
+ * @return PathResult containing executable path or error code
  *
- * Example result: "/home/user/project/build/handmade"
+ * Example: "/home/user/project/build/handmade"
  */
-de100_path_result_t de100_get_executable_path(void);
+PathResult path_get_executable(void);
 
 /**
  * Get the directory containing the executable.
  *
- * This is equivalent to Casey's path extraction:
+ * Equivalent to Casey's path extraction:
  *   for(char *Scan = EXEFileName; *Scan; ++Scan) {
  *       if(*Scan == '\\') OnePastLastSlash = Scan + 1;
  *   }
  *
- * @return Result containing directory path WITH trailing slash
+ * @return PathResult containing directory path WITH trailing slash
  *
- * Example result: "/home/user/project/build/"
+ * Example: "/home/user/project/build/"
  */
-de100_path_result_t de100_get_executable_directory(void);
+PathResult path_get_executable_directory(void);
 
 /**
  * Join a directory path with a filename.
  *
- * This is equivalent to Casey's CatStrings function.
+ * Equivalent to Casey's CatStrings function.
  * Handles whether directory has trailing slash or not.
  *
- * @param directory Directory path
+ * @param directory Directory path (can have trailing slash or not)
  * @param filename Filename to append
- * @return Result containing joined path
+ * @return PathResult containing joined path
  *
- * Example: de100_path_join("/home/user/build/", "libgame.so")
+ * Example: path_join("/home/user/build/", "libgame.so")
  *          → "/home/user/build/libgame.so"
  */
-de100_path_result_t de100_path_join(const char *directory, const char *filename);
+PathResult path_join(const char *directory, const char *filename);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ERROR HANDLING
+// ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * Get human-readable error message for error code.
+ * Get a human-readable error message for an error code.
+ *
+ * @param code Error code from any path operation
+ * @return Static string describing the error (never NULL)
  */
-const char *de100_path_strerror(enum de100_path_error_code code);
+const char *path_strerror(PathErrorCode code);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DEBUG UTILITIES (DE100_INTERNAL && DE100_SLOW only)
+// ═══════════════════════════════════════════════════════════════════════════
+
+#if DE100_INTERNAL && DE100_SLOW
+
+/**
+ * Get detailed error information from the last failed operation.
+ * Thread-local storage - only valid immediately after a failed call.
+ *
+ * @return Detailed error string with platform-specific info, or NULL
+ */
+const char *path_get_last_error_detail(void);
+
+/**
+ * Log a path operation result to stderr (debug builds only).
+ */
+void path_debug_log_result(const char *operation, PathResult result);
+
+#endif // DE100_INTERNAL && DE100_SLOW
 
 #endif // DE100_PATH_H

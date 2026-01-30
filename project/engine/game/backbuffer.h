@@ -5,7 +5,7 @@
 #include "../_common/memory.h"
 
 typedef struct {
-  PlatformMemoryBlock memory; // Raw pixel memory (our canvas!)
+  MemoryBlock memory; // Raw pixel memory (our canvas!)
   int width;                  // Current backbuffer dimensions
   int height;
   int pitch;

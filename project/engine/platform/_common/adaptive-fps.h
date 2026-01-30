@@ -4,6 +4,7 @@
 #include "../../_common/base.h"
 #include "../../game/base.h"
 #include "../../game/config.h"
+#include "config.h"
 
 typedef struct {
   uint32 frames_sampled;

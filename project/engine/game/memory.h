@@ -48,11 +48,11 @@ typedef struct {
   // A permanent block of memory that the game can use between calls to
   // `game_update_and_render`. This is where you should store all your game
   // state!
-  PlatformMemoryBlock permanent_storage;
+  MemoryBlock permanent_storage;
   // A temporary block of memory that the game can use between calls to
   // `game_update_and_render`. This is where you should store all your
   // scratch data!
-  PlatformMemoryBlock transient_storage;
+  MemoryBlock transient_storage;
   // Size of the permanent storage block in bytes
   uint64 permanent_storage_size;
   // Size of the temporary storage block in bytes

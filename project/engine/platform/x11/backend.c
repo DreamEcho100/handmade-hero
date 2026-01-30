@@ -8,7 +8,7 @@
 #include "../../game/input.h"
 #include "../../game/memory.h"
 #include "../_common/adaptive-fps.h"
-#include "../_common/audio.h"
+#include "../_common/config.h"
 #include "../_common/frame-timing.h"
 #include "../_common/startup.h"
 #include "audio.h"
@@ -60,8 +60,8 @@ file_scoped_global_var FrameStats g_frame_stats = {0};
 // OPENGL FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════════
 
-file_scoped_fn bool opengl_init(Display *display, Window window, int width,
-                                int height) {
+file_scoped_fn inline bool opengl_init(Display *display, Window window,
+                                       int width, int height) {
   int visual_attribs[] = {GLX_RGBA, GLX_DEPTH_SIZE, 24, GLX_DOUBLEBUFFER, None};
 
   XVisualInfo *visual =
@@ -103,7 +103,7 @@ file_scoped_fn bool opengl_init(Display *display, Window window, int width,
   return true;
 }
 
-file_scoped_fn void opengl_display_buffer(GameBackBuffer *backbuffer) {
+file_scoped_fn inline void opengl_display_buffer(GameBackBuffer *backbuffer) {
   if (!backbuffer->memory.base)
     return;
 
@@ -128,7 +128,7 @@ file_scoped_fn void opengl_display_buffer(GameBackBuffer *backbuffer) {
 }
 
 #if DE100_SANITIZE_WAVE_1_MEMORY
-file_scoped_fn void opengl_cleanup(void) {
+file_scoped_fn inline void opengl_cleanup(void) {
   if (g_gl.gl_context) {
     glXMakeCurrent(g_gl.display, None, NULL);
     glXDestroyContext(g_gl.display, g_gl.gl_context);
@@ -141,7 +141,7 @@ file_scoped_fn void opengl_cleanup(void) {
 // X11 FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════════
 
-file_scoped_fn uint32 x11_get_monitor_refresh_rate(Display *display) {
+file_scoped_fn inline uint32 x11_get_monitor_refresh_rate(Display *display) {
   XRRScreenConfiguration *screen_config =
       XRRGetScreenInfo(display, RootWindow(display, DefaultScreen(display)));
 
@@ -157,7 +157,7 @@ file_scoped_fn uint32 x11_get_monitor_refresh_rate(Display *display) {
   return refresh_rate;
 }
 
-file_scoped_fn void
+file_scoped_fn inline void
 x11_handle_event(GameBackBuffer *backbuffer, Display *display, XEvent *event,
                  GameInput *new_game_input,
                  PlatformAudioConfig *platform_audio_config) {
@@ -227,7 +227,7 @@ x11_handle_event(GameBackBuffer *backbuffer, Display *display, XEvent *event,
   }
 }
 
-file_scoped_fn void
+file_scoped_fn inline void
 x11_process_pending_events(Display *display, GameBackBuffer *backbuffer,
                            GameInput *new_game_input,
                            PlatformAudioConfig *audio_config) {
@@ -242,12 +242,11 @@ x11_process_pending_events(Display *display, GameBackBuffer *backbuffer,
 // AUDIO HELPERS
 // ═══════════════════════════════════════════════════════════════════════════
 
-file_scoped_fn void
+file_scoped_fn inline void
 audio_generate_and_send(GameCode *game, GameMemory *game_memory,
                         GameAudioOutputBuffer *game_audio_output,
                         PlatformAudioConfig *platform_audio_config,
-                        PlatformMemoryBlock *audio_samples_block,
-                        int32 max_samples) {
+                        MemoryBlock *audio_samples_block, int32 max_samples) {
   int32 samples_to_generate =
       linux_get_samples_to_write(platform_audio_config, game_audio_output);
 
@@ -282,10 +281,16 @@ audio_generate_and_send(GameCode *game, GameMemory *game_memory,
 // 🚀 MAIN PLATFORM ENTRY POINT
 // ═══════════════════════════════════════════════════════════════
 int platform_main() {
+#if DE100_INTERNAL
+  real64 absolute_start = get_wall_clock();
+  printf("[ABSOLUTE START] Time since epoch: %.3f\n", absolute_start);
+#endif
+
   LoadGameCodeConfig load_game_code_config = {0};
   GameCode game = {0};
   GameConfig game_config = get_default_game_config();
   PlatformConfig platform_config = {0};
+  platform_config.audio = (PlatformAudioConfig){0};
   GameMemory game_memory = {0};
   GameInput game_inputs[2] = {0};
   GameBackBuffer game_buffer = {0};
@@ -413,11 +418,11 @@ int platform_main() {
                   game_config.window_height, 4);
 
   int buffer_size = game_config.window_width * game_config.window_height * 4;
-  game_buffer.memory = platform_allocate_memory(
-      NULL, buffer_size,
-      PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE | PLATFORM_MEMORY_ZEROED);
+  game_buffer.memory =
+      memory_alloc(NULL, buffer_size,
+                   MEMORY_FLAG_READ | MEMORY_FLAG_WRITE | MEMORY_FLAG_ZEROED);
 
-  if (!platform_memory_is_valid(game_buffer.memory)) {
+  if (!memory_is_valid(game_buffer.memory)) {
     fprintf(stderr, "❌ Failed to allocate backbuffer memory\n");
     return 1;
   }
@@ -425,17 +430,15 @@ int platform_main() {
   // ─────────────────────────────────────────────────────────────────────────
   // AUDIO SETUP
   // ─────────────────────────────────────────────────────────────────────────
-
-  PlatformAudioConfig platform_audio_config = {0};
   int bytes_per_sample = sizeof(int16) * 2;
   int secondary_buffer_size =
       game_config.initial_audio_sample_rate * bytes_per_sample;
 
   game_audio_output.samples_per_second = game_config.initial_audio_sample_rate;
-  platform_audio_config.bytes_per_sample = bytes_per_sample;
-  platform_audio_config.secondary_buffer_size = secondary_buffer_size;
+  platform_config.audio.bytes_per_sample = bytes_per_sample;
+  platform_config.audio.secondary_buffer_size = secondary_buffer_size;
 
-  linux_init_audio(&game_audio_output, &platform_audio_config,
+  linux_init_audio(&game_audio_output, &platform_config.audio,
                    game_config.initial_audio_sample_rate, secondary_buffer_size,
                    game_config.audio_game_update_hz);
 
@@ -447,13 +450,13 @@ int platform_main() {
       game_audio_output.samples_per_second / game_config.audio_game_update_hz;
   int32 max_samples_per_call = samples_per_frame * 3;
   int sample_buffer_size =
-      max_samples_per_call * platform_audio_config.bytes_per_sample;
+      max_samples_per_call * platform_config.audio.bytes_per_sample;
 
-  PlatformMemoryBlock audio_samples_block = platform_allocate_memory(
-      NULL, sample_buffer_size,
-      PLATFORM_MEMORY_READ | PLATFORM_MEMORY_WRITE | PLATFORM_MEMORY_ZEROED);
+  MemoryBlock audio_samples_block =
+      memory_alloc(NULL, sample_buffer_size,
+                   MEMORY_FLAG_READ | MEMORY_FLAG_WRITE | MEMORY_FLAG_ZEROED);
 
-  if (!platform_memory_is_valid(audio_samples_block)) {
+  if (!memory_is_valid(audio_samples_block)) {
     fprintf(stderr, "❌ Failed to allocate sound sample buffer\n");
     return 1;
   }
@@ -475,7 +478,7 @@ int platform_main() {
       if (FRAME_LOG_EVERY_TEN_SECONDS_CHECK) {
         printf("[HEALTH CHECK] frame=%u, RSI=%lld, marker_idx=%d\n",
                g_frame_counter,
-               (long long)platform_audio_config.running_sample_index,
+               (long long)platform_config.audio.running_sample_index,
                g_debug_marker_index);
       }
 #endif
@@ -524,7 +527,7 @@ int platform_main() {
       // ───────────────────────────────────────────────────────────────────────
 
       audio_generate_and_send(&game, &game_memory, &game_audio_output,
-                              &platform_audio_config, &audio_samples_block,
+                              &platform_config.audio, &audio_samples_block,
                               max_samples_per_call);
 
       // ───────────────────────────────────────────────────────────────────────
@@ -532,7 +535,7 @@ int platform_main() {
       // ───────────────────────────────────────────────────────────────────────
 
       x11_process_pending_events(display, &game_buffer, new_game_input,
-                                 &platform_audio_config);
+                                 &platform_config.audio);
 
       // ───────────────────────────────────────────────────────────────────────
       // DEBUG VISUALIZATION
@@ -543,7 +546,7 @@ int platform_main() {
           (g_debug_marker_index - 1 + MAX_DEBUG_AUDIO_MARKERS) %
           MAX_DEBUG_AUDIO_MARKERS;
       linux_debug_sync_display(&game_buffer, &game_audio_output,
-                               &platform_audio_config, g_debug_audio_markers,
+                               &platform_config.audio, g_debug_audio_markers,
                                MAX_DEBUG_AUDIO_MARKERS, display_marker_index);
 #endif
 
@@ -555,7 +558,7 @@ int platform_main() {
       XSync(display, False);
 
 #if DE100_INTERNAL
-      linux_debug_capture_flip_state(&platform_audio_config);
+      linux_debug_capture_flip_state(&platform_config.audio);
 #endif
 
       // ───────────────────────────────────────────────────────────────────────
@@ -588,8 +591,11 @@ int platform_main() {
 #if DE100_INTERNAL
       frame_stats_record(&g_frame_stats, frame_time_ms,
                          game_config.target_seconds_per_frame);
+#endif
+
       g_frame_counter++;
 
+#if DE100_INTERNAL
       if (FRAME_LOG_EVERY_FIVE_SECONDS_CHECK) {
         printf(
             "[X11] %.2fms/f, %.2ff/s, %.2fmc/f (work: %.2fms, sleep: %.2fms)\n",
@@ -634,7 +640,7 @@ int platform_main() {
          get_wall_clock() - g_initial_game_time);
 
   linux_close_joysticks();
-  linux_unload_alsa(&game_audio_output, &platform_audio_config);
+  linux_unload_alsa(&game_audio_output, &platform_config.audio);
 
   free_platform_game_startup(&load_game_code_config, &game, &game_config,
                              &game_memory, new_game_input, old_game_input,
