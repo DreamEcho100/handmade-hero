@@ -7,8 +7,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-// #define DE100_INTERNAL 0
-
 #ifndef DE100_IS_GENERIC_POSIX
 #if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) ||        \
     defined(__unix__) || defined(__MACH__)

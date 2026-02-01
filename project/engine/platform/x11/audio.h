@@ -145,6 +145,20 @@ typedef struct {
 extern LinuxSoundOutput g_linux_audio_output;
 
 // ═══════════════════════════════════════════════════════════════
+// 📊 DEBUG AUDIO DISPLAY MODE
+// ═══════════════════════════════════════════════════════════════
+// Toggle between: hidden, semi-transparent, or fully visible
+// ═══════════════════════════════════════════════════════════════
+
+typedef enum {
+  AUDIO_DEBUG_DISPLAY_NONE = 0,        // Hidden - no visualization
+  AUDIO_DEBUG_DISPLAY_SEMI_TRANSPARENT, // Semi-transparent overlay
+  AUDIO_DEBUG_DISPLAY_FULL              // Fully opaque (normal)
+} AudioDebugDisplayMode;
+
+extern AudioDebugDisplayMode g_audio_debug_display_mode;
+
+// ═══════════════════════════════════════════════════════════════
 // 📊 DAY 20: DEBUG AUDIO MARKER (X11/ALSA VERSION)
 // ═══════════════════════════════════════════════════════════════
 // This structure records audio timing data for visualization
@@ -226,14 +240,13 @@ bool linux_init_audio(GameAudioOutputBuffer *audio_output,
                       int32 game_update_hz);
 
 int32 linux_get_samples_to_write(PlatformAudioConfig *audio_config,
-                                   GameAudioOutputBuffer *audio_output);
+                                 GameAudioOutputBuffer *audio_output);
 void linux_debug_audio_latency(
     // GameAudioOutputBuffer *audio_output,
     PlatformAudioConfig *audio_config
     //  GameAudioState *game_audio_state
 );
-void linux_unload_alsa(GameAudioOutputBuffer *audio_output,
-                       PlatformAudioConfig *audio_config);
+void linux_unload_alsa(PlatformAudioConfig *audio_config);
 void linux_audio_fps_change_handling(GameAudioOutputBuffer *audio_output,
                                      PlatformAudioConfig *audio_config);
 

@@ -378,7 +378,7 @@ void linux_poll_joystick(GameInput *new_input) {
         }
 
         default:
-          printf("D-pad number: %d, value: %d\n", event.number, event.value);
+          // printf("D-pad number: %d, value: %d\n", event.number, event.value);
           break;
         }
       }
@@ -403,12 +403,12 @@ void linux_poll_joystick(GameInput *new_input) {
           &new_controller->move_left);
 
       process_game_button_state(
-          (new_controller->stick_avg_x > BASE_JOYSTICK_DEADZONE),
+          (new_controller->stick_avg_x < -BASE_JOYSTICK_DEADZONE),
           &new_controller->move_right);
 
       // Vertical stick → move_up/move_down buttons
       process_game_button_state(
-          (new_controller->stick_avg_y < -BASE_JOYSTICK_DEADZONE),
+          (new_controller->stick_avg_y > BASE_JOYSTICK_DEADZONE),
           &new_controller->move_down // Y inverted!
       );
 

@@ -39,7 +39,7 @@ real64 get_wall_clock(void);
  *
  * Note: This is a trivial subtraction, provided for API symmetry.
  */
-static inline real64 get_seconds_elapsed(real64 start, real64 end) {
+de100_file_scoped_fn inline real64 get_seconds_elapsed(real64 start, real64 end) {
     return end - start;
 }
 

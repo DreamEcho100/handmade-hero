@@ -1,13 +1,15 @@
 #include "keyboard.h"
 #include "../../../game/base.h"
 #include "../../../game/input.h"
+#include "../../_common/input-recording.h"
 #include "../audio.h"
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <stdio.h>
 
 void handleEventKeyPress(XEvent *event, GameInput *new_game_input,
-                         PlatformAudioConfig *platform_audio_config) {
+                         PlatformAudioConfig *platform_audio_config,
+                         GameMemoryState *game_memory_state) {
   KeySym key = XLookupKeysym(&event->xkey, 0);
   // printf("pressed\n");
 
@@ -100,6 +102,15 @@ void handleEventKeyPress(XEvent *event, GameInput *new_game_input,
   case (XK_P): {
     g_game_is_paused = !g_game_is_paused;
     printf("🎮 Game %s\n", g_game_is_paused ? "PAUSED" : "RESUMED");
+    break;
+  }
+
+  // Input Recording Toggle (Casey's Day 23)
+  case (XK_l):
+  case (XK_L): {
+    printf("🎬 L pressed - Toggling input recording/playback\n");
+    input_recording_toggle(game_memory_state);
+    break;
   }
   }
 }

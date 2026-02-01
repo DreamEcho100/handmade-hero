@@ -1,4 +1,5 @@
 #include "main.h"
+#include "../../engine/_common/base.h"
 #include "../../engine/game/backbuffer.h"
 #include "../../engine/game/input.h"
 #include <fcntl.h>
@@ -14,18 +15,42 @@ de100_file_scoped_global_var inline real32 apply_deadzone(real32 value) {
   return value;
 }
 
-de100_file_scoped_global_var inline bool
-controller_has_input(GameControllerInput *controller) {
-  return (fabsf(controller->stick_avg_x) > CONTROLLER_DEADZONE ||
-          fabsf(controller->stick_avg_y) > CONTROLLER_DEADZONE ||
-          controller->move_up.ended_down || controller->move_down.ended_down ||
-          controller->move_left.ended_down ||
-          controller->move_right.ended_down);
+// de100_file_scoped_global_var inline bool
+// controller_has_input(GameControllerInput *controller) {
+//   return (fabsf(controller->stick_avg_x) > CONTROLLER_DEADZONE ||
+//           fabsf(controller->stick_avg_y) > CONTROLLER_DEADZONE ||
+//           controller->move_up.ended_down ||
+//           controller->move_down.ended_down ||
+//           controller->move_left.ended_down ||
+//           controller->move_right.ended_down);
+// }
+
+de100_file_scoped_global_var void render_player(GameBackBuffer *backbuffer,
+                                                int pos_x, int pos_y) {
+  uint8 *end_of_buffer =
+      (uint8 *)backbuffer->memory + backbuffer->pitch * backbuffer->height;
+
+  uint32 color = 0xFFFFFFFF; // White
+  int top = pos_y;
+  int bottom = pos_y + 10;
+
+  for (int X = pos_x; X < pos_x + 10; ++X) {
+    uint8 *pixel = ((uint8 *)backbuffer->memory +
+                    X * backbuffer->bytes_per_pixel + top * backbuffer->pitch);
+    for (int Y = top; Y < bottom; ++Y) {
+      // Bounds checking!
+      if ((pixel >= (uint8 *)backbuffer->memory) &&
+          ((pixel + 4) <= (uint8 *)end_of_buffer)) {
+        *(uint32 *)pixel = color;
+      }
+      pixel += backbuffer->pitch;
+    }
+  }
 }
 
 void render_weird_gradient(GameBackBuffer *buffer,
                            HandMadeHeroGameState *game_state) {
-  uint8 *row = (uint8 *)buffer->memory.base;
+  uint8 *row = (uint8 *)buffer->memory;
 
   // The following is correct for X11
   for (int y = 0; y < buffer->height; ++y) {
@@ -39,7 +64,7 @@ void render_weird_gradient(GameBackBuffer *buffer,
 
       // RGBA format - works for BOTH OpenGL X11 AND Raylib!
       *pixel++ = (0xFF000000u |  // Alpha = 255
-                  (blue << 16) | // Blue
+                  (blue << 8) | // Blue
                   (green << 8) | // Green
                   (0));
     }
@@ -50,7 +75,7 @@ void render_weird_gradient(GameBackBuffer *buffer,
 void testPixelAnimation(GameBackBuffer *buffer,
                         HandMadeHeroGameState *game_state) {
   // Test pixel animation
-  uint32 *pixels = (uint32 *)buffer->memory.base;
+  uint32 *pixels = (uint32 *)buffer->memory;
   int total_pixels = buffer->width * buffer->height;
 
   int test_offset = game_state->pixel_state.offset_y * buffer->width +
@@ -75,6 +100,18 @@ void testPixelAnimation(GameBackBuffer *buffer,
 // Handle game controls
 void handle_controls(GameControllerInput *input,
                      HandMadeHeroGameState *game_state) {
+
+  if (input->action_down.ended_down) {
+    game_state->player_state.t_jump = 4.0; // Start jump
+  }
+
+  // Simple jump arc
+  if (game_state->player_state.t_jump > 0) {
+    game_state->player_state.y +=
+        (int)(5.0f * sinf(0.5f * M_PI * game_state->player_state.t_jump));
+  }
+  game_state->player_state.t_jump -= 0.033f; // Tick down jump timer
+
   if (input->is_analog) {
     // ═════════════════════════════════════════════════════════
     // ANALOG MOVEMENT (Joystick)
@@ -86,17 +123,22 @@ void handle_controls(GameControllerInput *input,
     // stick_avg_x/stick_avg_y are NORMALIZED (-1.0 to +1.0)!
     // ═════════════════════════════════════════════════════════
 
-    real32 x = apply_deadzone(input->stick_avg_x);
-    real32 y = apply_deadzone(input->stick_avg_y);
+    real32 stick_avg_x = apply_deadzone(input->stick_avg_x);
+    real32 stick_avg_y = apply_deadzone(input->stick_avg_y);
 
     // Horizontal stick controls blue offset
-    game_state->gradient_state.offset_x -= (int)(4.0f * x);
-    game_state->gradient_state.offset_y -= (int)(4.0f * y);
+    game_state->gradient_state.offset_x -= (int)(4.0f * stick_avg_x);
+    game_state->gradient_state.offset_y -= (int)(4.0f * stick_avg_y);
 
     // Vertical stick controls tone frequency
     // NOTE: `tone_hz` is moved to the game layer, but initilized by the
     // platform layer
-    game_state->audio.tone.frequency = 256 + (int)(128.0f * y);
+    game_state->audio.tone.frequency = 256 + (int)(128.0f * stick_avg_y);
+
+    // In GameUpdateAndRender:
+    game_state->player_state.x += (int)(4.0f * stick_avg_x * game_state->speed);
+    game_state->player_state.y += (int)(4.0f * stick_avg_y * game_state->speed);
+
   } else {
     if (input->move_up.ended_down) {
       game_state->gradient_state.offset_y += game_state->speed;
@@ -126,7 +168,7 @@ void handle_controls(GameControllerInput *input,
 GAME_UPDATE_AND_RENDER(game_update_and_render) {
 
   HandMadeHeroGameState *game_state =
-      (HandMadeHeroGameState *)memory->permanent_storage.base;
+      (HandMadeHeroGameState *)memory->permanent_storage;
 
   // Find active controller
   GameControllerInput *active_controller = NULL;
@@ -142,11 +184,8 @@ GAME_UPDATE_AND_RENDER(game_update_and_render) {
 
     GameControllerInput *c = &input->controllers[i];
     if (c->is_connected) {
-      // Use helper function instead of hardcoded 0.15!
-      if (controller_has_input(c)) {
-        active_controller = c;
-        break;
-      }
+      active_controller = c;
+      break;
     }
   }
 
@@ -184,6 +223,7 @@ GAME_UPDATE_AND_RENDER(game_update_and_render) {
   handle_controls(active_controller, game_state);
 
   render_weird_gradient(buffer, game_state);
+  render_player(buffer, game_state->player_state.x, game_state->player_state.y);
 
   testPixelAnimation(buffer, game_state);
 }
@@ -202,10 +242,10 @@ GAME_UPDATE_AND_RENDER(game_update_and_render) {
 
 GAME_GET_AUDIO_SAMPLES(game_get_audio_samples) {
   HandMadeHeroGameState *game_state =
-      (HandMadeHeroGameState *)memory->permanent_storage.base;
+      (HandMadeHeroGameState *)memory->permanent_storage;
 
   if (!memory->is_initialized) {
-    int16 *sample_out = (int16 *)audio_buffer->samples_block.base;
+    int16 *sample_out = (int16 *)audio_buffer->samples;
     for (int i = 0; i < audio_buffer->sample_count; ++i) {
       *sample_out++ = 0;
       *sample_out++ = 0;
@@ -232,7 +272,7 @@ GAME_GET_AUDIO_SAMPLES(game_get_audio_samples) {
 
   // Safety check: if not initialized, output silence
   if (!tone->is_playing || tone->frequency <= 0.0f) {
-    int16 *sample_out = (int16 *)audio_buffer->samples_block.base;
+    int16 *sample_out = (int16 *)audio_buffer->samples;
     for (int sample_index = 0; sample_index < audio_buffer->sample_count;
          ++sample_index) {
       *sample_out++ = 0; // Left
@@ -264,7 +304,7 @@ GAME_GET_AUDIO_SAMPLES(game_get_audio_samples) {
   real32 right_volume =
       (tone->pan_position >= 0.0f) ? 1.0f : (1.0f + tone->pan_position);
 
-  int16 *sample_out = (int16 *)audio_buffer->samples_block.base;
+  int16 *sample_out = (int16 *)audio_buffer->samples;
 
   if (FRAME_LOG_EVERY_ONE_SECONDS_CHECK) {
     printf("[AUDIO GEN] sample_count=%d, volume=%.1f, freq=%.1f, phase=%.3f\n",

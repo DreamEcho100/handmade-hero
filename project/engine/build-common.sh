@@ -151,6 +151,7 @@ esac
 DE100_SRC_MAIN="$DE100_ENGINE_DIR/main.c"
 
 DE100_SRC_COMMON=(
+    "$DE100_ENGINE_DIR/engine.c"
     "$DE100_ENGINE_DIR/_common/debug-file-io.c"
     "$DE100_ENGINE_DIR/_common/dll.c"
     "$DE100_ENGINE_DIR/_common/file.c"
@@ -161,7 +162,6 @@ DE100_SRC_COMMON=(
 
 DE100_SRC_GAME=(
     "$DE100_ENGINE_DIR/game/audio.c"
-    "$DE100_ENGINE_DIR/game/backbuffer.c"
     "$DE100_ENGINE_DIR/game/base.c"
     "$DE100_ENGINE_DIR/game/config.c"
     "$DE100_ENGINE_DIR/game/game-loader.c"
@@ -170,7 +170,7 @@ DE100_SRC_GAME=(
 )
 
 DE100_SRC_PLATFORM_COMMON=(
-    "$DE100_ENGINE_DIR/platform/_common/startup.c"
+    "$DE100_ENGINE_DIR/platform/_common/input-recording.c"
     "$DE100_ENGINE_DIR/platform/_common/adaptive-fps.c"
     "$DE100_ENGINE_DIR/platform/_common/frame-timing.c"
 )

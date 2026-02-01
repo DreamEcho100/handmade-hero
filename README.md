@@ -1,10 +1,329 @@
-# DE100 Engine - Code Style Guide
+# DE100 - Multi-Backend Engine Architecture (Learning-Oriented)
+
+> **Purpose of this document**
+> This README exists to remove ambiguity. It explains **what this project is**, **why it is structured the way it is**, and **how it intentionally differs from conventional game engines**.
+> If you are reading this for the first time (including future‑me or an AI assistant), this document is the ground truth.
+
+---
+
+## What this project is (and is not)
+
+### What it _is_
+
+- A **learning‑first, systems‑oriented game engine project** inspired by _Handmade Hero_.
+- A deliberate exploration of:
+  - C as a low‑level language
+  - OS/platform APIs (For now X11 and Raylib for comparison and cross-platformness).
+  - Cross‑platform abstractions and their real costs
+  - Engine vs game responsibility boundaries
+  - A project that **intentionally supports multiple backend styles at once**:
+    - _Native OS backends_ (e.g. X11)
+    - _Cross‑platform library backends_ (e.g. Raylib)
+
+### What it is _not_
+
+- Not a production‑ready, one‑size‑fits‑all engine _(for now, maybe on the future for production can be focused one one backend like Raylib)_.
+- Not an SDL/GLFW/Raylib replacement
+- Not a "clean abstraction at all costs" architecture
+- Not optimized for maximum reuse _yet_
+
+> **Key philosophy**: understanding > abstraction > reuse
+
+---
+
+## The core design philosophy
+
+This project follows a few non‑negotiable principles:
+
+1. **No fake abstraction**
+   Abstractions are introduced only when the cost and benefit are fully understood.
+
+2. **Honest coupling is better than dishonest decoupling**
+   If two things are coupled in reality, the code should show it.
+
+3. **Learning visibility beats elegance**
+   Platform quirks, backend differences, and tradeoffs should be visible, not hidden.
+
+4. **The engine must not own game policy**
+   Especially input semantics, gameplay meaning, or binding decisions.
+
+5. **Portability is explored, not assumed**
+   The project deliberately compares low‑level OS APIs with higher‑level libraries.
+
+---
+
+## Why this architecture is different from most engines
+
+Most engines choose **one axis**:
+
+- Either:
+  - One cross‑platform backend (SDL / GLFW / Raylib)
+
+- Or:
+  - Multiple OS‑specific backends
+
+### This project does **both** — intentionally
+
+| Goal                   | Result                             |
+| ---------------------- | ---------------------------------- |
+| Learn OS reality       | Native backends (X11, Win32, etc.) |
+| Learn abstraction cost | Cross‑platform backend (Raylib)    |
+| Compare tradeoffs      | Both exist side‑by‑side            |
+
+In here currently, for example, Raylib is treated **as a backend**, not as _"the engine"_
+
+---
+
+## High‑level directory structure _(rough overview)_
+
+```
+engine/
+  _common/
+    # Cross‑platform utilities
+    # (memory, files, time, threading, DLLs, etc.)
+
+  platform/
+    _common/
+      # Shared platform logic (NOT game logic)
+    x11/
+      # Native Linux/X11 backend
+    raylib/
+      # Raylib backend treated as a platform
+
+  engine.c
+    # Engine orchestration
+    # Lifecycle, calling into game, etc.
+
+  build-common.c
+    # Shared build logic
+
+[game]/
+  adapters/
+    x11/
+      inputs/
+        keyboard.c
+    raylib/
+      inputs/
+        keyboard.c
+
+  startup.c
+  init.c
+  main.c
+
+  build-dev.c
+```
+
+---
+
+## Layer responsibilities (step‑by‑step)
+
+### 5.1 `engine/_common/`
+
+- Pure C utilities
+- Platform APIs are used with macro guards, currently support windows, linux, macos, with linux is what's currently tested while the others need to be _(mostly implemented by LLMs with others since I have less experience with them, that's why I need to test them later)_
+- No game knowledge
+- Reusable everywhere
+
+Examples:
+
+- Memory arenas
+- File I/O wrappers
+- Time utilities
+- Error handling
+
+---
+
+### 5.2 `engine/platform/`
+
+This layer deals with **platform reality**.
+
+Responsibilities:
+
+- Window creation
+- Input handling _(polling/events)_
+- Hot reload (mostly dev mode, it's planned to be disabled on prod builds and have only static linking)\_
+- Audio output
+- Timing
+- Backend‑specific APIs
+
+Rules:
+
+- ❌ No game logic
+- ❌ No gameplay meaning
+- ❌ No action mapping
+
+The platform produces **raw data**, nothing more.
+
+---
+
+### 5.3 `engine/engine.c`
+
+The engine is an **orchestrator**, not a policy owner.
+
+Responsibilities:
+
+- Startup / shutdown
+- dynamic loading _(for game code and adapters)_
+- Calling game entry points
+- Passing platform data through
+
+The engine:
+
+- Does not interpret input
+- Does not define bindings
+- Does not know about actions
+
+---
+
+### 5.4 `[game]/` (game code)
+
+This is where **meaning exists**.
+
+Responsibilities:
+
+- Game logic
+- Rendering
+- Audio generation
+- Input semantics
+
+The game is allowed to:
+
+- Define actions
+- Define combos
+- Define bindings
+- Be opinionated
+
+---
+
+## The game adapters concept (critical) _(planned, not fully implemented yet)_
+
+### What adapters are
+
+Adapters are **game‑owned, backend‑specific glue code**.
+
+They:
+
+- Live inside the game directory
+- Are compiled/linked per backend
+- Are allowed to include backend headers
+- Mostly for translating what normalizing between different backends/games/cases would be a hurdle/cause-performance-issues, for example: backend input → game actions. at least until I find a better way to do it.
+
+### What adapters are _not_
+
+- Not part of the engine
+- Not reusable across games
+- Not pretending to be universal behaviors/bindings between backends/games
+
+---
+
+## Input handling philosophy (keyboard example)
+
+### The problem
+
+Keyboard input differs across:
+
+- Platforms
+- Libraries
+- Layouts
+- Games
+
+Normalizing input at the engine level forces **policy decisions** that don't belong there.
+
+### Example of the solution used here
+
+```
+Platform (X11 / Raylib)
+    ↓ raw events
+Engine (pass‑through)
+    ↓
+Game Adapter (backend‑specific)
+    ↓ actions
+Game Logic
+```
+
+#### Why this is intentional
+
+- Each game has different actions
+- Each game wants different bindings
+- Combos and chords are game semantics
+- Text input ≠ control input
+
+Adapters keep all of this **local and explicit**.
+
+---
+
+#### Remapping, combos, and advanced input
+
+Because adapters already map input → actions:
+
+- Remapping is just data or code in the adapter
+- Combos and sequences live next to bindings
+- Multiple binding layers are trivial
+
+No engine involvement required.
+
+---
+
+## Hot reload & dev vs prod _(planned, not fully implemented yet)_
+
+- Game code (including adapters) is dynamically loaded in dev
+- Input logic can be hot‑reloaded
+- Engine and platform stay stable
+
+Prod builds can:
+
+- Disable hot reload
+- Link statically
+- Strip debug features
+
+---
+
+## Why duplication is acceptable here
+
+Some adapter code will be duplicated.
+
+This is **intentional**:
+
+- Bindings are not logic
+- Bindings are policy
+- Policy should be visible
+
+Hiding duplication behind abstraction would reduce learning value.
+
+---
+
+## Future evolution (without commitment)
+
+Possible future steps:
+
+- Lift common patterns from adapters upward
+- Introduce optional shared input helpers
+- Add data‑driven bindings
+- Integrate third‑party input libraries (game‑side only)
+
+Nothing in the current design blocks this.
+
+---
+
+## Final note
+
+This project prioritizes:
+
+> **Clarity, honesty, and understanding**
+
+over:
+
+> **Premature elegance or forced reuse**
+
+If something looks more manual than expected, it is probably by design.
+
+## Code Style Guide
 
 > Consistent, C-idiomatic, Casey-inspired.
 
 ---
 
-## Namespace Strategy
+### Namespace Strategy
 
 The engine uses `De100` / `de100_` prefix to avoid collisions when integrated into games.
 
@@ -15,7 +334,7 @@ The engine uses `De100` / `de100_` prefix to avoid collisions when integrated in
 
 ---
 
-## Quick Reference
+### Quick Reference
 
 | Element          | Style             | Example                                     |
 | ---------------- | ----------------- | ------------------------------------------- |
@@ -32,7 +351,7 @@ The engine uses `De100` / `de100_` prefix to avoid collisions when integrated in
 
 ---
 
-## Engine Types
+### Engine Types
 
 ```c
 // engine/_common/memory.h
@@ -58,7 +377,7 @@ typedef enum {
 
 ---
 
-## Engine Functions
+### Engine Functions
 
 ```c
 // Pattern: de100_module_action()
@@ -75,7 +394,7 @@ void de100_time_sleep_ms(uint32 ms);
 
 ---
 
-## Game Types (Your Game - No Prefix)
+### Game Types (Your Game - No Prefix)
 
 ```c
 // handmadehero/src/main.h
@@ -93,7 +412,7 @@ typedef struct {
 
 ---
 
-## Game Functions (Your Game - No Prefix)
+### Game Functions (Your Game - No Prefix)
 
 ```c
 // handmadehero/src/main.c
@@ -103,7 +422,7 @@ void render_gradient(De100GameBackBuffer *buffer, int offset_x, int offset_y);
 
 ---
 
-## Variables
+### Variables
 
 ```c
 // Local variables
@@ -125,7 +444,7 @@ typedef struct {
 
 ---
 
-## Macros & Constants
+### Macros & Constants
 
 ```c
 // Engine macros - DE100_ prefix
@@ -143,7 +462,7 @@ typedef struct {
 
 ---
 
-## File Structure
+### File Structure
 
 ```
 project/
@@ -169,7 +488,7 @@ project/
 
 ---
 
-## Header Guards
+### Header Guards
 
 ```c
 // Engine headers
@@ -187,7 +506,7 @@ project/
 
 ---
 
-## Comments
+### Comments
 
 ```c
 // Single-line for brief notes
@@ -204,7 +523,7 @@ project/
 
 ---
 
-## Standard Macros (from `base.h`)
+### Standard Macros (from `base.h`)
 
 ```c
 file_scoped_fn          // static function
@@ -217,7 +536,7 @@ DE100_DEV_ASSERT(expr)  // Only in DE100_SLOW builds
 
 ---
 
-## Do's and Don'ts
+### Do's and Don'ts
 
 ```c
 // ✅ DO - Engine code
@@ -238,7 +557,7 @@ int32 frameCounter = 0;                 // Wrong: camelCase variable
 
 ---
 
-## Summary
+### Summary
 
 ```
 ENGINE (reusable):

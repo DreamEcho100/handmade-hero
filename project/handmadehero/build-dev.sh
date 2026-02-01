@@ -122,6 +122,8 @@ de100_set_backend "$BACKEND" $DE100_INTERNAL || exit 1
 COMMON_FLAGS="$DE100_BASE_FLAGS"
 COMMON_FLAGS="$COMMON_FLAGS -I$SCRIPT_DIR/src"
 COMMON_FLAGS="$COMMON_FLAGS -g -O0"
+COMMON_FLAGS="$COMMON_FLAGS -fno-omit-frame-pointer"  # Better stack traces
+COMMON_FLAGS="$COMMON_FLAGS -D_DEBUG"         # Define _DEBUG like MSVC does
 COMMON_FLAGS="$COMMON_FLAGS -Wall -Wextra -Werror"
 COMMON_FLAGS="$COMMON_FLAGS -DDE100_INTERNAL=$DE100_INTERNAL -DDE100_SLOW=1"
 
@@ -130,7 +132,7 @@ SANITIZE_FLAGS=""
 if [[ "$ENABLE_SANITIZERS" == true ]]; then
     case "$DE100_OS" in
         linux|macos|freebsd)
-            SANITIZE_FLAGS="-fsanitize=address,leak,undefined -fno-omit-frame-pointer"
+            SANITIZE_FLAGS="-fsanitize=address,leak,undefined"
             SANITIZE_FLAGS="$SANITIZE_FLAGS -DDE100_SANITIZE_WAVE_1_MEMORY=1"
             echo "Sanitizers: ENABLED"
         ;;

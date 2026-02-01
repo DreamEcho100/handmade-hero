@@ -6,22 +6,28 @@
 #include "../../engine/game/audio.h"
 #include "../../engine/game/backbuffer.h"
 #include "../../engine/game/base.h"
+#include "../../engine/game/game-loader.h"
 #include "../../engine/game/input.h"
 #include "../../engine/game/memory.h"
-#include "../../engine/game/game-loader.h"
 
 GameControllerInput *GetController(GameInput *Input,
                                    unsigned int ControllerIndex);
 
 typedef struct {
-  int offset_x;
-  int offset_y;
+  int32 offset_x;
+  int32 offset_y;
 } GradientState;
 
 typedef struct {
-  int offset_x;
-  int offset_y;
+  int32 offset_x;
+  int32 offset_y;
 } PixelState;
+
+typedef struct {
+  int32 x;
+  int32 y;
+  real32 t_jump;
+} PlayerState;
 
 typedef struct {
   // Audio state (embedded struct, not pointer)
@@ -31,13 +37,14 @@ typedef struct {
   // WorldState world;
 
   // // Audio state (matches Casey's game_state)
-  // int tone_hz;
+  // int32 tone_hz;
   // real32 t_sine; // Phase accumulator
-  
+
   // Your other state
   GradientState gradient_state;
   PixelState pixel_state;
-  int speed;
+  PlayerState player_state;
+  int32 speed;
 } HandMadeHeroGameState;
 
 #endif // DE100_HERO_GAME_H

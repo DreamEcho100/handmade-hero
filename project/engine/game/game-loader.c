@@ -143,13 +143,13 @@ de100_file_scoped_fn inline int load_game_assets(GameCode *game_code,
 // ═══════════════════════════════════════════════════════════════════════════
 // LOAD GAME CODE
 // ═══════════════════════════════════════════════════════════════════════════
-int load_game_code(GameCode *game_code, LoadGameCodeConfig *config,
+int load_game_code(GameCode *game_code, GameCodePaths *game_code_paths,
                    GAME_CODE_CATEGORIES category) {
   GameCode stub_game_code = create_stub_game_main_code();
 
   if (category & GAME_CODE_CATEGORY_STARTUP) {
-    char *source_lib_name = config->game_startup_lib_path;
-    char *temp_lib_name = config->game_startup_lib_tmp_path;
+    char *source_lib_name = game_code_paths->game_startup_lib_path;
+    char *temp_lib_name = game_code_paths->game_startup_lib_tmp_path;
 
     if (load_game_assets(game_code, &stub_game_code, source_lib_name,
                          temp_lib_name) != 0) {
@@ -179,8 +179,8 @@ int load_game_code(GameCode *game_code, LoadGameCodeConfig *config,
   }
 
   if (category & GAME_CODE_CATEGORY_INIT) {
-    char *source_lib_name = config->game_init_lib_path;
-    char *temp_lib_name = config->game_init_lib_tmp_path;
+    char *source_lib_name = game_code_paths->game_init_lib_path;
+    char *temp_lib_name = game_code_paths->game_init_lib_tmp_path;
 
     if (load_game_assets(game_code, &stub_game_code, source_lib_name,
                          temp_lib_name) != 0) {
@@ -209,8 +209,8 @@ int load_game_code(GameCode *game_code, LoadGameCodeConfig *config,
   }
 
   if (category & GAME_CODE_CATEGORY_MAIN) {
-    char *source_lib_name = config->game_main_lib_path;
-    char *temp_lib_name = config->game_main_lib_tmp_path;
+    char *source_lib_name = game_code_paths->game_main_lib_path;
+    char *temp_lib_name = game_code_paths->game_main_lib_tmp_path;
 
     if (load_game_assets(game_code, &stub_game_code, source_lib_name,
                          temp_lib_name) != 0) {
@@ -354,7 +354,8 @@ bool32 game_main_code_needs_reload(GameCode *game_code, char *source_lib_name) {
   }
 
   if (!source_lib_name) {
-    fprintf(stderr, "⚠️  game_main_code_needs_reload: NULL source_lib_name\n");
+    fprintf(stderr, "⚠️  game_main_code_needs_reload: NULL \"%s\"\n",
+            source_lib_name);
     return false;
   }
 
@@ -399,8 +400,7 @@ bool32 game_main_code_needs_reload(GameCode *game_code, char *source_lib_name) {
 }
 
 void handle_game_reload_check(GameCode *game_code,
-                              LoadGameCodeConfig *load_game_code_config) {
-
+                              GameCodePaths *game_code_paths) {
   // ═══════════════════════════════════════════════════════════
   // 🔄 HOT RELOAD CHECK (Casey's Day 21/22 pattern)
   // ═══════════════════════════════════════════════════════════
@@ -409,7 +409,7 @@ void handle_game_reload_check(GameCode *game_code,
   // ═══════════════════════════════════════════════════════════
   if (g_reload_requested ||
       game_main_code_needs_reload(game_code,
-                                  load_game_code_config->game_main_lib_path)) {
+                                  game_code_paths->game_main_lib_path)) {
     if (g_reload_requested) {
       g_reload_requested = false;
       printf("🔄 Hot reload requested by user!\n");
@@ -429,14 +429,14 @@ void handle_game_reload_check(GameCode *game_code,
            (void *)game_code->update_and_render,
            (void *)game_code->get_audio_samples);
 
-    load_game_code(game_code, load_game_code_config, GAME_CODE_CATEGORY_MAIN);
+    load_game_code(game_code, game_code_paths, GAME_CODE_CATEGORY_MAIN);
 
     if (game_code->is_valid) {
       printf("✅ Hot reload successful!\n");
 
       // NOTE: do on a separate thread
       de100_file_delete(
-          load_game_code_config->game_main_lib_tmp_path); // Clean up temp file
+          game_code_paths->game_main_lib_tmp_path); // Clean up temp file
     } else {
       printf("⚠️  Hot reload failed, using stubs\n");
     }

@@ -1,4 +1,5 @@
 #include "file.h"
+#include "base.h"
 #include "time.h"
 
 #include <stdio.h>
@@ -31,9 +32,9 @@
 // Thread-local buffer for detailed error messages
 // Only populated in debug builds, only valid immediately after error
 #if defined(_WIN32)
-static __declspec(thread) char g_last_error_detail[1024];
+de100_file_scoped_global_var __declspec(thread) char g_last_error_detail[1024];
 #else
-static __thread char g_last_error_detail[1024];
+de100_file_scoped_global_var __thread char g_last_error_detail[1024];
 #endif
 
 #define SET_ERROR_DETAIL(...)                                                  \
@@ -128,7 +129,7 @@ de100_file_scoped_fn inline void win32_set_error_detail(const char *operation,
 #else // POSIX
 
 de100_file_scoped_fn inline De100FileErrorCode
-errno_to_de100_file_error(int err) {
+errno_to_de100_file_error(int32 err) {
   switch (err) {
   case 0:
     return FILE_SUCCESS;
@@ -175,7 +176,7 @@ errno_to_de100_file_error(int err) {
 
 // #if DE100_INTERNAL && DE100_SLOW
 de100_file_scoped_fn inline void
-posix_set_error_detail(const char *operation, const char *path, int err) {
+posix_set_error_detail(const char *operation, const char *path, int32 err) {
   SET_ERROR_DETAIL("[%s] '%s' failed: %s (errno %d)", operation,
                    path ? path : "(null)", strerror(err), err);
 }
@@ -250,7 +251,7 @@ De100FileTimeResult de100_file_get_mod_time(const char *filename) {
   struct stat de100_file_stat;
 
   if (stat(filename, &de100_file_stat) != 0) {
-    int err = errno;
+    int32 err = errno;
     result.error_code = errno_to_de100_file_error(err);
 
 #if DE100_INTERNAL && DE100_SLOW
@@ -273,7 +274,7 @@ De100FileTimeResult de100_file_get_mod_time(const char *filename) {
   struct stat de100_file_stat;
 
   if (stat(filename, &de100_file_stat) != 0) {
-    int err = errno;
+    int32 err = errno;
     result.error_code = errno_to_de100_file_error(err);
 
 #if DE100_INTERNAL && DE100_SLOW
@@ -346,13 +347,13 @@ De100FileResult de100_file_copy(const char *source, const char *dest) {
   // ─────────────────────────────────────────────────────────────────────
   // POSIX - Manual copy with read/write
   // ─────────────────────────────────────────────────────────────────────
-  int source_fd = -1;
-  int dest_fd = -1;
+  int32 source_fd = -1;
+  int32 dest_fd = -1;
 
   // Open source file
   source_fd = open(source, O_RDONLY);
   if (source_fd < 0) {
-    int err = errno;
+    int32 err = errno;
 #if DE100_INTERNAL && DE100_SLOW
     posix_set_error_detail("de100_file_copy:open_source", source, err);
 #endif
@@ -362,7 +363,7 @@ De100FileResult de100_file_copy(const char *source, const char *dest) {
   // Get source file info
   struct stat source_stat;
   if (fstat(source_fd, &source_stat) < 0) {
-    int err = errno;
+    int32 err = errno;
     close(source_fd);
 #if DE100_INTERNAL && DE100_SLOW
     posix_set_error_detail("de100_file_copy:fstat", source, err);
@@ -387,7 +388,7 @@ De100FileResult de100_file_copy(const char *source, const char *dest) {
   // Create destination file with same permissions
   dest_fd = open(dest, O_WRONLY | O_CREAT | O_TRUNC, source_stat.st_mode);
   if (dest_fd < 0) {
-    int err = errno;
+    int32 err = errno;
     close(source_fd);
 #if DE100_INTERNAL && DE100_SLOW
     posix_set_error_detail("de100_file_copy:open_dest", dest, err);
@@ -411,7 +412,7 @@ De100FileResult de100_file_copy(const char *source, const char *dest) {
     ssize_t bytes_written = write(dest_fd, buffer, (size_t)bytes_read);
 
     if (bytes_written != bytes_read) {
-      int err = errno;
+      int32 err = errno;
       close(source_fd);
       close(dest_fd);
 
@@ -428,7 +429,7 @@ De100FileResult de100_file_copy(const char *source, const char *dest) {
 
   // Check for read error
   if (bytes_read < 0) {
-    int err = errno;
+    int32 err = errno;
     close(source_fd);
     close(dest_fd);
 
@@ -534,7 +535,7 @@ De100FileExistsResult de100_file_exists(const char *filename) {
 #endif
     }
   } else {
-    int err = errno;
+    int32 err = errno;
 
     // "Not found" is a valid answer, not an error
     if (err == ENOENT || err == ENOTDIR) {
@@ -608,7 +609,7 @@ De100FileSizeResult de100_file_get_size(const char *filename) {
   struct stat de100_file_stat;
 
   if (stat(filename, &de100_file_stat) != 0) {
-    int err = errno;
+    int32 err = errno;
     result.error_code = errno_to_de100_file_error(err);
 #if DE100_INTERNAL && DE100_SLOW
     posix_set_error_detail("de100_file_get_size", filename, err);
@@ -667,7 +668,7 @@ De100FileResult de100_file_delete(const char *filename) {
   // POSIX
   // ─────────────────────────────────────────────────────────────────────
   if (unlink(filename) != 0) {
-    int err = errno;
+    int32 err = errno;
 
     // Idempotent: already deleted = success
     if (err == ENOENT) {
@@ -682,6 +683,319 @@ De100FileResult de100_file_delete(const char *filename) {
 
   return make_success();
 #endif
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FILE OPEN
+// ═══════════════════════════════════════════════════════════════════════════
+
+De100FileOpenResult de100_file_open(const char *filename,
+                                    De100FileOpenFlags flags) {
+  De100FileOpenResult result = {.fd = -1, .success = false};
+
+  if (!filename) {
+    result.error_code = FILE_ERROR_INVALID_PATH;
+    SET_ERROR_DETAIL("[de100_file_open] NULL filename provided");
+    return result;
+  }
+
+#if defined(_WIN32)
+  // Windows implementation
+  DWORD access = 0;
+  DWORD creation = OPEN_EXISTING;
+
+  if (flags & DE100_FILE_READ)
+    access |= GENERIC_READ;
+  if (flags & DE100_FILE_WRITE)
+    access |= GENERIC_WRITE;
+
+  if (flags & DE100_FILE_CREATE) {
+    if (flags & DE100_FILE_TRUNCATE) {
+      creation = CREATE_ALWAYS;
+    } else {
+      creation = OPEN_ALWAYS;
+    }
+  } else if (flags & DE100_FILE_TRUNCATE) {
+    creation = TRUNCATE_EXISTING;
+  }
+
+  HANDLE handle = CreateFileA(filename, access, FILE_SHARE_READ, NULL, creation,
+                              FILE_ATTRIBUTE_NORMAL, NULL);
+  if (handle == INVALID_HANDLE_VALUE) {
+    DWORD error_code = GetLastError();
+    result.error_code = win32_error_to_de100_file_error(error_code);
+#if DE100_INTERNAL && DE100_SLOW
+    win32_set_error_detail("de100_file_open", filename, error_code);
+#endif
+    return result;
+  }
+
+  result.fd = _open_osfhandle((intptr_t)handle, 0);
+  if (result.fd == -1) {
+    CloseHandle(handle);
+    result.error_code = FILE_ERROR_UNKNOWN;
+    return result;
+  }
+
+#else
+  // POSIX implementation
+  int32 posix_flags = 0;
+
+  if ((flags & DE100_FILE_READ) && (flags & DE100_FILE_WRITE)) {
+    posix_flags = O_RDWR;
+  } else if (flags & DE100_FILE_WRITE) {
+    posix_flags = O_WRONLY;
+  } else {
+    posix_flags = O_RDONLY;
+  }
+
+  if (flags & DE100_FILE_CREATE)
+    posix_flags |= O_CREAT;
+  if (flags & DE100_FILE_TRUNCATE)
+    posix_flags |= O_TRUNC;
+  if (flags & DE100_FILE_APPEND)
+    posix_flags |= O_APPEND;
+
+  // 0644 = rw-r--r-- permissions for new files
+  result.fd = open(filename, posix_flags, 0644);
+  if (result.fd < 0) {
+    int32 err = errno;
+    result.error_code = errno_to_de100_file_error(err);
+#if DE100_INTERNAL && DE100_SLOW
+    posix_set_error_detail("de100_file_open", filename, err);
+#endif
+    return result;
+  }
+#endif
+
+  result.success = true;
+  result.error_code = FILE_SUCCESS;
+  CLEAR_ERROR_DETAIL();
+  return result;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FILE CLOSE
+// ═══════════════════════════════════════════════════════════════════════════
+
+De100FileResult de100_file_close(int32 fd) {
+  if (fd < 0) {
+    SET_ERROR_DETAIL("[de100_file_close] Invalid file descriptor: %d", fd);
+    return make_error(FILE_ERROR_INVALID_FD);
+  }
+
+#if defined(_WIN32)
+  if (_close(fd) != 0) {
+    return make_error(FILE_ERROR_UNKNOWN);
+  }
+#else
+  if (close(fd) != 0) {
+    int32 err = errno;
+#if DE100_INTERNAL && DE100_SLOW
+    SET_ERROR_DETAIL("[de100_file_close] close() failed: %s", strerror(err));
+#endif
+    return make_error(errno_to_de100_file_error(err));
+  }
+#endif
+
+  return make_success();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// READ ALL BYTES
+// ═══════════════════════════════════════════════════════════════════════════
+
+De100FileIOResult de100_file_read_all(int32 fd, void *buffer, size_t size) {
+  De100FileIOResult result = {.bytes_processed = 0, .success = false};
+
+  if (fd < 0) {
+    result.error_code = FILE_ERROR_INVALID_FD;
+    SET_ERROR_DETAIL("[de100_file_read_all] Invalid file descriptor: %d", fd);
+    return result;
+  }
+
+  if (!buffer && size > 0) {
+    result.error_code = FILE_ERROR_INVALID_PATH; // Reusing for invalid buffer
+    SET_ERROR_DETAIL("[de100_file_read_all] NULL buffer with size %zu", size);
+    return result;
+  }
+
+  uint8 *ptr = (uint8 *)buffer;
+  size_t remaining = size;
+
+  while (remaining > 0) {
+#if defined(_WIN32)
+    int32 bytes_read = _read(fd, ptr, (uint32)remaining);
+#else
+    ssize_t bytes_read = read(fd, ptr, remaining);
+#endif
+
+    if (bytes_read < 0) {
+#if defined(_WIN32)
+      int32 err = errno;
+#else
+      int32 err = errno;
+      if (err == EINTR) {
+        // Interrupted by signal, retry
+        continue;
+      }
+#endif
+      result.error_code = errno_to_de100_file_error(err);
+#if DE100_INTERNAL && DE100_SLOW
+      SET_ERROR_DETAIL("[de100_file_read_all] read() failed: %s",
+                       strerror(err));
+#endif
+      return result;
+    }
+
+    if (bytes_read == 0) {
+      // EOF - didn't get all the bytes we wanted
+      result.error_code = FILE_ERROR_EOF;
+      SET_ERROR_DETAIL("[de100_file_read_all] EOF after %zu bytes, wanted %zu",
+                       result.bytes_processed, size);
+      return result;
+    }
+
+    ptr += bytes_read;
+    remaining -= (size_t)bytes_read;
+    result.bytes_processed += (size_t)bytes_read;
+  }
+
+  result.success = true;
+  result.error_code = FILE_SUCCESS;
+  CLEAR_ERROR_DETAIL();
+  return result;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WRITE ALL BYTES
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Writes `size` bytes from `buffer` to the file descriptor `fd`.
+//
+// APPEND vs OVERWRITE BEHAVIOR:
+// This function writes from the current file position. The behavior depends on
+// how the file was opened:
+//
+//   - DEFAULT (OVERWRITE): If opened without DE100_FILE_APPEND, writes start
+//     at the current position (typically 0 for newly opened files), overwriting
+//     existing data.
+//
+//   - APPEND MODE: If opened with DE100_FILE_APPEND flag, the OS automatically
+//     repositions writes to the end of the file before each write (atomic).
+//
+// NOTE: This is a "write all or fail" function - it retries partial writes
+// until all bytes are written or an error occurs.
+//
+// RETURNS: De100FileIOResult with bytes_processed set to total bytes written.
+// ═════════════════════════════════════════════════════════════════════════
+
+De100FileIOResult de100_file_write_all(int32 fd, const void *buffer,
+                                       size_t size) {
+  De100FileIOResult result = {.bytes_processed = 0, .success = false};
+
+  if (fd < 0) {
+    result.error_code = FILE_ERROR_INVALID_FD;
+    SET_ERROR_DETAIL("[de100_file_write_all] Invalid file descriptor: %d", fd);
+    return result;
+  }
+
+  if (!buffer && size > 0) {
+    result.error_code = FILE_ERROR_INVALID_PATH;
+    SET_ERROR_DETAIL("[de100_file_write_all] NULL buffer with size %zu", size);
+    return result;
+  }
+
+  const uint8 *ptr = (const uint8 *)buffer;
+  size_t remaining = size;
+
+  while (remaining > 0) {
+#if defined(_WIN32)
+    int32 bytes_written = _write(fd, ptr, (uint32)remaining);
+#else
+    ssize_t bytes_written = write(fd, ptr, remaining);
+#endif
+
+    if (bytes_written < 0) {
+#if defined(_WIN32)
+      int32 err = errno;
+#else
+      int32 err = errno;
+      if (err == EINTR) {
+        // Interrupted by signal, retry
+        continue;
+      }
+#endif
+      result.error_code = errno_to_de100_file_error(err);
+#if DE100_INTERNAL && DE100_SLOW
+      SET_ERROR_DETAIL("[de100_file_write_all] write() failed: %s",
+                       strerror(err));
+#endif
+      return result;
+    }
+
+    ptr += bytes_written;
+    remaining -= (size_t)bytes_written;
+    result.bytes_processed += (size_t)bytes_written;
+  }
+
+  result.success = true;
+  result.error_code = FILE_SUCCESS;
+  CLEAR_ERROR_DETAIL();
+  return result;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FILE SEEK
+// ═══════════════════════════════════════════════════════════════════════════
+
+De100FileSizeResult de100_file_seek(int32 fd, int64 offset,
+                                    De100FileSeekOrigin origin) {
+  De100FileSizeResult result = {.value = -1, .success = false};
+
+  if (fd < 0) {
+    result.error_code = FILE_ERROR_INVALID_FD;
+    SET_ERROR_DETAIL("[de100_file_seek] Invalid file descriptor: %d", fd);
+    return result;
+  }
+
+  int32 whence;
+  switch (origin) {
+  case DE100_SEEK_SET:
+    whence = SEEK_SET;
+    break;
+  case DE100_SEEK_CUR:
+    whence = SEEK_CUR;
+    break;
+  case DE100_SEEK_END:
+    whence = SEEK_END;
+    break;
+  default:
+    result.error_code = FILE_ERROR_UNKNOWN;
+    SET_ERROR_DETAIL("[de100_file_seek] Invalid origin: %d", origin);
+    return result;
+  }
+
+#if defined(_WIN32)
+  int64 new_pos = _lseeki64(fd, offset, whence);
+#else
+  off_t new_pos = lseek(fd, (off_t)offset, whence);
+#endif
+
+  if (new_pos < 0) {
+    int32 err = errno;
+    result.error_code = FILE_ERROR_SEEK_FAILED;
+#if DE100_INTERNAL && DE100_SLOW
+    SET_ERROR_DETAIL("[de100_file_seek] lseek() failed: %s", strerror(err));
+#endif
+    return result;
+  }
+
+  result.value = (int64)new_pos;
+  result.success = true;
+  result.error_code = FILE_SUCCESS;
+  CLEAR_ERROR_DETAIL();
+  return result;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -706,8 +1020,7 @@ const char *de100_file_strerror(De100FileErrorCode code) {
     return "Path is a directory, expected a file";
 
   case FILE_ERROR_NOT_A_FILE:
-    return "Path exists but is not a regular file (symlink, device, socket, "
-           "etc.)";
+    return "Path exists but is not a regular file";
 
   case FILE_ERROR_DISK_FULL:
     return "Disk full or quota exceeded";
@@ -726,6 +1039,15 @@ const char *de100_file_strerror(De100FileErrorCode code) {
 
   case FILE_ERROR_SIZE_MISMATCH:
     return "File size mismatch after operation (possible corruption)";
+
+  case FILE_ERROR_SEEK_FAILED:
+    return "Seek operation failed";
+
+  case FILE_ERROR_EOF:
+    return "Unexpected end of file";
+
+  case FILE_ERROR_INVALID_FD:
+    return "Invalid file descriptor";
 
   case FILE_ERROR_UNKNOWN:
   default:

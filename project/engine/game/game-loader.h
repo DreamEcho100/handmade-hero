@@ -1,5 +1,5 @@
-#ifndef DE100_HERO_game_LOADER_H
-#define DE100_HERO_game_LOADER_H
+#ifndef DE100_GAME_LOADER_H
+#define DE100_GAME_LOADER_H
 
 #include "base.h"
 
@@ -125,6 +125,14 @@ typedef GAME_GET_AUDIO_SAMPLES(game_get_audio_samples_t);
 // ═══════════════════════════════════════════════════════════════════════════
 // GAME CODE STRUCTURE
 // ═══════════════════════════════════════════════════════════════════════════
+typedef struct {
+  char *game_main_lib_path;
+  char *game_main_lib_tmp_path;
+  char *game_startup_lib_path;
+  char *game_startup_lib_tmp_path;
+  char *game_init_lib_path;
+  char *game_init_lib_tmp_path;
+} GameCodePaths;
 
 typedef struct {
   De100DllHandle game_code_lib;
@@ -132,7 +140,9 @@ typedef struct {
 
   game_update_and_render_t *update_and_render;
   game_get_audio_samples_t *get_audio_samples;
+
   game_startup_t *startup;
+
   game_init_t *init;
 
   bool32 is_valid;
@@ -150,18 +160,6 @@ typedef enum {
   GAME_CODE_CATEGORY_ANY = GAME_CODE_CATEGORY_MAIN | GAME_CODE_CATEGORY_INIT |
                            GAME_CODE_CATEGORY_STARTUP
 } GAME_CODE_CATEGORIES;
-
-typedef struct {
-  char *game_main_lib_path;
-  char *game_main_lib_tmp_path;
-
-  char *game_startup_lib_path;
-  char *game_startup_lib_tmp_path;
-
-  char *game_init_lib_path;
-  char *game_init_lib_tmp_path;
-} LoadGameCodeConfig;
-
 /**
  * Load game code from a dynamic library.
  *
@@ -176,7 +174,7 @@ typedef struct {
  * Never exits or crashes - always returns a valid GameCode structure.
  * On error, uses stub functions and sets is_valid to false.
  */
-int load_game_code(GameCode *game_code, LoadGameCodeConfig *config,
+int load_game_code(GameCode *game_code, GameCodePaths *game_code_paths,
                    GAME_CODE_CATEGORIES category);
 
 /**
@@ -203,7 +201,7 @@ void unload_game_code(GameCode *game_code);
 bool32 game_main_code_needs_reload(GameCode *game_code, char *source_lib_name);
 
 void handle_game_reload_check(GameCode *game_code,
-                              LoadGameCodeConfig *load_game_code_config);
+                              GameCodePaths *game_code_paths);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // STUB FUNCTIONS
@@ -233,4 +231,4 @@ GAME_STARTUP(game_startup_stub);
  */
 GAME_INIT(game_init_stub);
 
-#endif // DE100_HERO_game_LOADER_H
+#endif // DE100_GAME_LOADER_H

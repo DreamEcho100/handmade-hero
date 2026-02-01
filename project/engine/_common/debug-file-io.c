@@ -15,9 +15,9 @@
 #if DE100_SLOW
 
 #if defined(_WIN32)
-static __declspec(thread) char g_last_error_detail[1024];
+de100_file_scoped_global_var __declspec(thread) char g_last_error_detail[1024];
 #else
-static __thread char g_last_error_detail[1024];
+de100_file_scoped_global_var __thread char g_last_error_detail[1024];
 #endif
 
 #define SET_ERROR_DETAIL(...)                                                  \

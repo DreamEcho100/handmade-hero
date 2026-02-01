@@ -48,11 +48,11 @@ typedef struct {
   // A permanent block of memory that the game can use between calls to
   // `game_update_and_render`. This is where you should store all your game
   // state!
-  De100MemoryBlock permanent_storage;
+  void* permanent_storage;
   // A temporary block of memory that the game can use between calls to
   // `game_update_and_render`. This is where you should store all your
   // scratch data!
-  De100MemoryBlock transient_storage;
+  void* transient_storage;
   // Size of the permanent storage block in bytes
   uint64 permanent_storage_size;
   // Size of the temporary storage block in bytes
@@ -62,5 +62,49 @@ typedef struct {
 } GameMemory;
 
 typedef struct GameState GameState;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PLATFORM STATE
+// ═══════════════════════════════════════════════════════════════════════════
+// This holds platform-level state that persists across frames.
+// It's separate from GameState (which is game logic) because:
+//   1. The platform layer owns memory allocation
+//   2. Recording/playback is a platform debugging feature
+//   3. Game code shouldn't know about file handles
+// ═══════════════════════════════════════════════════════════════════════════
+
+typedef struct {
+  // ─────────────────────────────────────────────────────────────────────
+  // MEMORY TRACKING
+  // ─────────────────────────────────────────────────────────────────────
+  // We need to know where game memory lives and how big it is
+  // so we can snapshot/restore it for recording/playback.
+  // ─────────────────────────────────────────────────────────────────────
+  uint64 total_size;       // permanent_storage_size + transient_storage_size
+  void* game_memory; // Pointer to the allocated block
+
+  // ─────────────────────────────────────────────────────────────────────
+  // INPUT RECORDING STATE
+  // ─────────────────────────────────────────────────────────────────────
+  // recording_handle: File descriptor for writing recorded inputs
+  // input_recording_index: Which "slot" we're recording to (0 = not recording)
+  //
+  // Casey uses "slots" (1, 2, 3...) to allow multiple recordings.
+  // For now, we just use slot 1, but the infrastructure supports more.
+  // ─────────────────────────────────────────────────────────────────────
+  int32 recording_fd;          // File descriptor (-1 = not recording)
+  int32 input_recording_index; // 0 = not recording, N = recording to slot N
+
+  // ─────────────────────────────────────────────────────────────────────
+  // INPUT PLAYBACK STATE
+  // ─────────────────────────────────────────────────────────────────────
+  // playback_handle: File descriptor for reading recorded inputs
+  // input_playing_index: Which "slot" we're playing from (0 = not playing)
+  // ─────────────────────────────────────────────────────────────────────
+  int32 playback_fd;         // File descriptor (-1 = not playing)
+  int32 input_playing_index; // 0 = not playing, N = playing from slot N
+
+} GameMemoryState;
+
 
 #endif // DE100_GAME_De100_MEMORY_H

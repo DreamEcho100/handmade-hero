@@ -14,7 +14,7 @@ GAME_INIT(game_init) {
   (void)input;
   (void)buffer;
   HandMadeHeroGameState *game_state =
-      (HandMadeHeroGameState *)memory->permanent_storage.base;
+      (HandMadeHeroGameState *)memory->permanent_storage;
 
   if (!memory->is_initialized) { // false (skip!)
                                  // Never runs again!

@@ -32,8 +32,8 @@
 // Windows: Cache the performance counter frequency
 de100_file_scoped_fn inline int64 win32_get_frequency(void) {
   // Thread-safe on Windows due to static initialization guarantees
-  static LARGE_INTEGER frequency = {0};
-  static bool initialized = false;
+  local_persist_var LARGE_INTEGER frequency = {0};
+  local_persist_var bool initialized = false;
 
   if (!initialized) {
     QueryPerformanceFrequency(&frequency);
@@ -53,7 +53,7 @@ typedef struct {
 } CachedTimebase;
 
 de100_file_scoped_fn inline CachedTimebase macos_get_timebase(void) {
-  static CachedTimebase cached = {0};
+  local_persist_var CachedTimebase cached = {0};
 
   if (!cached.initialized) {
     mach_timebase_info_data_t info;

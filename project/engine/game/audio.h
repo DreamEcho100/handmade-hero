@@ -46,7 +46,7 @@ typedef struct {
     
     // Two ways to access the buffer (platform chooses which to use):
     // int16 *samples;            // Simple pointer (preferred for game code)
-    De100MemoryBlock samples_block;  // Full block info (for platform)
+    void *samples;            // Simple pointer (preferred for game code)
 } GameAudioOutputBuffer;
 
 #endif // DE100_GAME_AUDIO_H
