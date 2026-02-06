@@ -3,7 +3,7 @@
 
 #include "audio.h"
 #include "backbuffer.h"
-#include "input.h"
+#include "inputs.h"
 #include "memory.h"
 #include <stdbool.h>
 

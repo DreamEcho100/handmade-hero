@@ -206,7 +206,7 @@ De100FileTimeResult de100_file_get_mod_time(const char *filename) {
   De100FileTimeResult result = {0};
 
   // ─────────────────────────────────────────────────────────────────────
-  // Validate input
+  // Validate inputs
   // ─────────────────────────────────────────────────────────────────────
   if (!filename) {
     result.error_code = FILE_ERROR_INVALID_PATH;
@@ -317,7 +317,7 @@ real64 de100_file_time_diff(const PlatformTimeSpec *a,
 
 De100FileResult de100_file_copy(const char *source, const char *dest) {
   // ─────────────────────────────────────────────────────────────────────
-  // Validate input
+  // Validate inputs
   // ─────────────────────────────────────────────────────────────────────
   if (!source || !dest) {
     SET_ERROR_DETAIL(

@@ -1,7 +1,7 @@
 #include "main.h"
 #include "../../engine/_common/base.h"
 #include "../../engine/game/backbuffer.h"
-#include "../../engine/game/input.h"
+#include "../../engine/game/inputs.h"
 #include <fcntl.h>
 #include <math.h>
 #include <stdbool.h>
@@ -14,36 +14,66 @@ de100_file_scoped_global_var inline real32 apply_deadzone(real32 value) {
   }
   return value;
 }
+/**
+ * Wraps a Y coordinate to stay within [0, height).
+ *
+ * Handles both positive overflow (y >= height) and negative values (y < 0).
+ *
+ * Examples (assuming height = 720):
+ *   wrap(5)    -> 5      (already valid)
+ *   wrap(720)  -> 0      (wraps to top)
+ *   wrap(725)  -> 5      (wraps around)
+ *   wrap(-1)   -> 719    (wraps to bottom)
+ *   wrap(-5)   -> 715    (wraps around)
+ *
+ * Formula breakdown for y = -5, height = 720:
+ *   Step 1: y % height        = -5 % 720  = -5   (C allows negative modulo)
+ *   Step 2: + height          = -5 + 720  = 715  (shift to positive range)
+ *   Step 3: % height          = 715 % 720 = 715  (ensure < height)
+ *
+ * @param y           The Y coordinate (can be negative or >= height)
+ * @param backbuffer  Buffer containing height dimension
+ * @return            Wrapped Y in range [0, height)
+ */
+de100_file_scoped_global_var inline int32
+player_wrap_y(int32 y, GameBackBuffer *backbuffer) {
+  return ((y % backbuffer->height) + backbuffer->height) % backbuffer->height;
+}
 
-// de100_file_scoped_global_var inline bool
-// controller_has_input(GameControllerInput *controller) {
-//   return (fabsf(controller->stick_avg_x) > CONTROLLER_DEADZONE ||
-//           fabsf(controller->stick_avg_y) > CONTROLLER_DEADZONE ||
-//           controller->move_up.ended_down ||
-//           controller->move_down.ended_down ||
-//           controller->move_left.ended_down ||
-//           controller->move_right.ended_down);
-// }
+de100_file_scoped_global_var inline int32
+player_wrap_x(int32 x, GameBackBuffer *backbuffer) {
+  return ((x % backbuffer->width) + backbuffer->width) % backbuffer->width;
+}
 
-de100_file_scoped_global_var void render_player(GameBackBuffer *backbuffer,
-                                                int pos_x, int pos_y) {
-  uint8 *end_of_buffer =
-      (uint8 *)backbuffer->memory.base + backbuffer->pitch * backbuffer->height;
+// render_player(GameBackBuffer *backbuffer, int32 *player_x, int32 *player_y)
+de100_file_scoped_global_var inline void
+render_player(GameBackBuffer *backbuffer, int32 player_x, int32 player_y) {
+  // uint8 *end_of_buffer = (uint8 *)(backbuffer->memory.base) +
+  //                        (backbuffer->pitch * backbuffer->height);
+  uint32 color = 0xFFFFFFFF;
 
-  uint32 color = 0xFFFFFFFF; // White
-  int top = pos_y;
-  int bottom = pos_y + 10;
+  local_persist_var int32 player_height = 10;
+  local_persist_var int32 player_width = 10;
+  // Wrap Y position
+  int32 wrapped_top = player_wrap_y(player_y, backbuffer);
+  int32 wrapped_bottom = player_wrap_y(player_y + player_height, backbuffer);
 
-  for (int X = pos_x; X < pos_x + 10; ++X) {
-    uint8 *pixel = ((uint8 *)backbuffer->memory.base +
-                    X * backbuffer->bytes_per_pixel + top * backbuffer->pitch);
-    for (int Y = top; Y < bottom; ++Y) {
-      // Bounds checking!
-      if ((pixel >= (uint8 *)backbuffer->memory.base) &&
-          ((pixel + 4) <= (uint8 *)end_of_buffer)) {
-        *(uint32 *)pixel = color;
-      }
-      pixel += backbuffer->pitch;
+  for (int32 x = player_x; x < player_x + player_width; ++x) {
+    int32 wrapped_x = player_wrap_x(x, backbuffer);
+
+    for (int32 y = wrapped_top; y < wrapped_bottom; ++y) {
+      int32 wrapped_y = player_wrap_y(y, backbuffer);
+      uint8 *pixel_pos = (
+          // Initial pos to start from
+          (uint8 *)backbuffer->memory.base
+          // offset to the row/x postion
+          + wrapped_x * backbuffer->bytes_per_pixel
+          // offset to the column/y postion
+          + wrapped_y * backbuffer->pitch);
+
+      // NOTE: if we don't cast it to `uint32 *` it will only use the first
+      // byte of the color which will lead to incorrect colors!
+      *(uint32 *)pixel_pos = color;
     }
   }
 }
@@ -98,21 +128,22 @@ void testPixelAnimation(GameBackBuffer *backbuffer,
 }
 
 // Handle game controls
-void handle_controls(GameControllerInput *input,
+void handle_controls(GameControllerInput *inputs,
                      HandMadeHeroGameState *game_state) {
-
-  if (input->action_down.ended_down) {
+  if (inputs->action_down.ended_down && game_state->player_state.t_jump <= 0) {
     game_state->player_state.t_jump = 4.0; // Start jump
   }
 
   // Simple jump arc
+  int jump_offset = 0;
   if (game_state->player_state.t_jump > 0) {
-    game_state->player_state.y +=
+    jump_offset =
         (int)(5.0f * sinf(0.5f * M_PI * game_state->player_state.t_jump));
+    game_state->player_state.y += jump_offset;
   }
   game_state->player_state.t_jump -= 0.033f; // Tick down jump timer
 
-  if (input->is_analog) {
+  if (inputs->is_analog) {
     // ═════════════════════════════════════════════════════════
     // ANALOG MOVEMENT (Joystick)
     // ═════════════════════════════════════════════════════════
@@ -123,8 +154,8 @@ void handle_controls(GameControllerInput *input,
     // stick_avg_x/stick_avg_y are NORMALIZED (-1.0 to +1.0)!
     // ═════════════════════════════════════════════════════════
 
-    real32 stick_avg_x = apply_deadzone(input->stick_avg_x);
-    real32 stick_avg_y = apply_deadzone(input->stick_avg_y);
+    real32 stick_avg_x = apply_deadzone(inputs->stick_avg_x);
+    real32 stick_avg_y = apply_deadzone(inputs->stick_avg_y);
 
     // Horizontal stick controls blue offset
     game_state->gradient_state.offset_x -= (int)(4.0f * stick_avg_x);
@@ -140,19 +171,19 @@ void handle_controls(GameControllerInput *input,
     game_state->player_state.y += (int)(4.0f * stick_avg_y * game_state->speed);
 
   } else {
-    if (input->move_up.ended_down) {
+    if (inputs->move_up.ended_down) {
       game_state->gradient_state.offset_y += game_state->speed;
       game_state->player_state.y -= game_state->speed;
     }
-    if (input->move_down.ended_down) {
+    if (inputs->move_down.ended_down) {
       game_state->gradient_state.offset_y -= game_state->speed;
       game_state->player_state.y += game_state->speed;
     }
-    if (input->move_left.ended_down) {
+    if (inputs->move_left.ended_down) {
       game_state->gradient_state.offset_x += game_state->speed;
       game_state->player_state.x -= game_state->speed;
     }
-    if (input->move_right.ended_down) {
+    if (inputs->move_right.ended_down) {
       game_state->gradient_state.offset_x -= game_state->speed;
       game_state->player_state.x += game_state->speed;
     }
@@ -178,16 +209,13 @@ GAME_UPDATE_AND_RENDER(game_update_and_render) {
   // Find active controller
   GameControllerInput *active_controller = NULL;
 
-  // Priority 1: Check for active joystick input (controllers 1-4)
+  // Priority 1: Check for active joystick inputs (controllers 1-4)
   for (int i = 0; i < MAX_CONTROLLER_COUNT; i++) {
 
     if (i == KEYBOARD_CONTROLLER_INDEX)
       continue;
-    DEV_ASSERT((&input->controllers[i].terminator -
-                &input->controllers[i].buttons[0]) ==
-               (ArraySize(input->controllers[i].buttons)));
 
-    GameControllerInput *c = &input->controllers[i];
+    GameControllerInput *c = &inputs->controllers[i];
     if (c->is_connected) {
       active_controller = c;
       break;
@@ -196,7 +224,7 @@ GAME_UPDATE_AND_RENDER(game_update_and_render) {
 
   // Fallback: Always use keyboard (controller[0]) if nothing else
   if (!active_controller) {
-    active_controller = &input->controllers[KEYBOARD_CONTROLLER_INDEX];
+    active_controller = &inputs->controllers[KEYBOARD_CONTROLLER_INDEX];
   }
 
 #if DE100_INTERNAL
@@ -229,6 +257,14 @@ GAME_UPDATE_AND_RENDER(game_update_and_render) {
 
   render_weird_gradient(buffer, game_state);
   render_player(buffer, game_state->player_state.x, game_state->player_state.y);
+  // Render indicators for pressed mouse buttons
+  for (int button_index = 0; button_index < 5; ++button_index) {
+    if (inputs->mouse_buttons[button_index].ended_down) {
+      render_player(buffer,
+                    // (10 + 20 * button_index), 0
+                    inputs->mouse_x, inputs->mouse_y);
+    }
+  }
 
   testPixelAnimation(buffer, game_state);
 }

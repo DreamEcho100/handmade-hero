@@ -20,6 +20,11 @@ set -e
 
 DE100_ENGINE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# # ═══════════════════════════════════════════════════════════════
+# # GAME-SPECIFIC INPUT HEADER (passed to engine build)
+# # ═══════════════════════════════════════════════════════════════
+# export GAME_INPUT_HEADER="${SCRIPT_DIR}/src/inputs.h"
+
 # ───────────────────────────────────────────────────────────────────────────────
 # OS DETECTION
 # ───────────────────────────────────────────────────────────────────────────────
@@ -165,13 +170,14 @@ DE100_SRC_GAME=(
     "$DE100_ENGINE_DIR/game/debug-file-io.c"
     "$DE100_ENGINE_DIR/game/config.c"
     "$DE100_ENGINE_DIR/game/game-loader.c"
-    "$DE100_ENGINE_DIR/game/input.c"
+    "$DE100_ENGINE_DIR/game/inputs.c"
     "$DE100_ENGINE_DIR/game/memory.c"
     "$DE100_ENGINE_DIR/game/thread.c"
 )
 
 DE100_SRC_PLATFORM_COMMON=(
-    "$DE100_ENGINE_DIR/platforms/_common/input-recording.c"
+    "$DE100_ENGINE_DIR/platforms/_common/replay-buffer.c"
+    "$DE100_ENGINE_DIR/platforms/_common/inputs-recording.c"
     "$DE100_ENGINE_DIR/platforms/_common/adaptive-fps.c"
     "$DE100_ENGINE_DIR/platforms/_common/frame-timing.c"
 )
@@ -187,7 +193,8 @@ DE100_BACKEND=""
 
 de100_set_backend() {
     local backend="$1"
-    local DE100_INTERNAL="$2"
+    local GAME_DIR="$2"
+    local DE100_INTERNAL="$3"
     
     if [[ "$DE100_INTERNAL" == "1" ]]; then
         DE100_SRC_PLATFORM_COMMON+=(
@@ -211,9 +218,13 @@ de100_set_backend() {
     DE100_SRC_BACKEND=(
         "$backend_dir/audio.c"
         "$backend_dir/backend.c"
-        "$backend_dir/inputs/joystick.c"
-        "$backend_dir/inputs/keyboard.c"
+        # "$backend_dir/inputs/joystick.c"
+        # "$backend_dir/inputs/keyboard.c"
         "$backend_dir/hooks/main.c"
+        #
+        "$GAME_DIR/adapters/$backend/inputs/keyboard.c"
+        "$GAME_DIR/adapters/$backend/inputs/joystick.c"
+        "$GAME_DIR/adapters/$backend/inputs/mouse.c"
     )
     
     case "$backend" in

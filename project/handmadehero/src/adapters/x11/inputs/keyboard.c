@@ -1,21 +1,22 @@
-#include "keyboard.h"
-#include "../../../game/base.h"
-#include "../../../game/input.h"
-#include "../../_common/input-recording.h"
-#include "../audio.h"
+// IWYU pragma: keep // clangd: unused-include-ignore // NOLINTNEXTLINE(clang-diagnostic-unused-include)
+#include "../../../inputs.h"
+
+#include "../../../../../engine/game/base.h"
+#include "../../../../../engine/game/inputs.h"
+#include "../../../../../engine/platforms/_common/inputs-recording.h"
+#include "../../../../../engine/platforms/x11/audio.h"
+#include "../../../../../engine/platforms/x11/inputs/keyboard.h"
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <stdio.h>
 
-void handleEventKeyPress(XEvent *event, GameInput *new_game_input,
-                         PlatformAudioConfig *platform_audio_config,
-                         GameMemoryState *game_memory_state,
-                         GameCodePaths *game_code_paths) {
+void handleEventKeyPress(XEvent *event, EngineGameState *game_state,
+                         EnginePlatformState *platform_state) {
   KeySym key = XLookupKeysym(&event->xkey, 0);
   // printf("pressed\n");
 
   GameControllerInput *new_controller1 =
-      &new_game_input->controllers[KEYBOARD_CONTROLLER_INDEX];
+      &game_state->inputs->controllers[KEYBOARD_CONTROLLER_INDEX];
 
   switch (key) {
   case (XK_F5): {
@@ -95,7 +96,7 @@ void handleEventKeyPress(XEvent *event, GameInput *new_game_input,
 
   case XK_F1: {
     printf("F1 pressed - showing audio debug\n");
-    linux_debug_audio_latency(platform_audio_config);
+    linux_debug_audio_latency(&platform_state->config.audio);
     break;
   }
   // ← ADD THIS: Pause key (P key)
@@ -109,19 +110,44 @@ void handleEventKeyPress(XEvent *event, GameInput *new_game_input,
   // Input Recording Toggle (Casey's Day 23)
   case (XK_l):
   case (XK_L): {
-    printf("🎬 L pressed - Toggling input recording/playback\n");
-    input_recording_toggle(game_code_paths->exe_directory.path,
-                           game_memory_state);
+    printf("🎬 L pressed - Toggling inputs recording/playback\n");
+    // Clear inputs when playback should stop, to avoid "stuck keys"
+    INPUT_RECORDING_TOGGLE_RESULT_CODE result =
+        input_recording_toggle(platform_state->paths.exe_directory.path,
+                               &platform_state->memory_state);
+    if (result == INPUT_RECORDING_TOGGLE_STOPPED_PLAYBACK) {
+      for (uint32 c = 0; c < MAX_CONTROLLER_COUNT; c++) {
+        GameControllerInput *ctrl = &game_state->inputs->controllers[c];
+        for (uint32 b = 0; b < ArraySize(ctrl->buttons); b++) {
+          ctrl->buttons[b].ended_down = false;
+          ctrl->buttons[b].half_transition_count = 0;
+        }
+        ctrl->stick_avg_x = 0.0f;
+        ctrl->stick_avg_y = 0.0f;
+      }
+      for (uint32 c = 0; c < MAX_CONTROLLER_COUNT; c++) {
+        GameControllerInput *ctrl = &platform_state->old_inputs->controllers[c];
+        for (uint32 b = 0; b < ArraySize(ctrl->buttons); b++) {
+          ctrl->buttons[b].ended_down = false;
+          ctrl->buttons[b].half_transition_count = 0;
+        }
+        ctrl->stick_avg_x = 0.0f;
+        ctrl->stick_avg_y = 0.0f;
+      }
+    }
+
     break;
   }
   }
 }
 
-void handleEventKeyRelease(XEvent *event, GameInput *new_game_input) {
+void handleEventKeyRelease(XEvent *event, EngineGameState *game_state,
+                           EnginePlatformState *platform_state) {
+  (void)platform_state;
   KeySym key = XLookupKeysym(&event->xkey, 0);
 
   GameControllerInput *new_controller1 =
-      &new_game_input->controllers[KEYBOARD_CONTROLLER_INDEX];
+      &game_state->inputs->controllers[KEYBOARD_CONTROLLER_INDEX];
 
   switch (key) {
   case (XK_w):

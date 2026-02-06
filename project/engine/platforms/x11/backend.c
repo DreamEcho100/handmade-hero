@@ -6,14 +6,15 @@
 #include "../../game/base.h"
 #include "../../game/config.h"
 #include "../../game/game-loader.h"
-#include "../../game/input.h"
+#include "../../game/inputs.h"
 #include "../_common/adaptive-fps.h"
 #include "../_common/config.h"
 #include "../_common/frame-timing.h"
-#include "../_common/input-recording.h"
+#include "../_common/inputs-recording.h"
 #include "audio.h"
 #include "inputs/joystick.h"
 #include "inputs/keyboard.h"
+#include "inputs/mouse.h"
 
 #include <GL/gl.h>
 #include <GL/glx.h>
@@ -205,13 +206,27 @@ de100_file_scoped_fn inline void x11_handle_event(Display *display,
   }
 
   case KeyPress: {
-    handleEventKeyPress(event, game->input, &platform->config.audio,
-                        &platform->memory_state, &platform->paths);
+    handleEventKeyPress(event, game, platform);
     break;
   }
 
   case KeyRelease: {
-    handleEventKeyRelease(event, game->input);
+    handleEventKeyRelease(event, game, platform);
+    break;
+  }
+
+  case MotionNotify: {
+    handle_mouse_motion(event, game->inputs);
+    break;
+  }
+
+  case ButtonPress: {
+    handle_mouse_button_press(event, game->inputs);
+    break;
+  }
+
+  case ButtonRelease: {
+    handle_mouse_button_release(event, game->inputs);
     break;
   }
 
@@ -295,8 +310,11 @@ de100_file_scoped_fn inline int x11_init(EngineState *engine) {
 
   XSetWindowAttributes attrs = {0};
   attrs.colormap = colormap;
-  attrs.event_mask =
-      ExposureMask | StructureNotifyMask | KeyPressMask | KeyReleaseMask;
+  attrs.event_mask = ExposureMask | StructureNotifyMask | KeyPressMask |
+                     KeyReleaseMask | ButtonPressMask |
+                     ButtonReleaseMask | // NEW: Mouse buttons
+                     PointerMotionMask | // NEW: Mouse movement
+                     FocusChangeMask;    // Already have this
 
   x11->window = XCreateWindow(
       x11->display, root, 0, 0, engine->game.config.window_width,
@@ -325,8 +343,8 @@ de100_file_scoped_fn inline int x11_init(EngineState *engine) {
                    engine->game.config.initial_audio_sample_rate,
                    engine->game.config.audio_game_update_hz);
 
-  linux_init_joystick(engine->platform.old_input->controllers,
-                      engine->game.input->controllers);
+  linux_init_joystick(engine->platform.old_inputs->controllers,
+                      engine->game.inputs->controllers);
 
   printf("✅ X11 platform initialized\n");
 
@@ -393,7 +411,7 @@ int platform_main() {
   X11PlatformState *x11 = engine_get_backend(&engine, X11PlatformState);
 
   engine.platform.code.init(&engine.game.thread_context, &engine.game.memory,
-                            engine.game.input, &engine.game.backbuffer);
+                            engine.game.inputs, &engine.game.backbuffer);
 
   while (is_game_running) {
 #if DE100_INTERNAL
@@ -409,23 +427,23 @@ int platform_main() {
 
     handle_game_reload_check(&engine.platform.code, &engine.platform.paths);
 
-    prepare_input_frame(engine.platform.old_input, engine.game.input);
-    linux_poll_joystick(engine.game.input);
+    prepare_input_frame(engine.platform.old_inputs, engine.game.inputs);
+    linux_poll_joystick(engine.game.inputs);
 
-    // Input recording/playback: record after getting real input, playback
+    // Input recording/playback: record after getting real inputs, playback
     // overwrites it
     if (input_recording_is_recording(&engine.platform.memory_state)) {
       input_recording_record_frame(&engine.platform.memory_state,
-                                   engine.game.input);
+                                   engine.game.inputs);
     }
 
     if (input_recording_is_playing(&engine.platform.memory_state)) {
       input_recording_playback_frame(&engine.platform.memory_state,
-                                     engine.game.input);
+                                     engine.game.inputs);
     }
 
     engine.platform.code.update_and_render(
-        &engine.game.thread_context, &engine.game.memory, engine.game.input,
+        &engine.game.thread_context, &engine.game.memory, engine.game.inputs,
         &engine.game.backbuffer);
 
     audio_generate_and_send(&engine.platform, &engine.game);

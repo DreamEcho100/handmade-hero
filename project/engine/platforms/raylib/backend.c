@@ -4,11 +4,12 @@
 #include "../../game/backbuffer.h"
 #include "../../game/base.h"
 #include "../../game/game-loader.h"
-#include "../../game/input.h"
-#include "../_common/input-recording.h"
+#include "../../game/inputs.h"
+#include "../_common/inputs-recording.h"
 #include "audio.h"
 #include "inputs/joystick.h"
 #include "inputs/keyboard.h"
+#include "inputs/mouse.h"
 
 #include <raylib.h>
 #include <stdbool.h>
@@ -129,8 +130,8 @@ de100_file_scoped_fn inline int raylib_init(EngineState *engine) {
 
   printf("✅ Window created\n");
 
-  raylib_game_initpad(engine->platform.old_input->controllers,
-                      engine->game.input->controllers);
+  raylib_game_initpad(engine->platform.old_inputs->controllers,
+                      engine->game.inputs->controllers);
 
   bool audio_initialized =
       raylib_init_audio(&engine->platform.config.audio,
@@ -169,13 +170,13 @@ int platform_main() {
   }
 
   engine.platform.code.init(&engine.game.thread_context, &engine.game.memory,
-                            engine.game.input, &engine.game.backbuffer);
+                            engine.game.inputs, &engine.game.backbuffer);
 
   printf("✅ Entering main loop...\n");
 
   while (!WindowShouldClose() && is_game_running) {
     handle_game_reload_check(&engine.platform.code, &engine.platform.paths);
-    prepare_input_frame(engine.platform.old_input, engine.game.input);
+    prepare_input_frame(engine.platform.old_inputs, engine.game.inputs);
 
     if (IsWindowResized()) {
       resize_back_buffer(&engine.game.backbuffer, GetScreenWidth(),
@@ -183,20 +184,21 @@ int platform_main() {
     }
 
     handle_keyboard_inputs(&engine.platform, &engine.game);
-    raylib_poll_gamepad(engine.game.input);
+    raylib_poll_gamepad(engine.game.inputs);
+    raylib_poll_mouse(engine.game.inputs);
 
     if (input_recording_is_recording(&engine.platform.memory_state)) {
       input_recording_record_frame(&engine.platform.memory_state,
-                                   engine.game.input);
+                                   engine.game.inputs);
     }
 
     if (input_recording_is_playing(&engine.platform.memory_state)) {
       input_recording_playback_frame(&engine.platform.memory_state,
-                                     engine.game.input);
+                                     engine.game.inputs);
     }
 
     engine.platform.code.update_and_render(
-        &engine.game.thread_context, &engine.game.memory, engine.game.input,
+        &engine.game.thread_context, &engine.game.memory, engine.game.inputs,
         &engine.game.backbuffer);
 
     audio_generate_and_send(&engine.platform, &engine.game);

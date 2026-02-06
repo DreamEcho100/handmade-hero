@@ -28,6 +28,7 @@ source "$SCRIPT_DIR/../engine/build-common.sh"
 # PROJECT CONFIGURATION
 # ───────────────────────────────────────────────────────────────────────────────
 
+GAME_DIR="$SCRIPT_DIR/src"
 BUILD_DIR="$SCRIPT_DIR/build"
 OUT_DIR="$SCRIPT_DIR/out"
 
@@ -112,7 +113,7 @@ mkdir -p "$BUILD_DIR" "$OUT_DIR"
 DE100_INTERNAL=1
 
 # Set backend
-de100_set_backend "$BACKEND" $DE100_INTERNAL || exit 1
+de100_set_backend "$BACKEND" "$GAME_DIR" "$DE100_INTERNAL" || exit 1
 
 # ───────────────────────────────────────────────────────────────────────────────
 # COMPILER FLAGS
@@ -120,12 +121,18 @@ de100_set_backend "$BACKEND" $DE100_INTERNAL || exit 1
 
 # Common flags for this project
 COMMON_FLAGS="$DE100_BASE_FLAGS"
-COMMON_FLAGS="$COMMON_FLAGS -I$SCRIPT_DIR/src"
+COMMON_FLAGS="$COMMON_FLAGS -I$GAME_DIR"
 COMMON_FLAGS="$COMMON_FLAGS -g -O0"
 COMMON_FLAGS="$COMMON_FLAGS -fno-omit-frame-pointer"  # Better stack traces
 COMMON_FLAGS="$COMMON_FLAGS -D_DEBUG"         # Define _DEBUG like MSVC does
 COMMON_FLAGS="$COMMON_FLAGS -Wall -Wextra -Werror"
 COMMON_FLAGS="$COMMON_FLAGS -DDE100_INTERNAL=$DE100_INTERNAL -DDE100_SLOW=1"
+
+GAME_INPUT_HEADER="${SCRIPT_DIR}/src/inputs.h"
+if [ -n "${GAME_INPUT_HEADER:-}" ] && [ -f "${GAME_INPUT_HEADER}" ]; then
+    echo "Using game inputs header: ${GAME_INPUT_HEADER}"
+    COMMON_FLAGS="${COMMON_FLAGS} -include ${GAME_INPUT_HEADER}"
+fi
 
 # Sanitizer flags
 SANITIZE_FLAGS=""
@@ -194,9 +201,9 @@ if [[ "$BUILD_GAME" == true ]]; then
     echo "═══ Building Game Libraries ═══"
     echo ""
     
-    build_game_lib "lib-main"    "$SCRIPT_DIR/src/main.c"    "$MAIN_LIB_PATH"
-    build_game_lib "lib-startup" "$SCRIPT_DIR/src/startup.c" "$STARTUP_LIB_PATH"
-    build_game_lib "lib-init"    "$SCRIPT_DIR/src/init.c"    "$INIT_LIB_PATH"
+    build_game_lib "lib-main"    "$GAME_DIR/main.c"    "$MAIN_LIB_PATH"
+    build_game_lib "lib-startup" "$GAME_DIR/startup.c" "$STARTUP_LIB_PATH"
+    build_game_lib "lib-init"    "$GAME_DIR/init.c"    "$INIT_LIB_PATH"
 fi
 
 # ───────────────────────────────────────────────────────────────────────────────

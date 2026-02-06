@@ -446,9 +446,9 @@ De100MemoryError de100_memory_realloc(De100MemoryBlock *block, size_t new_size,
   // Case 1: Block is invalid/empty - allocate fresh, update in place
   // ─────────────────────────────────────────────────────────────────────
   if (!block->base || !block->is_valid) {
-    De100MemoryBlock new_block = 
+    De100MemoryBlock new_block =
         de100_memory_alloc(NULL, new_size, De100_MEMORY_FLAG_RW_ZEROED);
-    
+
     // Update struct fields in place
     block->base = new_block.base;
     block->size = new_block.size;
@@ -457,7 +457,7 @@ De100MemoryError de100_memory_realloc(De100MemoryBlock *block, size_t new_size,
     block->error_code = new_block.error_code;
     block->is_valid = new_block.is_valid;
     block->generation++;
-    
+
     return block->error_code;
   }
 
@@ -487,7 +487,7 @@ De100MemoryError de100_memory_realloc(De100MemoryBlock *block, size_t new_size,
   // ─────────────────────────────────────────────────────────────────────
   // Case 3: Different size - must reallocate
   // ─────────────────────────────────────────────────────────────────────
-  
+
   // Save old state for copy/cleanup
   void *old_base = block->base;
   size_t old_size = block->size;
@@ -505,7 +505,7 @@ De100MemoryError de100_memory_realloc(De100MemoryBlock *block, size_t new_size,
   // Copy old data if requested
   if (preserve_data && old_base) {
     de100_mem_copy(new_block.base, old_base, copy_size);
-    
+
     // Zero extra space if we grew
     if (new_block.size > old_size) {
       de100_mem_set((uint8 *)new_block.base + old_size, 0,
@@ -534,8 +534,6 @@ De100MemoryError de100_memory_realloc(De100MemoryBlock *block, size_t new_size,
 
   return De100_MEMORY_OK;
 }
-
-
 
 // ═══════════════════════════════════════════════════════════════════════════
 // FREE
@@ -649,7 +647,7 @@ void *de100_mem_zero_secure(void *dest, size_t size) {
   return dest;
 }
 
-// TODO: Should the follwoing be implemented?
+// TODO: Should the following be implemented?
 // //
 // ═══════════════════════════════════════════════════════════════════════════
 // // MEMORY OPERATIONS

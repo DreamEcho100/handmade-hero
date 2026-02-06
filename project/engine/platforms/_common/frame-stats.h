@@ -1,5 +1,5 @@
-#ifndef DE100_PLATFORM__COMMON_FRAME_STATS_H
-#define DE100_PLATFORM__COMMON_FRAME_STATS_H
+#ifndef DE100_PLATFORMS__COMMON_FRAME_STATS_H
+#define DE100_PLATFORMS__COMMON_FRAME_STATS_H
 
 #include "../../_common/base.h"
 #include "../../_common/time.h"
@@ -17,4 +17,4 @@ void frame_stats_init();
 void frame_stats_record(real32 frame_time_ms, real32 target_seconds_per_frame);
 void frame_stats_print();
 
-#endif // DE100_PLATFORM__COMMON_FRAME_STATS_H
+#endif // DE100_PLATFORMS__COMMON_FRAME_STATS_H

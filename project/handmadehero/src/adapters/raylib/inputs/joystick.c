@@ -1,4 +1,8 @@
-#include "../../../game/input.h"
+// IWYU pragma: keep // clangd: unused-include-ignore // NOLINTNEXTLINE(clang-diagnostic-unused-include)
+#include "../../../inputs.h"
+
+#include "../../../../../engine/game/inputs.h"
+#include "../../../../../engine/platforms/x11/inputs/joystick.h"
 #include <math.h>
 #include <raylib.h>
 #include <stdio.h>
@@ -147,7 +151,7 @@ void raylib_poll_gamepad(GameInput *new_input) {
     new_controller->stick_avg_x = left_stick_x;
     new_controller->stick_avg_y = left_stick_y;
 
-    // Determine if controller is using analog input
+    // Determine if controller is using analog inputs
     if (fabsf(left_stick_x) > BASE_JOYSTICK_DEADZONE ||
         fabsf(left_stick_y) > BASE_JOYSTICK_DEADZONE) {
       new_controller->is_analog = true;

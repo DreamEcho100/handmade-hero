@@ -164,7 +164,7 @@ de100_file_scoped_fn De100DllHandle make_dll_success(void *handle) {
 
 De100DllHandle de100_dll_open(const char *filepath, int flags) {
   // ─────────────────────────────────────────────────────────────────────
-  // Validate input
+  // Validate inputs
   // ─────────────────────────────────────────────────────────────────────
   if (!filepath) {
     SET_ERROR_DETAIL("[de100_dll_open] NULL filepath provided");
@@ -224,7 +224,7 @@ De100DllHandle de100_dll_open(const char *filepath, int flags) {
 
 void *de100_dll_sym(De100DllHandle *dll, const char *symbol_name) {
   // ─────────────────────────────────────────────────────────────────────
-  // Validate input
+  // Validate inputs
   // ─────────────────────────────────────────────────────────────────────
   if (!dll) {
     return NULL;
@@ -302,7 +302,7 @@ void *de100_dll_sym(De100DllHandle *dll, const char *symbol_name) {
 
 De100DllErrorCode de100_dll_close(De100DllHandle *dll) {
   // ─────────────────────────────────────────────────────────────────────
-  // Validate input
+  // Validate inputs
   // ─────────────────────────────────────────────────────────────────────
   if (!dll) {
     return DLL_ERROR_INVALID_HANDLE;

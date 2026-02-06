@@ -1,5 +1,5 @@
-#ifndef DE100_PLATFORM_X11_AUDIO_H
-#define DE100_PLATFORM_X11_AUDIO_H
+#ifndef DE100_PLATFORMS_X11_AUDIO_H
+#define DE100_PLATFORMS_X11_AUDIO_H
 
 #include "../../_common/base.h"
 #include "../../_common/memory.h"
@@ -253,4 +253,4 @@ void linux_send_samples_to_alsa(PlatformAudioConfig *audio_config,
                                 GameAudioOutputBuffer *source);
 void linux_clear_audio_buffer(PlatformAudioConfig *audio_config);
 
-#endif // DE100_PLATFORM_X11_AUDIO_H
+#endif // DE100_PLATFORMS_X11_AUDIO_H

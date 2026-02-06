@@ -43,7 +43,7 @@ de100_file_scoped_fn inline int load_game_assets(GameCode *game_code,
                                                  char *temp_lib_name) {
 
   // ─────────────────────────────────────────────────────────────────────
-  // Validate input parameters
+  // Validate inputs parameters
   // ─────────────────────────────────────────────────────────────────────
 
   if (!source_lib_name) {
@@ -449,7 +449,7 @@ void handle_game_reload_check(GameCode *game_code,
 GAME_UPDATE_AND_RENDER(game_update_and_render_stub) {
   (void)thread_context;
   (void)memory;
-  (void)input;
+  (void)inputs;
   (void)buffer;
   // Stub implementation - does nothing
   // This is called when game code fails to load
@@ -472,7 +472,7 @@ GAME_STARTUP(game_startup_stub) {
 GAME_INIT(game_init_stub) {
   (void)thread_context;
   (void)memory;
-  (void)input;
+  (void)inputs;
   (void)buffer;
   // Stub implementation - does nothing
   // This is called when game code fails to load

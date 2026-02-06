@@ -136,7 +136,7 @@ de100_debug_platform_read_entire_file(const char *filename) {
   De100DebugDe100FileReadResult result = {0};
 
   // ─────────────────────────────────────────────────────────────────────
-  // Validate input
+  // Validate inputs
   // ─────────────────────────────────────────────────────────────────────
   if (!filename || filename[0] == '\0') {
     SET_ERROR_DETAIL("[debug_read] NULL or empty filename");
@@ -266,7 +266,7 @@ De100DebugFileWriteResult
 de100_debug_platform_write_entire_file(const char *filename, uint32 size,
                                        const void *data) {
   // ─────────────────────────────────────────────────────────────────────
-  // Validate input
+  // Validate inputs
   // ─────────────────────────────────────────────────────────────────────
   if (!filename || filename[0] == '\0') {
     SET_ERROR_DETAIL("[debug_write] NULL or empty filename");

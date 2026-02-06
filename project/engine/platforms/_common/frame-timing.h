@@ -1,5 +1,5 @@
-#ifndef DE100_PLATFORM__COMMON_FRAME_TIMING_FPS_H
-#define DE100_PLATFORM__COMMON_FRAME_TIMING_FPS_H
+#ifndef DE100_PLATFORMS__COMMON_FRAME_TIMING_FPS_H
+#define DE100_PLATFORMS__COMMON_FRAME_TIMING_FPS_H
 
 #include "../../_common/base.h"
 #include "../../_common/time.h"
@@ -34,4 +34,4 @@ real32 frame_timing_get_fps();
 real32 frame_timing_get_mcpf();
 #endif
 
-#endif // DE100_PLATFORM__COMMON_FRAME_TIMING_FPS_H
+#endif // DE100_PLATFORMS__COMMON_FRAME_TIMING_FPS_H

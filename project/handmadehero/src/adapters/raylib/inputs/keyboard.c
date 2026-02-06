@@ -1,9 +1,11 @@
-#include "keyboard.h"
+// IWYU pragma: keep // clangd: unused-include-ignore // NOLINTNEXTLINE(clang-diagnostic-unused-include)
+#include "../../../inputs.h" // NOLINT(clang-diagnostic-unused-include)
 
-#include "../../../game/base.h"
-#include "../../../game/input.h"
-#include "../../_common/input-recording.h"
-#include "../audio.h"
+#include "../../../../../engine/game/base.h"
+#include "../../../../../engine/game/inputs.h"
+#include "../../../../../engine/platforms/_common/inputs-recording.h"
+#include "../../../../../engine/platforms/raylib/audio.h"
+#include "../../../../../engine/platforms/raylib/inputs/keyboard.h"
 #include <raylib.h>
 #include <stdio.h>
 
@@ -13,11 +15,11 @@
 // Mirrors: X11's handleEventKeyPress/handleEventKeyRelease
 // ═══════════════════════════════════════════════════════════════════════════
 
-void handle_keyboard_inputs(EnginePlatformState *platform,
-                            EngineGameState *game) {
+void handle_keyboard_inputs(EnginePlatformState *platform_state,
+                            EngineGameState *game_state) {
 
   GameControllerInput *keyboard =
-      &game->input->controllers[KEYBOARD_CONTROLLER_INDEX];
+      &game_state->inputs->controllers[KEYBOARD_CONTROLLER_INDEX];
 
   keyboard->is_connected = true;
   keyboard->is_analog = false;
@@ -140,8 +142,8 @@ void handle_keyboard_inputs(EnginePlatformState *platform,
   if (IsKeyPressed(KEY_F1)) {
 
     printf("F1 pressed - showing audio debug\n");
-    if (platform->config.audio.is_initialized) {
-      raylib_debug_audio_latency(&platform->config.audio);
+    if (platform_state->config.audio.is_initialized) {
+      raylib_debug_audio_latency(&platform_state->config.audio);
     }
   }
 
@@ -152,8 +154,31 @@ void handle_keyboard_inputs(EnginePlatformState *platform,
   }
 
   if (IsKeyPressed(KEY_L)) {
-    printf("🎬 L pressed - Toggling input recording/playback\n");
-    input_recording_toggle(platform->paths.exe_directory.path,
-                           &platform->memory_state);
+    // Input Recording Toggle (Casey's Day 23)
+    printf("🎬 L pressed - Toggling inputs recording/playback\n");
+    // Clear inputs when playback should stop, to avoid "stuck keys"
+    INPUT_RECORDING_TOGGLE_RESULT_CODE result =
+        input_recording_toggle(platform_state->paths.exe_directory.path,
+                               &platform_state->memory_state);
+    if (result == INPUT_RECORDING_TOGGLE_STOPPED_PLAYBACK) {
+      for (uint32 c = 0; c < MAX_CONTROLLER_COUNT; c++) {
+        GameControllerInput *ctrl = &game_state->inputs->controllers[c];
+        for (uint32 b = 0; b < ArraySize(ctrl->buttons); b++) {
+          ctrl->buttons[b].ended_down = false;
+          ctrl->buttons[b].half_transition_count = 0;
+        }
+        ctrl->stick_avg_x = 0.0f;
+        ctrl->stick_avg_y = 0.0f;
+      }
+      for (uint32 c = 0; c < MAX_CONTROLLER_COUNT; c++) {
+        GameControllerInput *ctrl = &platform_state->old_inputs->controllers[c];
+        for (uint32 b = 0; b < ArraySize(ctrl->buttons); b++) {
+          ctrl->buttons[b].ended_down = false;
+          ctrl->buttons[b].half_transition_count = 0;
+        }
+        ctrl->stick_avg_x = 0.0f;
+        ctrl->stick_avg_y = 0.0f;
+      }
+    }
   }
 }

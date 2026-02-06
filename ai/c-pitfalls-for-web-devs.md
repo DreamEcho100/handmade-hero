@@ -16,7 +16,9 @@ Each pitfall includes:
 
 1. [Logical vs Bitwise Operators](#1-logical-vs-bitwise-operators)
 2. [Integer Division Truncation](#2-integer-division-truncation)
+   - [Negative Modulo (The % Trap)](#-gotcha-negative-modulo-the--trap)
 3. [Signed vs Unsigned Integers](#3-signed-vs-unsigned-integers)
+   - [Unsigned Coordinates That Go Negative](#-real-world-trap-unsigned-coordinates-that-go-negative)
 4. [Implicit Type Conversions (Coercion)](#4-implicit-type-conversions-coercion)
 5. [Operator Precedence Surprises](#5-operator-precedence-surprises)
 6. [Assignment vs Comparison](#6-assignment-vs-comparison)
@@ -24,6 +26,7 @@ Each pitfall includes:
 8. [Array Bounds (No Runtime Checks)](#8-array-bounds-no-runtime-checks)
 9. [String Handling Nightmares](#9-string-handling-nightmares)
 10. [Pointer Arithmetic Mistakes](#10-pointer-arithmetic-mistakes)
+    - [Pointer Type Determines Write Size](#-real-world-trap-pointer-type-determines-write-size)
 11. [Memory Leaks and Use-After-Free](#11-memory-leaks-and-use-after-free)
 12. [Macro Pitfalls](#12-macro-pitfalls)
 13. [sizeof() Surprises](#13-sizeof-surprises)
@@ -34,6 +37,7 @@ Each pitfall includes:
 18. [Stack vs Heap Lifetime](#18-stack-vs-heap-lifetime)
 19. [Undefined Behavior (The Silent Killer)](#19-undefined-behavior-the-silent-killer)
 20. [Platform-Specific Gotchas](#20-platform-specific-gotchas)
+21. [Macro Definition Order Across Compilation Units](#21-macro-definition-order-across-compilation-units)
 
 ---
 
@@ -188,15 +192,50 @@ float frame_time = (float)total_ms / (float)fps;
 // GOOD: int percent = (current * 100) / total;  // Works!
 ```
 
-### ⚠️ GOTCHA: Negative Division
+### ⚠️ GOTCHA: Negative Division and Modulo
 
 ```c
-// C99+: Division truncates toward zero
+// C99+: Division truncates toward zero (NOT floor!)
 -7 / 2 = -3  (not -4!)
 7 / -2 = -3  (not -4!)
 
 // This is DIFFERENT from Python's floor division:
 // Python: -7 // 2 = -4 (floor toward negative infinity)
+```
+
+### ⚠️ GOTCHA: Negative Modulo (The % Trap)
+
+```c
+// C's % operator can return NEGATIVE results!
+-5 % 3 = -2   // NOT 1 like in Python!
+-7 % 4 = -3   // NOT 1!
+ 7 % -4 = 3   // Sign follows the dividend (left operand)
+
+// Python vs C comparison:
+//   Python: -5 % 3 = 1  (always positive, Euclidean modulo)
+//   C:      -5 % 3 = -2 (sign matches dividend)
+```
+
+**Why This Matters (Screen Wrapping Example):**
+
+```c
+// Naive wrap function - BROKEN for negative inputs!
+int wrap(int value, int max) {
+    return value % max;  // Returns negative for negative value!
+}
+
+wrap(725, 720) =  5   ✓
+wrap(-5, 720)  = -5   ✗ (wanted 715!)
+
+// CORRECT wrap function for negative values:
+int wrap(int value, int max) {
+    return ((value % max) + max) % max;
+}
+
+// How it works for value = -5, max = 720:
+// Step 1: -5 % 720  = -5    (C's negative modulo)
+// Step 2: -5 + 720  = 715   (shift to positive)
+// Step 3: 715 % 720 = 715   (keep in range if step 2 overshot)
 ```
 
 ---
@@ -288,6 +327,89 @@ for (size_t i = len; i > 0; i--) {
 | Subtracting from unsigned    | Underflow           | `unsigned x = 0; x--;` = MAX_UINT          |
 | Loop counters                | Infinite loops      | `for (unsigned i = 10; i >= 0; i--)`       |
 | Array indexing               | Huge positive index | `arr[negative_int]` with unsigned arr size |
+
+### 🔴 REAL-WORLD TRAP: Unsigned Coordinates That Go Negative
+
+This trap is especially common in **game development** when handling positions:
+
+```c
+// Player position stored as unsigned (seems logical - pixels are positive!)
+typedef struct {
+    uint32 x;  // ← THE TRAP!
+    uint32 y;
+} PlayerState;
+
+// Player at position (5, 10), moving up by 15 pixels
+player.y = player.y - 15;
+
+// You expect: player.y = -5 (to be wrapped later)
+// Reality:    player.y = 4294967291 (HUGE positive number!)
+//
+// Why? uint32 can't represent -5, so it wraps around:
+// 10 - 15 = -5  →  0xFFFFFFFB  →  4294967291
+```
+
+**The Visual Bug:**
+
+```
+Before (y=10):     After with uint32 (y=4294967291):
+┌───────────┐      Player "teleports" to bottom of screen
+│  █ player │      or causes out-of-bounds memory access!
+│           │
+│           │      ┌───────────────────────────────────────┐
+│           │      │                                       │
+└───────────┘      │                                  █    │
+                   └───────────────────────────────────────┘
+```
+
+**Why This Trap Is Sneaky:**
+
+1. **It "works" most of the time** - when coordinates stay positive
+2. **Debug builds may mask it** - some compilers initialize memory differently
+3. **Unsigned seems logical** - "positions can't be negative on screen!"
+4. **Wrapping math breaks** - `((y % height) + height) % height` assumes signed input
+
+```c
+// Wrapping function expects SIGNED input
+int32 wrap_y(int32 y, int32 height) {
+    return ((y % height) + height) % height;
+}
+
+// With signed int32: wrap_y(-5, 720) = 715 ✓
+// With unsigned:     The -5 never existed! You passed 4294967291
+//                    4294967291 % 720 = 611 (WRONG!)
+```
+
+### 🟢 THE FIX: Use Signed Types for Coordinates
+
+```c
+// GOOD: Use signed integers for anything that might go negative
+typedef struct {
+    int32 x;  // Can handle negative during calculations
+    int32 y;
+} PlayerState;
+
+// Now subtraction works correctly
+player.y = player.y - 15;  // If y=10, result is -5 (correct!)
+
+// And wrapping works
+int32 wrapped_y = wrap_y(player.y, height);  // -5 → 715 ✓
+```
+
+### 📋 WHEN TO USE UNSIGNED vs SIGNED
+
+| Use Case              | Type        | Why                              |
+| --------------------- | ----------- | -------------------------------- |
+| Positions/coordinates | `int32`     | Can go negative during math      |
+| Velocities            | `int32`     | Can be negative (moving left/up) |
+| Array indices         | `size_t`    | But careful with subtraction!    |
+| Bit flags             | `uint32`    | Pure bit manipulation            |
+| Colors (RGBA)         | `uint32`    | Always 0-255 per channel         |
+| Byte counts/sizes     | `size_t`    | Can't have negative bytes        |
+| Memory addresses      | `uintptr_t` | Addresses are unsigned           |
+
+**Rule of Thumb:** If the value might **ever** become negative during calculations
+(even temporarily), use a signed type.
 
 ---
 
@@ -879,6 +1001,104 @@ uintptr_t addr = (uintptr_t)ptr;
 addr += 4;  // Raw byte offset
 ptr = (int*)addr;
 ```
+
+### 🔴 REAL-WORLD TRAP: Pointer Type Determines Write Size
+
+This trap is especially common in **graphics/pixel manipulation**:
+
+```c
+// You have a pixel buffer and want to write a 32-bit RGBA color
+uint8 *pixel_pos = buffer + offset;  // Points to correct byte
+uint32 color = 0xFFFFFFFF;           // White (RGBA)
+
+// THE TRAP: Dereferencing through wrong pointer type!
+*pixel_pos = color;  // ❌ WRONG! Only writes 1 byte!
+
+// What happens:
+// color = 0xFFFFFFFF (4 bytes: FF FF FF FF)
+// *pixel_pos = 0xFF (truncated to 1 byte!)
+// Result: Only the first byte is written, color is corrupted!
+```
+
+**Memory Visualization:**
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    POINTER TYPE DETERMINES WRITE SIZE                   │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  color = 0xFF00FF00 (Green in RGBA)                                    │
+│                                                                         │
+│  WRONG: *pixel_pos = color; (pixel_pos is uint8*)                      │
+│  ┌────────────────────────────────────────┐                            │
+│  │ Before: [??][??][??][??]               │                            │
+│  │ After:  [00][??][??][??]  ← Only 1 byte written (truncated!)       │
+│  └────────────────────────────────────────┘                            │
+│                                                                         │
+│  RIGHT: *(uint32*)pixel_pos = color;                                   │
+│  ┌────────────────────────────────────────┐                            │
+│  │ Before: [??][??][??][??]               │                            │
+│  │ After:  [00][FF][00][FF]  ← All 4 bytes written correctly          │
+│  └────────────────────────────────────────┘                            │
+│                                                                         │
+│  The POINTER TYPE tells C how many bytes to read/write!                │
+│  uint8*  → 1 byte                                                      │
+│  uint16* → 2 bytes                                                     │
+│  uint32* → 4 bytes                                                     │
+│  uint64* → 8 bytes                                                     │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### 🟢 THE FIX: Cast Before Dereferencing
+
+```c
+// Method 1: Cast when dereferencing (most common in pixel loops)
+uint8 *pixel_pos = buffer + (y * pitch) + (x * bytes_per_pixel);
+*(uint32 *)pixel_pos = color;  // Cast to uint32* THEN dereference
+
+// Method 2: Use the correct pointer type from the start
+uint32 *pixels = (uint32 *)buffer;
+pixels[y * width + x] = color;  // Direct 32-bit access
+
+// Method 3: For row-by-row iteration (Handmade Hero style)
+uint8 *row = (uint8 *)buffer;
+for (int y = 0; y < height; ++y) {
+    uint32 *pixel = (uint32 *)row;  // Cast row to uint32*
+    for (int x = 0; x < width; ++x) {
+        *pixel++ = color;  // Write 4 bytes, advance by 4
+    }
+    row += pitch;  // Advance by pitch (may include padding)
+}
+```
+
+### 🌐 WEB DEV ANALOGY
+
+```javascript
+// JavaScript: TypedArrays enforce the view size
+const buffer = new ArrayBuffer(16);
+const uint8View = new Uint8Array(buffer);
+const uint32View = new Uint32Array(buffer);
+
+uint8View[0] = 0xffffffff; // Truncated to 0xFF (1 byte)
+uint32View[0] = 0xffffffff; // Full 4 bytes written
+
+// In C, you must EXPLICITLY cast to get the right behavior
+// There's no separate "view" - the pointer type IS the view
+```
+
+### 📋 COMMON SCENARIOS
+
+| Pointer Type | Dereference Writes | Use Case                |
+| ------------ | ------------------ | ----------------------- |
+| `uint8 *`    | 1 byte             | Raw byte manipulation   |
+| `int16 *`    | 2 bytes            | Audio samples (16-bit)  |
+| `uint32 *`   | 4 bytes            | Pixels (RGBA), colors   |
+| `float *`    | 4 bytes            | Single-precision floats |
+| `double *`   | 8 bytes            | Double-precision floats |
+
+**Rule:** When writing multi-byte values through a byte pointer,
+**always cast to the appropriate pointer type first!**
 
 ---
 
@@ -1895,7 +2115,238 @@ int* p = (int*)buffer;  // Now properly aligned
 
 ---
 
-## 🎓 Summary: Top 10 Rules for Web Devs Learning C
+## Add new section at the end (before Summary):
+
+````markdown:ai/c-pitfalls-for-web-devs.md
+---
+
+## 21. Macro Definition Order Across Compilation Units
+
+### 🔴 THE TRAP
+
+```c
+// engine/input.h - Engine provides defaults
+#ifndef DE100_GAME_BUTTON_COUNT
+#define DE100_GAME_BUTTON_COUNT 0
+#endif
+
+#ifndef DE100_GAME_BUTTON_FIELDS
+#define DE100_GAME_BUTTON_FIELDS GameButtonState ___DUMMY_NAME_TO_AVOID_WARNING;
+#endif
+
+typedef struct {
+  // ... other fields ...
+  union {
+    GameButtonState buttons[DE100_GAME_BUTTON_COUNT];
+    struct { DE100_GAME_BUTTON_FIELDS };
+  };
+  // ... other fields ...
+} GameControllerInput;
+````
+
+```c
+// game/inputs.h - Game defines its buttons
+#define DE100_GAME_BUTTON_COUNT 12
+#define DE100_GAME_BUTTON_FIELDS \
+  GameButtonState move_up; \
+  GameButtonState jump;    \
+  // ... 10 more ...
+```
+
+```c
+// game/main.c - Works! Includes game inputs first
+#include "inputs.h"      // DE100_GAME_BUTTON_COUNT = 12 ✓
+#include "engine/input.h" // #ifndef skipped ✓
+```
+
+```c
+// engine/input.c - BROKEN! Never sees game's definitions
+#include "input.h"  // DE100_GAME_BUTTON_COUNT = 0 ✗
+// Array has 0 elements, game has 12 buttons = MEMORY CORRUPTION!
+```
+
+**Runtime output:**
+
+```
+new_ctrl_btns_size: 0
+DE100_GAME_BUTTON_COUNT: 0
+ASSERTION FAILED
+```
+
+### 🧠 THE MENTAL MODEL
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│              SEPARATE COMPILATION = SEPARATE MACRO WORLDS               │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  Each .c file is compiled INDEPENDENTLY                                │
+│  Macros defined in one .c file DON'T exist in another!                 │
+│                                                                         │
+│  Game Library Build:                                                   │
+│  ┌─────────────────────────────────────────────────────────┐           │
+│  │ main.c                                                  │           │
+│  │   #include "inputs.h"  → DE100_GAME_BUTTON_COUNT = 12        │           │
+│  │   #include "input.h"   → #ifndef skipped! ✓            │           │
+│  └─────────────────────────────────────────────────────────┘           │
+│                                                                         │
+│  Platform/Engine Build (SEPARATE!):                                    │
+│  ┌─────────────────────────────────────────────────────────┐           │
+│  │ input.c                                                 │           │
+│  │   #include "input.h"   → DE100_GAME_BUTTON_COUNT = 0 ✗       │           │
+│  │   // Never saw inputs.h!                                │           │
+│  └─────────────────────────────────────────────────────────┘           │
+│                                                                         │
+│  The game .so and platform executable have DIFFERENT struct sizes!     │
+│                                                                         │
+│  Game thinks:     GameControllerInput = 12 buttons + fields = ~104 bytes│
+│  Platform thinks: GameControllerInput = 0 buttons + fields = ~24 bytes │
+│                                                                         │
+│  Result: Memory corruption, wrong button states, crashes               │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### 🌐 WEB DEV ANALOGY
+
+```typescript
+// TypeScript/JavaScript: Imports are resolved at bundle time
+// Everything sees the same definitions
+
+// constants.ts
+export const BUTTON_COUNT = 12;
+
+// engine.ts
+import { BUTTON_COUNT } from "./constants"; // Always 12!
+
+// game.ts
+import { BUTTON_COUNT } from "./constants"; // Always 12!
+
+// Bundler ensures consistency. C has NO bundler!
+```
+
+```c
+// C: Each file compiled separately
+// No automatic sharing of #defines across .c files
+
+// You MUST ensure each compilation unit sees the same definitions
+// Either via:
+//   1. Force-include (-include flag)
+//   2. Shared header included everywhere
+//   3. Build system coordination
+```
+
+### 🟢 THE FIX
+
+**Option 1: Force-include via compiler flag (Recommended for engine/game separation)**
+
+```bash
+# Build script passes game's config to ALL compilation units
+GAME_INPUT_HEADER="${GAME_DIR}/src/inputs.h"
+
+# -include forces this header BEFORE any source processing
+CFLAGS="${CFLAGS} -include ${GAME_INPUT_HEADER}"
+
+# Now engine/input.c sees:
+#   1. inputs.h (force-included) → DE100_GAME_BUTTON_COUNT = 12
+#   2. input.h → #ifndef DE100_GAME_BUTTON_COUNT skipped!
+```
+
+```bash:build-common.sh
+# Add to your build script where CFLAGS are set:
+if [ -n "${GAME_INPUT_HEADER:-}" ] && [ -f "${GAME_INPUT_HEADER}" ]; then
+    echo "Using game input header: ${GAME_INPUT_HEADER}"
+    CFLAGS="${CFLAGS} -include ${GAME_INPUT_HEADER}"
+fi
+```
+
+```bash:game/build-dev.sh
+# Export before calling engine build:
+export GAME_INPUT_HEADER="${SCRIPT_DIR}/src/inputs.h"
+source "${ENGINE_DIR}/build-common.sh"
+```
+
+**Option 2: Compile-time size validation**
+
+```c
+// engine/input.h - Add static assert to catch mismatches
+typedef struct {
+  union {
+    GameButtonState buttons[DE100_GAME_BUTTON_COUNT];
+    struct { DE100_GAME_BUTTON_FIELDS };
+  };
+  // ...
+} GameControllerInput;
+
+// Verify struct size at compile time
+_Static_assert(DE100_GAME_BUTTON_COUNT > 0,
+    "DE100_GAME_BUTTON_COUNT not defined! Include game's inputs.h first.");
+```
+
+**Option 3: Auto-count buttons (no manual sync)**
+
+```c
+// game/inputs.h
+#define DE100_GAME_BUTTON_FIELDS         \
+  GameButtonState move_up;         \
+  GameButtonState move_down;       \
+  GameButtonState jump;            \
+  GameButtonState attack;
+
+// Auto-count using sizeof trick
+typedef struct { DE100_GAME_BUTTON_FIELDS } _GameButtonsCounter;
+#define DE100_GAME_BUTTON_COUNT (sizeof(_GameButtonsCounter) / sizeof(GameButtonState))
+
+// Now count is ALWAYS correct - no manual "12" to maintain!
+```
+
+### 📋 SYMPTOMS OF THIS BUG
+
+| Symptom                                 | Cause                                         |
+| --------------------------------------- | --------------------------------------------- |
+| `DE100_GAME_BUTTON_COUNT: 0` at runtime | Engine compiled without game's defines        |
+| Some buttons work, others don't         | Struct size mismatch, memory overlap          |
+| Buttons "stick" (never release)         | Wrong memory being read for button state      |
+| Crash in input loop                     | Array bounds violation (0-size array)         |
+| Works in game lib, fails in platform    | Different compilation units, different macros |
+
+### 🔍 HOW TO DEBUG
+
+```c
+// Add to both game AND platform code:
+printf("DE100_GAME_BUTTON_COUNT: %d\n", DE100_GAME_BUTTON_COUNT);
+printf("sizeof(GameControllerInput): %zu\n", sizeof(GameControllerInput));
+
+// If these print DIFFERENT values, you have the bug!
+```
+
+```bash
+# Check what the compiler actually sees:
+clang -E -dM input.c | grep GAME_BUTTON
+
+# Should show your game's values, not engine defaults
+```
+
+### ⚠️ RELATED TRAP: Union Size Mismatch
+
+```c
+// If DE100_GAME_BUTTON_COUNT = 0 but DE100_GAME_BUTTON_FIELDS has 12 fields:
+union {
+  GameButtonState buttons[0];   // 0 bytes!
+  struct { /* 12 fields */ };   // ~96 bytes
+};
+
+// Union takes size of LARGEST member = 96 bytes
+// But buttons[0] means array access is ALWAYS out of bounds!
+
+for (int i = 0; i < 12; i++) {
+    buttons[i] = ...;  // Writing past array! Undefined behavior!
+}
+```
+
+---
+
+## 🎓 Summary: Top Rules for Web Devs Learning C
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -1921,6 +2372,8 @@ int* p = (int*)buffer;  // Now properly aligned
 │  9. Uninitialized variables contain garbage                            │
 │                                                                         │
 │  10. Undefined behavior can make your program do ANYTHING              │
+│                                                                         │
+│  11. Macros don't cross compilation units - use -include flag          │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```

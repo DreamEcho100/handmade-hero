@@ -1,4 +1,8 @@
-#include "../../../game/input.h"
+// IWYU pragma: keep // clangd: unused-include-ignore // NOLINTNEXTLINE(clang-diagnostic-unused-include)
+#include "../../../inputs.h"
+
+#include "../../../../../engine/game/inputs.h"
+#include "../../../../../engine/platforms/x11/inputs/joystick.h"
 #include <fcntl.h>
 #include <linux/joystick.h>
 #include <math.h>
@@ -7,7 +11,7 @@
 #include <unistd.h>
 
 typedef struct {
-  int fd;                // File descriptor for /dev/input/jsX
+  int fd;                // File descriptor for /dev/inputs/jsX
   char device_name[128]; // For debugging
 } LinuxJoystickState;
 
@@ -40,7 +44,7 @@ de100_file_scoped_global_var linux_joystick_read *LinuxJoystickRead_ =
 
 // Real implementation (only used if joystick found)
 de100_file_scoped_fn LINUX_JOYSTICK_READ(linux_joystick_read_impl) {
-  // This is what actually reads from /dev/input/js*
+  // This is what actually reads from /dev/inputs/js*
   return read(fd, event, sizeof(*event));
 }
 
@@ -48,8 +52,8 @@ void linux_init_joystick(GameControllerInput *controller_old_input,
                          GameControllerInput *controller_new_input) {
   printf("Searching for gamepad...\n");
 
-  const char *device_paths[] = {"/dev/input/js0", "/dev/input/js1",
-                                "/dev/input/js2", "/dev/input/js3"};
+  const char *device_paths[] = {"/dev/inputs/js0", "/dev/inputs/js1",
+                                "/dev/inputs/js2", "/dev/inputs/js3"};
 
   // Initialize ALL controllers FIRST
   for (int i = 0; i < MAX_CONTROLLER_COUNT; i++) {

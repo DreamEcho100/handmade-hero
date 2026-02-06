@@ -1,15 +1,11 @@
-#ifndef DE100_PLATFORM_X11_INPUTS_KEYBOARD_H
-#define DE100_PLATFORM_X11_INPUTS_KEYBOARD_H
+#ifndef DE100_PLATFORMS_X11_INPUTS_KEYBOARD_H
+#define DE100_PLATFORMS_X11_INPUTS_KEYBOARD_H
 
-#include "../../../game/input.h"
-#include "../../../game/audio.h"
-#include "../../../game/game-loader.h"
-#include "../../_common/config.h"
+#include "../../../engine.h"
 
 #include <X11/Xlib.h>
 
-void handleEventKeyPress(XEvent *event, GameInput *new_game_input,
-                           PlatformAudioConfig *platform_audio_config, GameMemoryState *game_memory_state, GameCodePaths *game_code_paths);
-void handleEventKeyRelease(XEvent *event, GameInput *new_game_input);
+void handleEventKeyPress(XEvent *event, EngineGameState *game_state, EnginePlatformState *platform_state);
+void handleEventKeyRelease(XEvent *event, EngineGameState *game_state, EnginePlatformState *platform_state);
 
-#endif // DE100_PLATFORM_X11_INPUTS_KEYBOARD_H
+#endif // DE100_PLATFORMS_X11_INPUTS_KEYBOARD_H

@@ -1,5 +1,6 @@
 #ifndef DE100_HERO_GAME_H
 #define DE100_HERO_GAME_H
+#include "./inputs.h"
 
 #include "../../engine/_common/base.h"
 #include "../../engine/_common/memory.h"
@@ -7,7 +8,7 @@
 #include "../../engine/game/backbuffer.h"
 #include "../../engine/game/base.h"
 #include "../../engine/game/game-loader.h"
-#include "../../engine/game/input.h"
+#include "../../engine/game/inputs.h"
 #include "../../engine/game/memory.h"
 
 GameControllerInput *GetController(GameInput *Input,

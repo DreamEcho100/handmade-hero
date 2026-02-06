@@ -1,5 +1,5 @@
-#ifndef DE100_PLATFORM__COMMON_ADAPTIVE_FPS_H
-#define DE100_PLATFORM__COMMON_ADAPTIVE_FPS_H
+#ifndef DE100_PLATFORMS__COMMON_ADAPTIVE_FPS_H
+#define DE100_PLATFORMS__COMMON_ADAPTIVE_FPS_H
 
 #include "../../_common/base.h"
 #include "../../game/base.h"
@@ -28,4 +28,4 @@ extern AdaptiveFPS g_adaptive_fps;
 void adaptive_fps_init();
 void adaptive_fps_update(GameConfig *game_config, real32 frame_time_ms);
 
-#endif // DE100_PLATFORM__COMMON_ADAPTIVE_FPS_H
+#endif // DE100_PLATFORMS__COMMON_ADAPTIVE_FPS_H

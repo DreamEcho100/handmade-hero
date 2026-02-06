@@ -1,3 +1,5 @@
+// IWYU pragma: keep // clangd: unused-include-ignore // NOLINTNEXTLINE(clang-diagnostic-unused-include)
+#include "./inputs.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -11,9 +13,13 @@
 #endif
 
 GAME_INIT(game_init) {
-(void)thread_context;
-  (void)input;
+  (void)thread_context;
+  (void)inputs;
   (void)buffer;
+  // Add at the end of the file to verify
+  DEV_ASSERT_MSG(sizeof(_GameButtonsCounter) == sizeof(GameButtonState) * 12,
+                 "Button struct size mismatch");
+
   HandMadeHeroGameState *game_state =
       (HandMadeHeroGameState *)memory->permanent_storage;
 

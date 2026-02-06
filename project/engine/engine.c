@@ -1,11 +1,12 @@
 #include "engine.h"
 #include "./hooks/main.h"
 
-#include "./platforms/_common/input-recording.h"
+#include "./platforms/_common/inputs-recording.h"
 #include "_common/file.h"
 #include "_common/memory.h"
 #include "_common/path.h"
 #include "_common/time.h"
+#include "platforms/_common/replay-buffer.h"
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ENGINE INIT (Common across all platforms)
@@ -23,8 +24,8 @@ int engine_init(EngineState *engine) {
   // ─────────────────────────────────────────────────────────────────────
 
   *engine = (EngineState){0};
-  game->input = &platform->inputs[0];
-  platform->old_input = &platform->inputs[1];
+  game->inputs = &platform->inputs[0];
+  platform->old_inputs = &platform->inputs[1];
 
   // ─────────────────────────────────────────────────────────────────────
   // LOAD GAME CODE
@@ -129,6 +130,24 @@ int engine_init(EngineState *engine) {
   printf("✅ Game state: %lu MB\n", total_size / (1024 * 1024));
 
   // ─────────────────────────────────────────────────────────────────────
+  // INITIALIZE REPLAY BUFFERS
+  // ─────────────────────────────────────────────────────────────────────
+
+  ReplayBufferInitResult replay_result = replay_buffers_init(
+      platform->paths.exe_directory.path, platform->memory_state.game_memory,
+      platform->memory_state.total_size, platform->memory_state.replay_buffers);
+
+  if (!replay_result.success) {
+    fprintf(stderr, "⚠️  Replay buffers failed to initialize: %s\n",
+            replay_buffer_strerror(replay_result.error_code));
+    fprintf(stderr, "   Input recording/playback will not work.\n");
+    // Don't fail engine init - this is a debug feature
+  } else {
+    printf("✅ Replay buffers: %d/%d initialized\n",
+           replay_result.buffers_initialized, MAX_REPLAY_BUFFERS);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
   // ALLOCATE BACKBUFFER
   // ─────────────────────────────────────────────────────────────────────
 
@@ -203,6 +222,9 @@ void engine_shutdown(EngineState *engine) {
   EngineAllocations *allocations = &engine->allocations;
 
   printf("[SHUTDOWN] Engine cleanup...\n");
+
+  replay_buffers_shutdown(platform->memory_state.replay_buffers,
+                          platform->memory_state.total_size);
 
   // Clean up temp files
   de100_file_delete(platform->paths.game_main_lib_tmp_path);

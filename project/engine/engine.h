@@ -8,7 +8,7 @@
 #include "game/config.h"
 #include "game/thread.h"
 #include "game/game-loader.h"
-#include "game/input.h"
+#include "game/inputs.h"
 #include "game/memory.h"
 #include "platforms/_common/adaptive-fps.h"
 #include "platforms/_common/config.h"
@@ -45,9 +45,9 @@ typedef struct {
   GameBackBuffer backbuffer;
   GameAudioOutputBuffer audio;
   GameConfig config;
-  // This frame's input (new_input), Only current input
+  // This frame's inputs (new_input), Only current inputs
   // (what game sees)
-  GameInput *input;
+  GameInput *inputs;
 
   ThreadContext thread_context;
 
@@ -65,11 +65,11 @@ typedef struct {
   GameCodePaths paths;
   GameMemoryState memory_state; // Recording/playback
 
-  // Double-buffered input (platform manages swap)
+  // Double-buffered inputs (platform manages swap)
   GameInput inputs[2];
-  // Last frame's input (old_input)
+  // Last frame's inputs (old_input)
   // ← Platform uses for state preservation
-  GameInput *old_input;
+  GameInput *old_inputs;
 
   // Platform-specific extension (X11State*, Win32State*, etc.)
   void *backend;
@@ -133,16 +133,16 @@ void engine_shutdown(EngineState *engine);
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * Swap input buffers at end of frame.
+ * Swap inputs buffers at end of frame.
  *
  * After calling:
- *   - engine->game.current points to fresh input buffer
- *   - engine->game.previous points to last frame's input
+ *   - engine->game.current points to fresh inputs buffer
+ *   - engine->game.previous points to last frame's inputs
  */
 de100_file_scoped_fn inline void engine_swap_inputs(EngineState *engine) {
-  GameInput *temp = engine->game.input;
-  engine->game.input = engine->platform.old_input;
-  engine->platform.old_input = temp;
+  GameInput *temp = engine->game.inputs;
+  engine->game.inputs = engine->platform.old_inputs;
+  engine->platform.old_inputs = temp;
 }
 
 /**

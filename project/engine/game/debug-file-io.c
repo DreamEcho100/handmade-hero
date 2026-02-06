@@ -138,7 +138,7 @@ de100_debug_platform_read_entire_file(ThreadContext *thread_context,
   De100DebugDe100FileReadResult result = {0};
 
   // ─────────────────────────────────────────────────────────────────────
-  // Validate input
+  // Validate inputs
   // ─────────────────────────────────────────────────────────────────────
   if (!filename || filename[0] == '\0') {
     SET_ERROR_DETAIL("[debug_read] NULL or empty filename");
@@ -272,7 +272,7 @@ de100_debug_platform_write_entire_file(ThreadContext *thread_context,
                                        const void *data) {
   (void)thread_context;
   // ─────────────────────────────────────────────────────────────────────
-  // Validate input
+  // Validate inputs
   // ─────────────────────────────────────────────────────────────────────
   if (!filename || filename[0] == '\0') {
     SET_ERROR_DETAIL("[debug_write] NULL or empty filename");

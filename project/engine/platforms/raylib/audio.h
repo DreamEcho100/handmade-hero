@@ -1,5 +1,5 @@
-#ifndef DE100_PLATFORM_RAYLIB_AUDIO_H
-#define DE100_PLATFORM_RAYLIB_AUDIO_H
+#ifndef DE100_PLATFORMS_RAYLIB_AUDIO_H
+#define DE100_PLATFORMS_RAYLIB_AUDIO_H
 
 #include "../../_common/base.h"
 #include "../../_common/memory.h"
@@ -68,4 +68,4 @@ void raylib_audio_fps_change_handling(GameAudioOutputBuffer *audio_output,
                                       PlatformAudioConfig *audio_config);
 void raylib_debug_audio_overlay(void);
 
-#endif // DE100_PLATFORM_RAYLIB_AUDIO_H
+#endif // DE100_PLATFORMS_RAYLIB_AUDIO_H
