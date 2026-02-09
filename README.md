@@ -76,41 +76,52 @@ In here currently, for example, Raylib is treated **as a backend**, not as _"the
 
 ## High‑level directory structure _(rough overview)_
 
+**Engine folder structure:**
+
 ```
-engine/
-  _common/
-    # Cross‑platform utilities
-    # (memory, files, time, threading, DLLs, etc.)
+├── backend.h
+├── build-common.sh # build utils and helpers for the games build process
+├── _common/ # Cross‑platform utilities
+│   └── ... # (memory, files, time, threading, DLLs, etc.)
+├── engine.c
+├── engine.h
+├── game/
+│   └── ...
+├── hooks/
+│   └── ...
+├── _internal/
+│   └── ...
+├── main.c
+├── platforms/
+│   ├── _common/ # Shared platform logic (NOT game logic)
+│   │   └── ...
+│   └── [platform]/ # platform _(raylib/x11)_ logic here like handling audio, game-loop, inputs...
+│       ├── hooks/ # a platform interfaces that are exposed to the game, either as utilities to be used like in `de100_get_frame_time` or headers to implement on the game in case of specific inputs like keyboard and joystick
+│       │   ├─── inputs/ # _(joystick.h, keyboard.h)_
+│       │   │   └── ...
+│       │   └── utils.c Like `de100_get_frame_time`, `de100_get_time`, `de100_get_fps`, ...
+│       └── ... # other platform specific code like backend.c, audio.c, inputs/mouse.c
+└── todos.md
+```
 
-  platform/
-    _common/
-      # Shared platform logic (NOT game logic)
-    x11/
-      # Native Linux/X11 backend
-    raylib/
-      # Raylib backend treated as a platform
+**Game example folder structure:**
 
-  engine.c
-    # Engine orchestration
-    # Lifecycle, calling into game, etc.
-
-  build-common.c
-    # Shared build logic
-
-[game]/
-  adapters/
-    x11/
-      inputs/
-        keyboard.c
-    raylib/
-      inputs/
-        keyboard.c
-
-  startup.c
-  init.c
-  main.c
-
-  build-dev.c
+```
+├── build/ # build output
+│   └── ...
+├── build-dev.sh # build the game in dev mode
+└── src/
+    ├── adapters/ # game/platform adapters code
+    │   ├── [platform]/
+    │       └── inputs/
+    │           ├── joystick.c
+    │           └── keyboard.c
+    ├── init.c # Defines the `GAME_INIT`, called when the game is loaded after startup, before the game loop
+    ├── inputs.h # Defines the game _actions_, which should be imported on the `src/adapters/[platform]/inputs/**.c` at the start
+    ├── main.c # Defines the `GAME_UPDATE_AND_RENDER` and `GAME_GET_AUDIO_SAMPLES`, called every frame
+    ├── main.h
+    ├── startup.c # Defines the `GAME_STARTUP`, called when the game is loaded before the game loop
+    └── ... other game specific code
 ```
 
 ---
@@ -397,7 +408,7 @@ void de100_time_sleep_ms(uint32 ms);
 ### Game Types (Your Game - No Prefix)
 
 ```c
-// handmadehero/src/main.h
+// games/handmade-hero/src/main.h
 typedef struct {
     real32 frequency;
     real32 volume;
@@ -415,7 +426,7 @@ typedef struct {
 ### Game Functions (Your Game - No Prefix)
 
 ```c
-// handmadehero/src/main.c
+// games/handmade-hero/src/main.c
 void update_player(GameState *state, De100GameInput *input);
 void render_gradient(De100GameBackBuffer *buffer, int offset_x, int offset_y);
 ```
@@ -480,7 +491,7 @@ project/
 │       └── x11/
 │           ├── backend.c
 │           └── audio.c
-└── handmadehero/
+└── games/handmade-hero/
     └── src/
         ├── main.c            ← GameState (no prefix)
         └── startup.c

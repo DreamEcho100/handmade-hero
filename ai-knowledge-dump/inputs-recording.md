@@ -1433,7 +1433,7 @@
 │  │           ├── replay-buffer.h   ◄── Replay buffer API                    │
 │  │           └── replay-buffer.c   ◄── mmap implementation                  │
 │  │                                                                          │
-│  └── handmadehero/                                                          │
+│  └── games/handmade-hero/                                                          │
 │      └── src/                                                               │
 │          └── adapters/                                                      │
 │              └── x11/                                                       │

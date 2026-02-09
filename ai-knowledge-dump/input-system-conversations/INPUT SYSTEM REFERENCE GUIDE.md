@@ -1403,7 +1403,7 @@ project/
 │       ├── input.h                     # Current GameInput (deprecated later)
 │       └── input.c                     # (deprecated later)
 │
-└── handmadehero/                       # Your game
+└── games/handmade-hero/                       # Your game
     ├── game.c                          # Game-specific input_*() helpers
     ├── game.h
     └── input_actions.h                 # ACTION_MOVE_UP, etc. (Phase 2)

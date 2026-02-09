@@ -5,7 +5,7 @@
 3. They want to add platform-specific input handling functions that the game defines
 4. Structure would be:
    - `/engine` - cross-platform stuff
-   - `/handmadehero/platform` - game-specific platform input handlers like `X11_HANDLE_GAME_KEYBOARD`
+   - `/games/handmade-hero/platform` - game-specific platform input handlers like `X11_HANDLE_GAME_KEYBOARD`
 
 Essentially, they're proposing that each game provides its own platform-specific input handlers, which the platform layer calls.
 
@@ -67,7 +67,7 @@ Casey would say: _"You're solving problems you don't have yet."_
 │ WHAT YOU'RE PROPOSING:                                                      │
 │ ──────────────────────                                                      │
 │                                                                             │
-│ handmadehero/                                                               │
+│ games/handmade-hero/                                                               │
 │ ├── game.c              # GAME_UPDATE_AND_RENDER, GAME_GET_AUDIO_SAMPLES    │
 │ ├── platform/                                                               │
 │ │   ├── x11_input.c     # X11_HANDLE_GAME_KEYBOARD_PRESS(...)               │
@@ -124,7 +124,7 @@ Here's a clean way to do what you're proposing:
 │     └── x11/                                                                │
 │         └── backend.c   # Calls game_handle_key_event()                     │
 │                                                                             │
-│ handmadehero/                                                               │
+│ games/handmade-hero/                                                               │
 │ ├── game.c              # Implements GAME_UPDATE_AND_RENDER                 │
 │ ├── game.h                                                                  │
 │ ├── input_handlers.c    # Implements game_handle_key_event() ← NEW          │
@@ -135,7 +135,7 @@ Here's a clean way to do what you're proposing:
 
 ### The Key Insight: ONE Handler Function Per Event Type
 
-```c:handmadehero/input_handlers.h
+```c:games/handmade-hero/input_handlers.h
 #ifndef DE100_ENGINE_INPUT_HANDLERS_H
 #define DE100_ENGINE_INPUT_HANDLERS_H
 
@@ -170,7 +170,7 @@ void game_handle_x11_key_event(KeySym keysym, bool is_down,
 #endif
 ```
 
-```c:handmadehero/input_handlers.c
+```c:games/handmade-hero/input_handlers.c
 #include "input_handlers.h"
 #include "../engine/game/input.h"
 
@@ -214,7 +214,7 @@ void game_handle_x11_key_event(KeySym keysym, bool is_down,
 
 ```c:engine/platform/x11/inputs/keyboard.c
 #include "keyboard.h"
-#include "../../../../handmadehero/input_handlers.h"  // Game provides this!
+#include "../../../../games/handmade-hero/input_handlers.h"  // Game provides this!
 
 void handleEventKeyPress(XEvent *event, GameInput *new_game_input, ...) {
     KeySym key = XLookupKeysym(&event->xkey, 0);
@@ -294,7 +294,7 @@ Casey uses `bool IsDown` pattern. Stick with that.
 
 Your `build.sh` idea is fine:
 
-```bash:handmadehero/build.sh
+```bash:games/handmade-hero/build.sh
 #!/bin/bash
 
 PLATFORM=${1:-x11}  # Default to x11
@@ -365,8 +365,8 @@ esac
 
 ## Quick Implementation Path
 
-1. **Create `handmadehero/input_handlers.h`** - Declare `game_handle_x11_key_event()`
-2. **Create `handmadehero/input_handlers.c`** - Move your switch statement there
+1. **Create `games/handmade-hero/input_handlers.h`** - Declare `game_handle_x11_key_event()`
+2. **Create `games/handmade-hero/input_handlers.c`** - Move your switch statement there
 3. **Modify `keyboard.c`** - Call `game_handle_x11_key_event()` instead of inline switch
 4. **Update build.sh** - Compile `input_handlers.c` into libgame.so
 5. **Test** - Make sure WASD still works
@@ -411,13 +411,13 @@ Actually, the user might be overthinking the separate .so part. The simpler appr
 
 Option A: Compile input handlers INTO the platform executable (static)
 
-- handmadehero/input_handlers.c gets compiled with the X11 backend
+- games/handmade-hero/input_handlers.c gets compiled with the X11 backend
 - No separate .so
 - Simplest approach
 
 Option B: Compile input handlers INTO libgame.so
 
-- handmadehero/input_handlers.c gets compiled into libgame.so
+- games/handmade-hero/input_handlers.c gets compiled into libgame.so
 - Platform loads libgame.so, which exports both game functions AND input handlers
 - Still one .so, hot-reloadable
 
@@ -486,7 +486,7 @@ You're thinking about this correctly. Let me validate and clarify:
 │                     YOUR PROPOSED STRUCTURE                                 │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
-│ handmadehero/                                                               │
+│ games/handmade-hero/                                                               │
 │ ├── game.c                    # GAME_UPDATE_AND_RENDER                      │
 │ ├── game.h                    # GAME_GET_AUDIO_SAMPLES                      │
 │ │                             # (loaded via game_loader → libgame.so)       │
@@ -536,7 +536,7 @@ You're thinking about this correctly. Let me validate and clarify:
 │                                                                             │
 │ Q: So where DO they go?                                                     │
 │ A: In the game folder, but compiled with the platform executable.           │
-│    handmadehero/platform/x11_input.c → compiled into ./handmade             │
+│    games/handmade-hero/platform/x11_input.c → compiled into ./handmade             │
 │                                                                             │
 │ This is the "glue" between platform and game.                               │
 │ It lives in the GAME folder because it's game-specific.                     │
@@ -551,7 +551,7 @@ You're thinking about this correctly. Let me validate and clarify:
 
 ### 1. Game's X11 Input Handler
 
-```c:handmadehero/platform/x11_input.h
+```c:games/handmade-hero/platform/x11_input.h
 #ifndef DE100_ENGINE_PLATFORM_X11_INPUT_H
 #define DE100_ENGINE_PLATFORM_X11_INPUT_H
 
@@ -569,7 +569,7 @@ void game_clear_input_state(GameInput* game_input);
 #endif
 ```
 
-```c:handmadehero/platform/x11_input.c
+```c:games/handmade-hero/platform/x11_input.c
 #include "x11_input.h"
 #include "../../engine/game/input.h"
 
@@ -637,7 +637,7 @@ void game_clear_input_state(GameInput* game_input) {
 
 ### 2. Game's Raylib Input Handler (Different Pattern!)
 
-```c:handmadehero/platform/raylib_input.h
+```c:games/handmade-hero/platform/raylib_input.h
 #ifndef DE100_ENGINE_PLATFORM_RAYLIB_INPUT_H
 #define DE100_ENGINE_PLATFORM_RAYLIB_INPUT_H
 
@@ -649,7 +649,7 @@ void game_poll_raylib_input(GameInput* game_input);
 #endif
 ```
 
-```c:handmadehero/platform/raylib_input.c
+```c:games/handmade-hero/platform/raylib_input.c
 #include "raylib_input.h"
 #include <raylib.h>
 
@@ -686,7 +686,7 @@ void game_poll_raylib_input(GameInput* game_input) {
 
 ```c:engine/platform/x11/inputs/keyboard.c
 // Include the GAME's handler (lives in game folder!)
-#include "../../../../handmadehero/platform/x11_input.h"
+#include "../../../../games/handmade-hero/platform/x11_input.h"
 
 void handleEventKeyPress(XEvent *event, GameInput *new_game_input, ...) {
     KeySym key = XLookupKeysym(&event->xkey, 0);
@@ -722,7 +722,7 @@ void handleEventKeyRelease(XEvent *event, GameInput *new_game_input) {
 ```
 
 ```c:engine/platform/raylib/backend.c
-#include "../../../handmadehero/platform/raylib_input.h"
+#include "../../../games/handmade-hero/platform/raylib_input.h"
 
 int platform_main() {
     // ...
@@ -747,7 +747,7 @@ int platform_main() {
 
 ## Build Script
 
-```bash:handmadehero/build.sh
+```bash:games/handmade-hero/build.sh
 #!/bin/bash
 set -e
 
@@ -973,7 +973,7 @@ I was thinking like an engine developer rather than a learner, optimizing for re
 │                                   ▼                                         │
 │              ┌────────────────────────────────────────┐                     │
 │              │  Game's Platform Input Handlers        │                     │
-│              │  (handmadehero/platform/*.so)          │                     │
+│              │  (games/handmade-hero/platform/*.so)          │                     │
 │              │                                        │                     │
 │              │  "Policy/Bridge between game & platform"│                    │
 │              └────────────────────────────────────────┘                     │
@@ -1099,7 +1099,7 @@ You correctly identified that:
 │     ├── x11/          # X11 backend (loads game's input handler .so)        │
 │     └── raylib/       # Raylib backend (loads game's input handler .so)     │
 │                                                                             │
-│ handmadehero/                                                               │
+│ games/handmade-hero/                                                               │
 │ ├── game.c            # GAME_UPDATE_AND_RENDER, GAME_GET_AUDIO_SAMPLES      │
 │ ├── actions.h         # Game's action definitions                           │
 │ ├── platform/                                                               │
@@ -1866,8 +1866,8 @@ My Recommendation for You
 │ THIS WEEK:                                                                  │
 │ ──────────                                                                  │
 │ ☐ Implement your input handler .so architecture                             │
-│   • Create handmadehero/platform/x11_input.c                                │
-│   • Create handmadehero/actions.h                                           │
+│   • Create games/handmade-hero/platform/x11_input.c                                │
+│   • Create games/handmade-hero/actions.h                                           │
 │   • Update build.sh to compile the .so                                      │
 │   • Update X11 backend to load and use it                                   │
 │                                                                             │

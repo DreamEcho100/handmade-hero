@@ -337,7 +337,7 @@ echo "${VALUE#*=}"    # prints: x11
                                     │ source
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ project/handmadehero/build.sh                                               │
+│ project/games/handmade-hero/build.sh                                               │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
 │  1. Source engine config                                                    │
