@@ -220,11 +220,11 @@ de100_set_backend() {
         "$backend_dir/backend.c"
         # "$backend_dir/inputs/joystick.c"
         # "$backend_dir/inputs/keyboard.c"
+        "$backend_dir/inputs/mouse.c"
         "$backend_dir/hooks/main.c"
         #
         "$GAME_DIR/adapters/$backend/inputs/keyboard.c"
         "$GAME_DIR/adapters/$backend/inputs/joystick.c"
-        "$GAME_DIR/adapters/$backend/inputs/mouse.c"
     )
     
     case "$backend" in

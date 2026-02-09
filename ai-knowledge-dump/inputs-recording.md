@@ -698,9 +698,7 @@
 
 ---
 
-## Day 25 Updates: Memory-Mapped Replay Buffers
-
----
+## Day 25: Memory-Mapped Replay Buffers
 
 ### The Performance Problem (Day 24)
 
@@ -793,45 +791,6 @@
 
 ---
 
-### Platform Abstraction Design
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    PLATFORM ABSTRACTION                                     │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  replay-buffer.c uses your existing cross-platform APIs:                    │
-│                                                                             │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                                                                     │   │
-│  │  FROM _common/file.h:                                               │   │
-│  │  ────────────────────                                               │   │
-│  │  • de100_file_open()   - Create/open replay buffer files            │   │
-│  │  • de100_file_close()  - Close file descriptors                     │   │
-│  │  • de100_file_seek()   - Seek in input files                        │   │
-│  │  • de100_file_read_all()  - Read input frames                       │   │
-│  │  • de100_file_write_all() - Write input frames                      │   │
-│  │                                                                     │   │
-│  │  FROM _common/memory.h:                                             │   │
-│  │  ──────────────────────                                             │   │
-│  │  • de100_mem_copy()    - Fast memory copy for save/restore          │   │
-│  │                                                                     │   │
-│  │  PLATFORM-SPECIFIC (isolated in replay-buffer.c):                   │   │
-│  │  ─────────────────────────────────────────────────                  │   │
-│  │  • platform_mmap_file()    - mmap() / MapViewOfFile()               │   │
-│  │  • platform_munmap_file()  - munmap() / UnmapViewOfFile()           │   │
-│  │  • platform_file_resize()  - ftruncate() / SetEndOfFile()           │   │
-│  │                                                                     │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                                                             │
-│  Only mmap/MapViewOfFile requires platform-specific code.                   │
-│  Everything else uses _common/ abstractions.                                │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
----
-
 ### Windows vs Linux Memory Mapping
 
 ```
@@ -855,8 +814,8 @@
 │  │                       0, 0, size)                                   │   │
 │  │         └─→ Returns: void* pointer to mapped memory                 │   │
 │  │                                                                     │   │
-│  │ Usage:  memcpy(mapped_ptr, game_memory, size);  // Save             │   │
-│  │         memcpy(game_memory, mapped_ptr, size);  // Restore          │   │
+│  │ Usage:  CopyMemory(mapped_ptr, game_memory, size);  // Save         │   │
+│  │         CopyMemory(game_memory, mapped_ptr, size);  // Restore      │   │
 │  │                                                                     │   │
 │  │ Cleanup: UnmapViewOfFile(mapped_ptr);                               │   │
 │  │          CloseHandle(mapping_handle);                               │   │
@@ -869,8 +828,7 @@
 │  ────────────────────────────                                               │
 │                                                                             │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │ Step 1: de100_file_open(filename, DE100_FILE_READ | DE100_FILE_WRITE│   │
-│  │                         | DE100_FILE_CREATE | DE100_FILE_TRUNCATE)  │   │
+│  │ Step 1: open(filename, O_RDWR | O_CREAT | O_TRUNC, 0644)            │   │
 │  │         └─→ Returns: int file descriptor                           │   │
 │  │                                                                     │   │
 │  │ Step 2: ftruncate(fd, size)                                         │   │
@@ -887,7 +845,7 @@
 │  │         de100_mem_copy(game_memory, mapped_ptr, size);  // Restore  │   │
 │  │                                                                     │   │
 │  │ Cleanup: munmap(mapped_ptr, size);                                  │   │
-│  │          de100_file_close(fd);                                      │   │
+│  │          close(fd);                                                 │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │  ═══════════════════════════════════════════════════════════════════════   │
@@ -918,25 +876,24 @@
 
 ---
 
-### Replay Buffer Architecture
+### Architecture Overview
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                    REPLAY BUFFER ARCHITECTURE                               │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
-│  STRUCTURE (defined in _common/replay-buffer.h):                            │
-│  ───────────────────────────────────────────────                            │
+│  STRUCTURE (defined in game/memory.h):                                      │
+│  ─────────────────────────────────────                                      │
 │                                                                             │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │ ReplayBuffer                                                        │   │
 │  │ ┌─────────────────────────────────────────────────────────────────┐ │   │
-│  │ │ file_fd: 4                    // File descriptor                │ │   │
-│  │ │ memory_block: 0x7f1234560000  // mmap'd region pointer          │ │   │
-│  │ │ mapped_size: 1140850688       // Size of mapped region          │ │   │
+│  │ │ file_handle: 4               // File descriptor (Linux)        │ │   │
+│  │ │ memory_map: (handle)         // Mapping handle (Windows only)  │ │   │
+│  │ │ memory_block: 0x7f1234560000 // mmap'd region pointer          │ │   │
 │  │ │ filename: "/path/loop_edit_0_state.hmi"                         │ │   │
-│  │ │ is_valid: true                // Ready for use?                 │ │   │
-│  │ │ last_error: REPLAY_BUFFER_SUCCESS                               │ │   │
+│  │ │ is_valid: true               // Ready for use?                 │ │   │
 │  │ └─────────────────────────────────────────────────────────────────┘ │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
@@ -1003,72 +960,32 @@
 
 ---
 
-### API Reference: replay-buffer.h
+### API Reference
+
+#### replay-buffer.h
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                    REPLAY BUFFER API                                        │
-│                    Location: project/engine/_common/replay-buffer.h         │
+│                    Location: project/engine/platforms/_common/replay-buffer.h│
 ├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  CONSTANTS:                                                                 │
-│  ──────────                                                                 │
-│                                                                             │
-│  #define MAX_REPLAY_BUFFERS 4                                               │
-│  #define REPLAY_BUFFER_FILENAME_MAX 256                                     │
-│                                                                             │
-│  ═══════════════════════════════════════════════════════════════════════   │
-│                                                                             │
-│  ERROR CODES:                                                               │
-│  ────────────                                                               │
-│                                                                             │
-│  typedef enum {                                                             │
-│      REPLAY_BUFFER_SUCCESS = 0,                                             │
-│      REPLAY_BUFFER_ERROR_NULL_STATE,                                        │
-│      REPLAY_BUFFER_ERROR_INVALID_SLOT,                                      │
-│      REPLAY_BUFFER_ERROR_NO_GAME_MEMORY,                                    │
-│      REPLAY_BUFFER_ERROR_FILE_CREATE_FAILED,                                │
-│      REPLAY_BUFFER_ERROR_FILE_RESIZE_FAILED,                                │
-│      REPLAY_BUFFER_ERROR_MMAP_FAILED,                                       │
-│      REPLAY_BUFFER_ERROR_BUFFER_NOT_VALID,                                  │
-│      REPLAY_BUFFER_ERROR_SAVE_FAILED,                                       │
-│      REPLAY_BUFFER_ERROR_RESTORE_FAILED,                                    │
-│  } ReplayBufferErrorCode;                                                   │
-│                                                                             │
-│  ═══════════════════════════════════════════════════════════════════════   │
 │                                                                             │
 │  INITIALIZATION:                                                            │
 │  ───────────────                                                            │
 │                                                                             │
-│  ReplayBufferInitResult replay_buffers_init(                                │
-│      const char *exe_directory,                                             │
-│      void *game_memory,                                                     │
-│      uint64 total_size,                                                     │
-│      ReplayBuffer *out_buffers);                                            │
+│  bool replay_buffers_init(const char *exe_directory,                        │
+│                           GameMemoryState *state);                          │
 │                                                                             │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │ Purpose: Create and mmap all replay buffer files                    │   │
+│  │ Purpose: Create and mmap all replay buffer files at startup         │   │
 │  │                                                                     │   │
 │  │ Parameters:                                                         │   │
 │  │   exe_directory - Where to create replay files                      │   │
-│  │   game_memory   - Pointer to game memory block                      │   │
-│  │   total_size    - Size of game memory (permanent + transient)       │   │
-│  │   out_buffers   - Array of MAX_REPLAY_BUFFERS to initialize         │   │
+│  │   state         - GameMemoryState with total_size set               │   │
 │  │                                                                     │   │
-│  │ When to call: After game memory is allocated, before main loop     │   │
+│  │ When to call: After game memory allocated, before main loop         │   │
 │  │                                                                     │   │
-│  │ Returns: ReplayBufferInitResult with:                               │   │
-│  │   .success              - true if at least one buffer initialized   │   │
-│  │   .error_code           - Error code if all failed                  │   │
-│  │   .buffers_initialized  - Count of successful buffers               │   │
-│  │                                                                     │   │
-│  │ Example:                                                            │   │
-│  │   ReplayBufferInitResult result = replay_buffers_init(              │   │
-│  │       exe_dir, game_memory, total_size, state->replay_buffers);     │   │
-│  │   if (!result.success) {                                            │   │
-│  │       fprintf(stderr, "Warning: %s\n",                              │   │
-│  │               replay_buffer_strerror(result.error_code));           │   │
-│  │   }                                                                 │   │
+│  │ Returns: true if at least one buffer initialized                    │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │  ═══════════════════════════════════════════════════════════════════════   │
@@ -1076,19 +993,14 @@
 │  SHUTDOWN:                                                                  │
 │  ─────────                                                                  │
 │                                                                             │
-│  void replay_buffers_shutdown(ReplayBuffer *buffers, uint64 total_size);    │
+│  void replay_buffers_shutdown(GameMemoryState *state);                      │
 │                                                                             │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │ Purpose: Unmap and close all replay buffer files                    │   │
 │  │                                                                     │   │
-│  │ Parameters:                                                         │   │
-│  │   buffers    - Array of replay buffers to shutdown                  │   │
-│  │   total_size - Size that was mapped (needed for munmap)             │   │
-│  │                                                                     │   │
 │  │ When to call: During engine shutdown                                │   │
 │  │                                                                     │   │
-│  │ Note: Files remain on disk (can be reused next run)                 │   │
-│  │       Safe to call multiple times (idempotent)                      │   │
+│  │ Note: Files remain on disk. Safe to call multiple times.            │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │  ═══════════════════════════════════════════════════════════════════════   │
@@ -1096,22 +1008,13 @@
 │  GET BUFFER:                                                                │
 │  ───────────                                                                │
 │                                                                             │
-│  ReplayBuffer *replay_buffer_get(ReplayBuffer *buffers, int32 slot_index);  │
+│  ReplayBuffer *replay_buffer_get(GameMemoryState *state,                    │
+│                                  int32 slot_index);                         │
 │                                                                             │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │ Purpose: Get pointer to a specific replay buffer slot               │   │
 │  │                                                                     │   │
-│  │ Parameters:                                                         │   │
-│  │   buffers    - Array of replay buffers                              │   │
-│  │   slot_index - Which slot (0 to MAX_REPLAY_BUFFERS-1)               │   │
-│  │                                                                     │   │
 │  │ Returns: Pointer to ReplayBuffer, or NULL if invalid index          │   │
-│  │                                                                     │   │
-│  │ Example:                                                            │   │
-│  │   ReplayBuffer *buf = replay_buffer_get(state->replay_buffers, 1);  │   │
-│  │   if (replay_buffer_is_valid(buf)) {                                │   │
-│  │       // Use buf->memory_block                                      │   │
-│  │   }                                                                 │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │  ═══════════════════════════════════════════════════════════════════════   │
@@ -1119,27 +1022,16 @@
 │  SAVE STATE:                                                                │
 │  ───────────                                                                │
 │                                                                             │
-│  ReplayBufferResult replay_buffer_save_state(                               │
-│      ReplayBuffer *buffer,                                                  │
-│      const void *game_memory,                                               │
-│      uint64 total_size);                                                    │
+│  bool replay_buffer_save_state(GameMemoryState *state,                      │
+│                                int32 slot_index);                           │
 │                                                                             │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │ Purpose: Snapshot game memory to replay buffer (FAST!)              │   │
 │  │                                                                     │   │
-│  │ Parameters:                                                         │   │
-│  │   buffer      - Target replay buffer                                │   │
-│  │   game_memory - Source game memory                                  │   │
-│  │   total_size  - Size to copy                                        │   │
-│  │                                                                     │   │
-│  │ When to call: At start of recording                                 │   │
-│  │                                                                     │   │
 │  │ What it does:                                                       │   │
-│  │   de100_mem_copy(buffer->memory_block, game_memory, total_size)     │   │
+│  │   memcpy(buffer->memory_block, state->game_memory, total_size)      │   │
 │  │                                                                     │   │
 │  │ Performance: ~50-100ms for 1GB (vs 2-5 seconds with file I/O)       │   │
-│  │                                                                     │   │
-│  │ Returns: ReplayBufferResult with success status                     │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │  ═══════════════════════════════════════════════════════════════════════   │
@@ -1147,139 +1039,90 @@
 │  RESTORE STATE:                                                             │
 │  ──────────────                                                             │
 │                                                                             │
-│  ReplayBufferResult replay_buffer_restore_state(                            │
-│      const ReplayBuffer *buffer,                                            │
-│      void *game_memory,                                                     │
-│      uint64 total_size);                                                    │
+│  bool replay_buffer_restore_state(GameMemoryState *state,                   │
+│                                   int32 slot_index);                        │
 │                                                                             │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │ Purpose: Restore game memory from replay buffer (FAST!)             │   │
 │  │                                                                     │   │
-│  │ Parameters:                                                         │   │
-│  │   buffer      - Source replay buffer                                │   │
-│  │   game_memory - Destination game memory                             │   │
-│  │   total_size  - Size to copy                                        │   │
+│  │ What it does:                                                       │   │
+│  │   memcpy(state->game_memory, buffer->memory_block, total_size)      │   │
 │  │                                                                     │   │
 │  │ When to call: At start of playback, and on each loop iteration      │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### input-recording.h
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    INPUT RECORDING API                                      │
+│                    Location: project/engine/platforms/_common/input-recording.h│
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  RESULT CODE (Day 25 Addition):                                             │
+│  ──────────────────────────────                                             │
+│                                                                             │
+│  typedef enum {                                                             │
+│    INPUT_RECORDING_TOGGLE_STARTED_RECORDING,                                │
+│    INPUT_RECORDING_TOGGLE_SWITCHED_TO_PLAYBACK,                             │
+│    INPUT_RECORDING_TOGGLE_STOPPED_PLAYBACK,  ◄── Day 25: Can exit playback! │
+│  } INPUT_RECORDING_TOGGLE_RESULT_CODE;                                      │
+│                                                                             │
+│  ═══════════════════════════════════════════════════════════════════════   │
+│                                                                             │
+│  TOGGLE FUNCTION:                                                           │
+│  ────────────────                                                           │
+│                                                                             │
+│  INPUT_RECORDING_TOGGLE_RESULT_CODE                                         │
+│  input_recording_toggle(const char *exe_directory,                          │
+│                         GameMemoryState *state);                            │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ Purpose: Cycle through recording states                             │   │
 │  │                                                                     │   │
-│  │ What it does:                                                       │   │
-│  │   de100_mem_copy(game_memory, buffer->memory_block, total_size)     │   │
+│  │ State Machine:                                                      │   │
+│  │   IDLE → RECORDING → PLAYBACK → IDLE                                │   │
 │  │                                                                     │   │
-│  │ Performance: ~50-100ms for 1GB (vs 2-5 seconds with file I/O)       │   │
+│  │ Returns: Result code indicating what transition occurred            │   │
 │  │                                                                     │   │
-│  │ Returns: ReplayBufferResult with success status                     │   │
+│  │ Game can use result to decide whether to reset inputs:              │   │
+│  │   if (result == INPUT_RECORDING_TOGGLE_STOPPED_PLAYBACK) {          │   │
+│  │       // Reset controller states to prevent "stuck keys"           │   │
+│  │   }                                                                 │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │  ═══════════════════════════════════════════════════════════════════════   │
 │                                                                             │
-│  UTILITY FUNCTIONS:                                                         │
-│  ──────────────────                                                         │
+│  STATE QUERY FUNCTIONS:                                                     │
+│  ──────────────────────                                                     │
 │                                                                             │
-│  bool replay_buffer_is_valid(const ReplayBuffer *buffer);                   │
-│  const char *replay_buffer_strerror(ReplayBufferErrorCode code);            │
+│  bool input_recording_is_recording(GameMemoryState *state);                 │
+│  bool input_recording_is_playing(GameMemoryState *state);                   │
 │                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-### Updated Input Recording Flow
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    DAY 25 RECORDING FLOW                                    │
-├─────────────────────────────────────────────────────────────────────────────┤
+│  ═══════════════════════════════════════════════════════════════════════   │
 │                                                                             │
-│  USER PRESSES 'L' (Start Recording):                                       │
-│  ───────────────────────────────────                                        │
+│  FRAME FUNCTIONS:                                                           │
+│  ────────────────                                                           │
 │                                                                             │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │ 1. input_recording_begin(exe_dir, state, slot=1)                    │   │
-│  │    │                                                                │   │
-│  │    ├─► Get replay buffer: replay_buffer_get(buffers, 1)             │   │
-│  │    │   └─► Returns pointer to pre-initialized mmap'd buffer         │   │
-│  │    │                                                                │   │
-│  │    ├─► Open input file: de100_file_open("loop_edit_1_input.hmi")    │   │
-│  │    │   └─► For recording input frames (small, regular file I/O)    │   │
-│  │    │                                                                │   │
-│  │    ├─► Save state: replay_buffer_save_state(buffer, game_mem, size) │   │
-│  │    │   └─► de100_mem_copy(buffer->memory_block, game_memory, 1GB)   │   │
-│  │    │   └─► ~100ms! (was 2-5 seconds)                                │   │
-│  │    │                                                                │   │
-│  │    └─► Set state->input_recording_index = 1                         │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
+│  void input_recording_record_frame(GameMemoryState *state,                  │
+│                                    const GameInput *input);                 │
 │                                                                             │
-│  EACH FRAME (While Recording):                                              │
-│  ─────────────────────────────                                              │
-│                                                                             │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │ 2. input_recording_record_frame(state, input)                       │   │
-│  │    │                                                                │   │
-│  │    └─► de100_file_write_all(fd, input, sizeof(GameInput))           │   │
-│  │        └─► ~500 bytes per frame (fast, no problem)                  │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                                                             │
-│  USER PRESSES 'L' AGAIN (Stop Recording, Start Playback):                   │
-│  ────────────────────────────────────────────────────────                   │
-│                                                                             │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │ 3. input_recording_end(state)                                       │   │
-│  │    └─► de100_file_close(recording_fd)                               │   │
-│  │    └─► state->input_recording_index = 0                             │   │
-│  │                                                                     │   │
-│  │ 4. input_recording_playback_begin(exe_dir, state, slot=1)           │   │
-│  │    │                                                                │   │
-│  │    ├─► Get replay buffer: replay_buffer_get(buffers, 1)             │   │
-│  │    │                                                                │   │
-│  │    ├─► Open input file: de100_file_open("loop_edit_1_input.hmi")    │   │
-│  │    │                                                                │   │
-│  │    ├─► Restore state: replay_buffer_restore_state(buffer, ...)      │   │
-│  │    │   └─► de100_mem_copy(game_memory, buffer->memory_block, 1GB)   │   │
-│  │    │   └─► ~100ms! (was 2-5 seconds)                                │   │
-│  │    │                                                                │   │
-│  │    └─► Set state->input_playing_index = 1                           │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                                                             │
-│  EACH FRAME (While Playing):                                                │
-│  ───────────────────────────                                                │
-│                                                                             │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │ 5. input_recording_playback_frame(exe_dir, state, input)            │   │
-│  │    │                                                                │   │
-│  │    ├─► de100_file_read_all(fd, input, sizeof(GameInput))            │   │
-│  │    │                                                                │   │
-│  │    └─► If EOF (bytes_read == 0):                                    │   │
-│  │        │                                                            │   │
-│  │        ├─► de100_file_seek(fd, 0, SEEK_SET)  // Back to start       │   │
-│  │        │                                                            │   │
-│  │        ├─► replay_buffer_restore_state(buffer, game_memory, size)   │   │
-│  │        │   └─► de100_mem_copy(game_memory, buffer->memory_block)    │   │
-│  │        │   └─► ~100ms! SMOOTH LOOPING!                              │   │
-│  │        │                                                            │   │
-│  │        └─► de100_file_read_all(fd, input, sizeof(GameInput))        │   │
-│  │            └─► Read first input frame                               │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                                                             │
-│  USER PRESSES 'L' AGAIN (Stop Playback):                                    │
-│  ───────────────────────────────────────                                    │
-│                                                                             │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │ 6. input_recording_playback_end(state)                              │   │
-│  │    └─► de100_file_close(playback_fd)                                │   │
-│  │    └─► state->input_playing_index = 0                               │   │
-│  │    └─► Game continues from current state                            │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
+│  void input_recording_playback_frame(GameMemoryState *state,                │
+│                                      GameInput *input);                     │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-### State Machine (Updated for Day 25)
+### State Machine (Day 25)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    STATE MACHINE (Day 25)                                   │
+│                    STATE MACHINE                                            │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
 │                       ┌─────────────┐                                       │
@@ -1330,9 +1173,243 @@
 │           │                                                                 │
 │           │                                                                 │
 │           │   Day 24: Could NOT exit playback with L                        │
-│           │   Day 25: CAN exit playback with L ◄─── NEW!                    │
+│           │   Day 25: CAN exit playback with L ✓                            │
 │           │                                                                 │
-└───────────┴─────────────────────────────────────────────────────────────────┘
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Integration Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    INTEGRATION FLOW                                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ENGINE STARTUP (engine.c):                                                 │
+│  ──────────────────────────                                                 │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ 1. Allocate game memory                                             │   │
+│  │    allocations->game_state = de100_memory_alloc(base, total_size);  │   │
+│  │                                                                     │   │
+│  │ 2. Set up GameMemoryState                                           │   │
+│  │    platform->memory_state.total_size = total_size;                  │   │
+│  │    platform->memory_state.game_memory = allocations->game_state.base;│  │
+│  │                                                                     │   │
+│  │ 3. Initialize replay buffers (Day 25)                               │   │
+│  │    replay_buffers_init(exe_directory, &platform->memory_state);     │   │
+│  │                                                                     │   │
+│  │ 4. Initialize recording state                                       │   │
+│  │    platform->memory_state.recording_fd = -1;                        │   │
+│  │    platform->memory_state.playback_fd = -1;                         │   │
+│  │    platform->memory_state.input_recording_index = 0;                │   │
+│  │    platform->memory_state.input_playing_index = 0;                  │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ═══════════════════════════════════════════════════════════════════════   │
+│                                                                             │
+│  MAIN LOOP (backend.c):                                                     │
+│  ──────────────────────                                                     │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ while (is_game_running) {                                           │   │
+│  │                                                                     │   │
+│  │     // 1. Prepare input frame                                       │   │
+│  │     prepare_input_frame(old_input, new_input);                      │   │
+│  │                                                                     │   │
+│  │     // 2. Poll real inputs (keyboard, joystick, mouse)              │   │
+│  │     poll_keyboard(new_input);                                       │   │
+│  │     poll_joystick(new_input);                                       │   │
+│  │     poll_mouse(new_input);                                          │   │
+│  │                                                                     │   │
+│  │     // 3. Recording: save real inputs to file                       │   │
+│  │     if (input_recording_is_recording(&memory_state)) {              │   │
+│  │         input_recording_record_frame(&memory_state, new_input);     │   │
+│  │     }                                                               │   │
+│  │                                                                     │   │
+│  │     // 4. Playback: OVERWRITE inputs from file                      │   │
+│  │     if (input_recording_is_playing(&memory_state)) {                │   │
+│  │         input_recording_playback_frame(&memory_state, new_input);   │   │
+│  │     }                                                               │   │
+│  │                                                                     │   │
+│  │     // 5. Game update (uses new_input, doesn't know about recording)│   │
+│  │     game_update_and_render(&memory, new_input, &backbuffer);        │   │
+│  │                                                                     │   │
+│  │     // 6. Swap input buffers                                        │   │
+│  │     swap(old_input, new_input);                                     │   │
+│  │ }                                                                   │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ═══════════════════════════════════════════════════════════════════════   │
+│                                                                             │
+│  KEYBOARD HANDLER (keyboard.c):                                             │
+│  ──────────────────────────────                                             │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ case XK_L:                                                          │   │
+│  │ case XK_l: {                                                        │   │
+│  │     INPUT_RECORDING_TOGGLE_RESULT_CODE result =                     │   │
+│  │         input_recording_toggle(exe_directory, &memory_state);       │   │
+│  │                                                                     │   │
+│  │     // Game decides whether to reset inputs on playback stop        │   │
+│  │     if (result == INPUT_RECORDING_TOGGLE_STOPPED_PLAYBACK) {        │   │
+│  │         // Reset all controller states to prevent "stuck keys"      │   │
+│  │         for (uint32 c = 0; c < MAX_CONTROLLER_COUNT; c++) {         │   │
+│  │             GameControllerInput *ctrl = &inputs->controllers[c];    │   │
+│  │             for (uint32 b = 0; b < ArraySize(ctrl->buttons); b++) { │   │
+│  │                 ctrl->buttons[b].ended_down = false;                │   │
+│  │                 ctrl->buttons[b].half_transition_count = 0;         │   │
+│  │             }                                                       │   │
+│  │             ctrl->stick_avg_x = 0.0f;                               │   │
+│  │             ctrl->stick_avg_y = 0.0f;                               │   │
+│  │         }                                                           │   │
+│  │         // Also reset old_inputs to prevent state bleeding          │   │
+│  │         // (same loop for old_inputs)                               │   │
+│  │     }                                                               │   │
+│  │     break;                                                          │   │
+│  │ }                                                                   │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ═══════════════════════════════════════════════════════════════════════   │
+│                                                                             │
+│  ENGINE SHUTDOWN (engine.c):                                                │
+│  ───────────────────────────                                                │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ // Stop any active recording/playback                               │   │
+│  │ input_recording_end(&memory_state);                                 │   │
+│  │ input_recording_playback_end(&memory_state);                        │   │
+│  │                                                                     │   │
+│  │ // Clean up replay buffers (Day 25)                                 │   │
+│  │ replay_buffers_shutdown(&memory_state);                             │   │
+│  │                                                                     │   │
+│  │ // Free game memory                                                 │   │
+│  │ de100_memory_free(&allocations->game_state);                        │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Recording Flow (Day 25)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    RECORDING FLOW (Day 25)                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  USER PRESSES L (Start Recording):                                          │
+│  ─────────────────────────────────                                          │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ input_recording_begin():                                            │   │
+│  │                                                                     │   │
+│  │ 1. Get replay buffer for slot                                       │   │
+│  │    ReplayBuffer *buffer = replay_buffer_get(state, slot_index);     │   │
+│  │                                                                     │   │
+│  │ 2. Open input file for writing                                      │   │
+│  │    fd = de100_file_open("loop_edit_1_input.hmi", WRITE|CREATE);     │   │
+│  │                                                                     │   │
+│  │ 3. FAST: Save state to mmap'd buffer (~100ms)                       │   │
+│  │    replay_buffer_save_state(state, slot_index);                     │   │
+│  │    └─→ de100_mem_copy(buffer->memory_block, game_memory, size);     │   │
+│  │                                                                     │   │
+│  │ 4. Set recording state                                              │   │
+│  │    state->recording_fd = fd;                                        │   │
+│  │    state->input_recording_index = slot_index;                       │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ═══════════════════════════════════════════════════════════════════════   │
+│                                                                             │
+│  EACH FRAME (While Recording):                                              │
+│  ─────────────────────────────                                              │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ input_recording_record_frame():                                     │   │
+│  │                                                                     │   │
+│  │ 1. Write input to file (small, fast)                                │   │
+│  │    de100_file_write_all(fd, input, sizeof(GameInput));              │   │
+│  │    └─→ ~500 bytes per frame, negligible time                        │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Playback Flow (Day 25)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    PLAYBACK FLOW (Day 25)                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  USER PRESSES L (Start Playback):                                           │
+│  ────────────────────────────────                                           │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ input_recording_playback_begin():                                   │   │
+│  │                                                                     │   │
+│  │ 1. Get replay buffer for slot                                       │   │
+│  │    ReplayBuffer *buffer = replay_buffer_get(state, slot_index);     │   │
+│  │                                                                     │   │
+│  │ 2. Open input file for reading                                      │   │
+│  │    fd = de100_file_open("loop_edit_1_input.hmi", READ);             │   │
+│  │                                                                     │   │
+│  │ 3. FAST: Restore state from mmap'd buffer (~100ms)                  │   │
+│  │    replay_buffer_restore_state(state, slot_index);                  │   │
+│  │    └─→ de100_mem_copy(game_memory, buffer->memory_block, size);     │   │
+│  │                                                                     │   │
+│  │ 4. Set playback state                                               │   │
+│  │    state->playback_fd = fd;                                         │   │
+│  │    state->input_playing_index = slot_index;                         │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ═══════════════════════════════════════════════════════════════════════   │
+│                                                                             │
+│  EACH FRAME (While Playing):                                                │
+│  ───────────────────────────                                                │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ input_recording_playback_frame():                                   │   │
+│  │                                                                     │   │
+│  │ 1. Read input from file                                             │   │
+│  │    result = de100_file_read_all(fd, input, sizeof(GameInput));      │   │
+│  │                                                                     │   │
+│  │ 2. If EOF reached → LOOP!                                           │   │
+│  │    if (!result.success || result.bytes_processed == 0) {            │   │
+│  │                                                                     │   │
+│  │        // Seek input file to beginning                              │   │
+│  │        de100_file_seek(fd, 0, DE100_SEEK_SET);                      │   │
+│  │                                                                     │   │
+│  │        // FAST: Restore state from mmap (~100ms)                    │   │
+│  │        replay_buffer_restore_state(state, slot_index);              │   │
+│  │                                                                     │   │
+│  │        // Read first input frame                                    │   │
+│  │        de100_file_read_all(fd, input, sizeof(GameInput));           │   │
+│  │    }                                                                │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ═══════════════════════════════════════════════════════════════════════   │
+│                                                                             │
+│  USER PRESSES L (Stop Playback - Day 25 Feature):                           │
+│  ────────────────────────────────────────────────                           │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ input_recording_toggle() detects playback is active:                │   │
+│  │                                                                     │   │
+│  │ if (input_recording_is_playing(state)) {                            │   │
+│  │     input_recording_playback_end(state);                            │   │
+│  │     return INPUT_RECORDING_TOGGLE_STOPPED_PLAYBACK;                 │   │
+│  │ }                                                                   │   │
+│  │                                                                     │   │
+│  │ Game receives result code and can reset inputs if desired.          │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -1344,347 +1421,176 @@
 │                    FILE STRUCTURE                                           │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
-│  project/engine/                                                            │
-│  │                                                                          │
-│  ├── _common/                                                               │
-│  │   ├── file.h              (existing - file operations)                   │
-│  │   ├── file.c              (existing)                                     │
-│  │   ├── memory.h            (existing - memory operations)                 │
-│  │   ├── memory.c            (existing)                                     │
-│  │   ├── replay-buffer.h     (NEW - mmap API)                               │
-│  │   └── replay-buffer.c     (NEW - mmap implementation)                    │
-│  │                                                                          │
-│  ├── game/                                                                  │
-│  │   ├── memory.h            (MODIFIED - add replay_buffers array)          │
-│  │   └── input.h             (existing)                                     │
-│  │                                                                          │
-│  ├── platforms/                                                             │
-│  │   ├── _common/                                                           │
-│  │   │   ├── input-recording.h   (MODIFIED - update signatures)             │
-│  │   │   └── input-recording.c   (MODIFIED - use replay buffer API)         │
+│  project/                                                                   │
+│  ├── engine/                                                                │
+│  │   ├── game/                                                              │
+│  │   │   └── memory.h              ◄── GameMemoryState, ReplayBuffer        │
 │  │   │                                                                      │
-│  │   └── x11/                                                               │
-│  │       └── backend.c           (MODIFIED - update playback_frame call)    │
+│  │   └── platforms/                                                         │
+│  │       └── _common/                                                       │
+│  │           ├── input-recording.h ◄── Toggle result codes, API             │
+│  │           ├── input-recording.c ◄── Uses replay buffers for state        │
+│  │           ├── replay-buffer.h   ◄── Replay buffer API                    │
+│  │           └── replay-buffer.c   ◄── mmap implementation                  │
 │  │                                                                          │
-│  └── engine.c                    (MODIFIED - init/shutdown replay buffers)  │
+│  └── handmadehero/                                                          │
+│      └── src/                                                               │
+│          └── adapters/                                                      │
+│              └── x11/                                                       │
+│                  └── inputs/                                                │
+│                      └── keyboard.c ◄── L key handler, input reset logic    │
 │                                                                             │
 │  ═══════════════════════════════════════════════════════════════════════   │
 │                                                                             │
-│  RUNTIME FILES CREATED:                                                     │
-│  ──────────────────────                                                     │
+│  RUNTIME FILES (created in exe directory):                                  │
+│  ──────────────────────────────────────────                                 │
 │                                                                             │
-│  <exe_directory>/                                                           │
-│  ├── loop_edit_0_state.hmi   (mmap'd, ~1GB, slot 0)                         │
-│  ├── loop_edit_1_state.hmi   (mmap'd, ~1GB, slot 1) ◄── Default slot        │
-│  ├── loop_edit_2_state.hmi   (mmap'd, ~1GB, slot 2)                         │
-│  ├── loop_edit_3_state.hmi   (mmap'd, ~1GB, slot 3)                         │
-│  │                                                                          │
-│  ├── loop_edit_0_input.hmi   (regular file, small)                          │
-│  ├── loop_edit_1_input.hmi   (regular file, small) ◄── Default slot         │
-│  ├── loop_edit_2_input.hmi   (regular file, small)                          │
-│  └── loop_edit_3_input.hmi   (regular file, small)                          │
-│                                                                             │
-│  Note: State files are created at engine init (pre-allocated)               │
-│        Input files are created when recording starts                        │
+│  /path/to/exe/                                                              │
+│  ├── loop_edit_0_state.hmi   (1GB, mmap'd, slot 0)                          │
+│  ├── loop_edit_1_state.hmi   (1GB, mmap'd, slot 1) ◄── Default slot         │
+│  ├── loop_edit_2_state.hmi   (1GB, mmap'd, slot 2)                          │
+│  ├── loop_edit_3_state.hmi   (1GB, mmap'd, slot 3)                          │
+│  └── loop_edit_1_input.hmi   (~KB, regular file, inputs for slot 1)         │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-### Integration Checklist
+### Stuck Input Problem & Solution
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    INTEGRATION CHECKLIST                                    │
+│                    STUCK INPUT PROBLEM                                      │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
-│  FILES TO CREATE:                                                           │
+│  SCENARIO:                                                                  │
+│  ─────────                                                                  │
+│                                                                             │
+│  Frame 1-30: Recording, user holds D (moving right)                         │
+│  Frame 30:   User presses L to stop playback                                │
+│  Frame 31+:  Game continues... but D is still "ended_down = true"!          │
+│                                                                             │
+│  WHY THIS HAPPENS:                                                          │
 │  ─────────────────                                                          │
-│  [ ] _common/replay-buffer.h                                                │
-│  [ ] _common/replay-buffer.c                                                │
 │                                                                             │
-│  FILES TO MODIFY:                                                           │
-│  ─────────────────                                                          │
-│  [ ] game/memory.h                                                          │
-│      • Add: #include "../_common/replay-buffer.h"                           │
-│      • Add: ReplayBuffer replay_buffers[MAX_REPLAY_BUFFERS];                │
+│  The last recorded input frame had:                                         │
+│    controller.move_right.ended_down = true                                  │
+│    controller.move_right.half_transition_count = 0                          │
 │                                                                             │
-│  [ ] platforms/_common/input-recording.h                                    │
-│      • Update: playback_frame signature (add exe_directory param)           │
-│                                                                             │
-│  [ ] platforms/_common/input-recording.c                                    │
-│      • Add: #include "../../_common/replay-buffer.h"                        │
-│      • Update: input_recording_begin() to use replay_buffer_save_state()    │
-│      • Update: input_recording_playback_begin() to use restore              │
-│      • Update: input_recording_playback_frame() to use restore on loop      │
-│      • Update: get_input_filename() for separate input files                │
-│                                                                             │
-│  [ ] engine/engine.c                                                        │
-│      • Add: #include "_common/replay-buffer.h"                              │
-│      • Add: replay_buffers_init() call in engine_init()                     │
-│      • Add: replay_buffers_shutdown() call in engine_shutdown()             │
-│                                                                             │
-│  [ ] platforms/x11/backend.c                                                │
-│      • Update: input_recording_playback_frame() call signature              │
-│                                                                             │
-│  BUILD SCRIPT:                                                              │
-│  ─────────────                                                              │
-│  [ ] Add _common/replay-buffer.c to compilation                             │
+│  When playback stops, the game still sees this state.                       │
+│  No "key release" event ever came because we stopped mid-recording.         │
 │                                                                             │
 │  ═══════════════════════════════════════════════════════════════════════   │
 │                                                                             │
-│  TESTING:                                                                   │
-│  ────────                                                                   │
-│  [ ] Engine starts without errors                                           │
-│  [ ] "Replay buffers: 4/4 initialized" message appears                      │
-│  [ ] Press L → Recording starts (no freeze!)                                │
-│  [ ] Press L → Playback starts (no freeze!)                                 │
-│  [ ] Playback loops smoothly (no freeze on loop!)                           │
-│  [ ] Press L → Playback stops (Day 25 feature!)                             │
-│  [ ] Engine shuts down cleanly                                              │
-│  [ ] State files exist in exe directory (~1GB each)                         │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-### Comparison: Day 24 vs Day 25
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    DAY 24 vs DAY 25 COMPARISON                              │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  FEATURE                    │ DAY 24              │ DAY 25                  │
-│  ───────────────────────────┼─────────────────────┼─────────────────────────│
-│  State storage              │ File I/O            │ Memory-mapped file      │
-│  Save state time (1GB)      │ 2-5 seconds         │ 50-100ms                │
-│  Restore state time (1GB)   │ 2-5 seconds         │ 50-100ms                │
-│  Loop iteration feel        │ PAINFUL freeze      │ SMOOTH                  │
-│  Exit playback with L       │ ❌ No               │ ✅ Yes                  │
-│  File layout                │ Single file         │ Separate state/input    │
-│  Startup cost               │ None                │ mmap 4 files (~4GB)     │
-│  Disk space                 │ ~1GB per slot       │ ~1GB per slot (same)    │
-│  Code complexity            │ Simple              │ Slightly more complex   │
-│                                                                             │
-│  ═══════════════════════════════════════════════════════════════════════   │
-│                                                                             │
-│  WHY THE SPEEDUP?                                                           │
-│  ────────────────                                                           │
-│                                                                             │
-│  Day 24 (File I/O):                                                         │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │ User Space          │ Kernel Space         │ Hardware               │   │
-│  │                     │                      │                        │   │
-│  │ write(fd, buf, 1GB) │                      │                        │   │
-│  │        │            │                      │                        │   │
-│  │        └───────────►│ Copy to page cache   │                        │   │
-│  │                     │        │             │                        │   │
-│  │                     │        └────────────►│ Write to disk          │   │
-│  │                     │                      │ (or schedule write)    │   │
-│  │                     │                      │                        │   │
-│  │ BLOCKS until kernel │                      │                        │   │
-│  │ copies all data     │                      │                        │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                                                             │
-│  Day 25 (mmap + memcpy):                                                    │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │ User Space                                                          │   │
-│  │                                                                     │   │
-│  │ memcpy(mmap_region, game_memory, 1GB)                               │   │
-│  │        │                                                            │   │
-│  │        └─► Direct RAM-to-RAM copy                                   │   │
-│  │            No syscalls!                                             │   │
-│  │            No kernel involvement!                                   │   │
-│  │            Just CPU + memory bus                                    │   │
-│  │                                                                     │   │
-│  │ OS syncs to disk LATER, in background                               │   │
-│  │ (we don't care - we just need the RAM copy)                         │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                                                             │
-│  The mmap'd region IS memory. Writing to it is just writing to RAM.         │
-│  The OS handles syncing to disk lazily, in the background.                  │
-│  For our use case (looping replay), we never even need the disk sync!       │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-### Casey's Key Insight
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    CASEY'S KEY INSIGHT                                      │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  "The file is just there so the OS has somewhere to page the memory         │
-│   if it needs to. We're not actually using it as a file - we're using       │
-│   it as a named chunk of virtual memory that happens to be backed by        │
-│   disk storage."                                                            │
-│                                                                             │
-│  ═══════════════════════════════════════════════════════════════════════   │
-│                                                                             │
-│  MENTAL MODEL:                                                              │
-│  ─────────────                                                              │
-│                                                                             │
-│  Think of mmap'd files as:                                                  │
-│                                                                             │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                                                                     │   │
-│  │  NOT: "A file that I can access like memory"                        │   │
-│  │                                                                     │   │
-│  │  BUT: "Memory that happens to be backed by a file"                  │   │
-│  │                                                                     │   │
-│  │  The file is an implementation detail.                              │   │
-│  │  What you have is a pointer to a region of RAM.                     │   │
-│  │  You can read/write it at full memory speed.                        │   │
-│  │                                                                     │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                                                             │
-│  ═══════════════════════════════════════════════════════════════════════   │
-│                                                                             │
-│  WEB DEVELOPER ANALOGY:                                                     │
-│  ──────────────────────                                                     │
-│                                                                             │
-│  Day 24 (File I/O):                                                         │
-│    Like using fetch() with await - blocking, goes to network/disk           │
-│                                                                             │
-│  Day 25 (mmap):                                                             │
-│    Like using SharedArrayBuffer - direct memory access, no async            │
-│                                                                             │
-│  The mmap'd region is essentially a SharedArrayBuffer that the OS           │
-│  automatically persists to disk when convenient.                            │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-### Common Mistakes to Avoid
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    COMMON MISTAKES                                          │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  ❌ MISTAKE 1: Forgetting ftruncate() on Linux                              │
-│  ─────────────────────────────────────────────                              │
-│                                                                             │
-│  // WRONG:                                                                  │
-│  int fd = open("file.bin", O_RDWR | O_CREAT, 0644);                         │
-│  void *ptr = mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);     │
-│  // ptr is valid but maps 0 bytes! File is empty!                           │
-│                                                                             │
-│  // CORRECT:                                                                │
-│  int fd = open("file.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);               │
-│  ftruncate(fd, size);  // ← Set file size FIRST!                            │
-│  void *ptr = mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);     │
-│                                                                             │
-│  ═══════════════════════════════════════════════════════════════════════   │
-│                                                                             │
-│  ❌ MISTAKE 2: Using MAP_PRIVATE instead of MAP_SHARED                      │
-│  ─────────────────────────────────────────────────────                      │
-│                                                                             │
-│  MAP_PRIVATE = Copy-on-write, changes NOT saved to file                     │
-│  MAP_SHARED  = Changes written to file (what we want)                       │
-│                                                                             │
-│  For replay buffers, we want MAP_SHARED so the state persists.              │
-│                                                                             │
-│  ═══════════════════════════════════════════════════════════════════════   │
-│                                                                             │
-│  ❌ MISTAKE 3: Forgetting to munmap() before close()                        │
-│  ────────────────────────────────────────────────────                       │
-│                                                                             │
-│  // WRONG:                                                                  │
-│  close(fd);  // File closed but memory still mapped!                        │
-│  // Accessing ptr now is undefined behavior                                 │
-│                                                                             │
-│  // CORRECT:                                                                │
-│  munmap(ptr, size);  // Unmap first                                         │
-│  close(fd);          // Then close                                          │
-│                                                                             │
-│  ═══════════════════════════════════════════════════════════════════════   │
-│                                                                             │
-│  ❌ MISTAKE 4: Not checking mmap() return value                             │
-│  ──────────────────────────────────────────────                             │
-│                                                                             │
-│  // WRONG:                                                                  │
-│  void *ptr = mmap(...);                                                     │
-│  memcpy(ptr, data, size);  // Crash if mmap failed!                         │
-│                                                                             │
-│  // CORRECT:                                                                │
-│  void *ptr = mmap(...);                                                     │
-│  if (ptr == MAP_FAILED) {                                                   │
-│      perror("mmap failed");                                                 │
-│      return error;                                                          │
-│  }                                                                          │
-│  memcpy(ptr, data, size);                                                   │
-│                                                                             │
-│  ═══════════════════════════════════════════════════════════════════════   │
-│                                                                             │
-│  ❌ MISTAKE 5: Wrong size to munmap()                                       │
-│  ─────────────────────────────────────                                      │
-│                                                                             │
-│  // WRONG:                                                                  │
-│  munmap(ptr, 0);  // Size 0 does nothing!                                   │
-│                                                                             │
-│  // CORRECT:                                                                │
-│  munmap(ptr, original_mapped_size);  // Must match mmap size                │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-### Performance Expectations
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    PERFORMANCE EXPECTATIONS                                 │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  MEMORY COPY SPEED (approximate):                                           │
-│  ─────────────────────────────────                                          │
-│                                                                             │
-│  Modern DDR4 RAM: ~25-50 GB/s bandwidth                                     │
-│  memcpy 1GB: ~20-40ms theoretical minimum                                   │
-│  Real-world with cache effects: ~50-100ms                                   │
-│                                                                             │
-│  ═══════════════════════════════════════════════════════════════════════   │
-│                                                                             │
-│  DISK I/O SPEED (approximate):                                              │
+│  SOLUTION: Game Decides Policy                                              │
 │  ─────────────────────────────                                              │
 │                                                                             │
-│  HDD: ~100-200 MB/s → 1GB takes 5-10 seconds                                │
-│  SATA SSD: ~500 MB/s → 1GB takes 2 seconds                                  │
-│  NVMe SSD: ~2-3 GB/s → 1GB takes 300-500ms                                  │
+│  Engine returns result code:                                                │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ INPUT_RECORDING_TOGGLE_RESULT_CODE result =                         │   │
+│  │     input_recording_toggle(exe_dir, &memory_state);                 │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│  But file I/O also has:                                                     │
-│  • System call overhead                                                     │
-│  • Kernel buffer copies                                                     │
-│  • File system overhead                                                     │
-│  • Potential disk seeks                                                     │
+│  Game handles it:                                                           │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ if (result == INPUT_RECORDING_TOGGLE_STOPPED_PLAYBACK) {            │   │
+│  │     // Reset current inputs                                         │   │
+│  │     for (uint32 c = 0; c < MAX_CONTROLLER_COUNT; c++) {             │   │
+│  │         GameControllerInput *ctrl = &inputs->controllers[c];        │   │
+│  │         for (uint32 b = 0; b < ArraySize(ctrl->buttons); b++) {     │   │
+│  │             ctrl->buttons[b].ended_down = false;                    │   │
+│  │             ctrl->buttons[b].half_transition_count = 0;             │   │
+│  │         }                                                           │   │
+│  │         ctrl->stick_avg_x = 0.0f;                                   │   │
+│  │         ctrl->stick_avg_y = 0.0f;                                   │   │
+│  │     }                                                               │   │
+│  │     // Also reset old_inputs (prevents prepare_input_frame bleed)   │   │
+│  │     // ... same loop for old_inputs ...                             │   │
+│  │ }                                                                   │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│  Real-world file write 1GB: 2-5 seconds (even on SSD)                       │
+│  ═══════════════════════════════════════════════════════════════════════   │
+│                                                                             │
+│  WHY RESET BOTH inputs AND old_inputs?                                      │
+│  ─────────────────────────────────────                                      │
+│                                                                             │
+│  prepare_input_frame() copies ended_down from old → new:                    │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ If you only reset current_input:                                    │   │
+│  │                                                                     │   │
+│  │ Frame N:   Reset current_input to all false ✓                       │   │
+│  │ Frame N+1: prepare_input_frame() copies old_input (still D=true!)   │   │
+│  │            new_input.move_right.ended_down = true  ← STUCK AGAIN!   │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ If you reset BOTH:                                                  │   │
+│  │                                                                     │   │
+│  │ Frame N:   Reset both inputs to all false ✓                         │   │
+│  │ Frame N+1: prepare_input_frame() copies old_input (all false) ✓     │   │
+│  │            Real input polling detects actual key state ✓            │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ═══════════════════════════════════════════════════════════════════════   │
+│                                                                             │
+│  DESIGN PHILOSOPHY:                                                         │
+│  ──────────────────                                                         │
+│                                                                             │
+│  ✅ Engine provides information (what happened)                             │
+│  ✅ Game decides policy (what to do about it)                               │
+│  ✅ Different games can handle it differently                               │
+│  ✅ Engine stays generic, doesn't know about GameInput structure            │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Performance Comparison
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    PERFORMANCE COMPARISON                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  WHY MEMCPY IS FASTER THAN FILE I/O:                                        │
+│  ───────────────────────────────────                                        │
+│                                                                             │
+│  memcpy (RAM → RAM):                                                        │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ • Direct memory bus transfer                                        │   │
+│  │ • ~20-50 GB/s on modern systems                                     │   │
+│  │ • 1GB ÷ 20GB/s = 50ms                                               │   │
+│  │ • No system calls                                                   │   │
+│  │ • No kernel involvement                                             │   │
+│  │ • CPU just moves bytes                                              │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  File I/O (RAM → Disk):                                                     │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ • System call overhead                                              │   │
+│  │ • Kernel buffer copies                                              │   │
+│  │ • File system overhead                                              │   │
+│  │ • Disk seek time (HDD) or controller latency (SSD)                  │   │
+│  │ • ~100-500 MB/s typical                                             │   │
+│  │ • 1GB ÷ 200MB/s = 5 seconds                                         │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │  ═══════════════════════════════════════════════════════════════════════   │
 │                                                                             │
 │  EXPECTED RESULTS:                                                          │
 │  ─────────────────                                                          │
 │                                                                             │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │ Operation              │ Day 24        │ Day 25       │ Improvement │   │
-│  │ ───────────────────────┼───────────────┼──────────────┼─────────────│   │
+│  │────────────────────────┼───────────────┼──────────────┼─────────────│   │
 │  │ Start recording        │ 2-5 sec       │ 50-100ms     │ 20-50x      │   │
 │  │ Start playback         │ 2-5 sec       │ 50-100ms     │ 20-50x      │   │
 │  │ Loop iteration         │ 2-5 sec       │ 50-100ms     │ 20-50x      │   │
 │  │ Record input frame     │ <1ms          │ <1ms         │ Same        │   │
 │  │ Playback input frame   │ <1ms          │ <1ms         │ Same        │   │
 │  │ Engine startup         │ ~0ms          │ ~100-500ms   │ Slower*     │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │  * Engine startup is slower because we pre-create and mmap 4 files          │
 │    (~4GB total). This is a one-time cost that enables smooth looping.       │
@@ -1713,90 +1619,209 @@
 
 ---
 
-### Debugging Tips
+### Common Mistakes
 
-````
+```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    DEBUGGING TIPS                                           │
+│                    COMMON MISTAKES                                          │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
-│  VERIFY MMAP IS WORKING:                                                    │
-│  ───────────────────────                                                    │
+│  MISTAKE 1: Forgetting ftruncate() on Linux                                 │
+│  ──────────────────────────────────────────                                 │
 │                                                                             │
-│  Add timing to replay_buffer_save_state():                                  │
+│  ❌ WRONG:                                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ int fd = open("file.bin", O_RDWR | O_CREAT, 0644);                  │   │
+│  │ void *ptr = mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);│  │
+│  │ // FAILS! File is 0 bytes, mmap has nothing to map!                 │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│  ```c                                                                       │
-│  #include <time.h>                                                          │
-│                                                                             │
-│  ReplayBufferResult replay_buffer_save_state(...) {                         │
-│      struct timespec start, end;                                            │
-│      clock_gettime(CLOCK_MONOTONIC, &start);                                │
-│                                                                             │
-│      de100_mem_copy(buffer->memory_block, game_memory, total_size);         │
-│                                                                             │
-│      clock_gettime(CLOCK_MONOTONIC, &end);                                  │
-│      double ms = (end.tv_sec - start.tv_sec) * 1000.0 +                     │
-│                  (end.tv_nsec - start.tv_nsec) / 1000000.0;                 │
-│      printf("[REPLAY] Save state: %.2f ms\n", ms);                          │
-│      // Should be 50-100ms, NOT 2000-5000ms!                                │
-│  }                                                                          │
-│  ```                                                                        │
+│  ✅ CORRECT:                                                                │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ int fd = open("file.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);        │   │
+│  │ ftruncate(fd, size);  // ← CRITICAL!                                │   │
+│  │ void *ptr = mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);│  │
+│  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │  ═══════════════════════════════════════════════════════════════════════   │
 │                                                                             │
-│  CHECK MMAP FILES EXIST:                                                    │
-│  ───────────────────────                                                    │
+│  MISTAKE 2: Using MAP_PRIVATE instead of MAP_SHARED                         │
+│  ──────────────────────────────────────────────────                         │
 │                                                                             │
-│  ```bash                                                                    │
-│  $ ls -lh /path/to/exe/loop_edit_*                                          │
-│  -rw-r--r-- 1 user user 1.1G Jan 15 10:00 loop_edit_0_state.hmi             │
-│  -rw-r--r-- 1 user user 1.1G Jan 15 10:00 loop_edit_1_state.hmi             │
-│  -rw-r--r-- 1 user user 1.1G Jan 15 10:00 loop_edit_2_state.hmi             │
-│  -rw-r--r-- 1 user user 1.1G Jan 15 10:00 loop_edit_3_state.hmi             │
-│  -rw-r--r-- 1 user user  15K Jan 15 10:05 loop_edit_1_input.hmi             │
-│  ```                                                                        │
+│  ❌ WRONG:                                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ void *ptr = mmap(NULL, size, PROT_READ|PROT_WRITE,                  │   │
+│  │                  MAP_PRIVATE, fd, 0);                               │   │
+│  │ // Changes are copy-on-write, NOT written to file!                  │   │
+│  │ // Each process gets its own copy.                                  │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│  State files should be ~1GB each (your total_size)                          │
-│  Input files should be small (sizeof(GameInput) * frame_count)              │
+│  ✅ CORRECT:                                                                │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ void *ptr = mmap(NULL, size, PROT_READ|PROT_WRITE,                  │   │
+│  │                  MAP_SHARED, fd, 0);                                │   │
+│  │ // Changes visible to file (and other processes mapping same file) │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│  ═══════════════════════════════════════════════════════════════════════   │
-│                                                                             │
-│  CHECK MEMORY MAPPINGS:                                                     │
-│  ──────────────────────                                                     │
-│                                                                             │
-│  ```bash                                                                    │
-│  $ cat /proc/$(pgrep your_game)/maps | grep loop_edit                       │
-│  7f1234560000-7f1678900000 rw-s 00000000 08:01 12345 /path/loop_edit_0.hmi  │
-│  7f1678900000-7f1abcd00000 rw-s 00000000 08:01 12346 /path/loop_edit_1.hmi  │
-│  ...                                                                        │
-│  ```                                                                        │
-│                                                                             │
-│  The 'rw-s' means: read, write, shared (MAP_SHARED)                         │
-│  The addresses show where the files are mapped in memory                    │
+│  NOTE: For our use case (single process, RAM-to-RAM copy), MAP_PRIVATE      │
+│        would actually work fine. But MAP_SHARED is more correct and         │
+│        matches Casey's Windows implementation semantics.                    │
 │                                                                             │
 │  ═══════════════════════════════════════════════════════════════════════   │
 │                                                                             │
-│  COMMON ISSUES:                                                             │
-│  ──────────────                                                             │
+│  MISTAKE 3: Not checking mmap return value                                  │
+│  ─────────────────────────────────────────                                  │
 │                                                                             │
-│  Issue: "mmap failed: No space left on device"                              │
-│  Cause: Disk full, can't create 4GB of files                                │
-│  Fix:   Free disk space or reduce MAX_REPLAY_BUFFERS                        │
+│  ❌ WRONG:                                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ void *ptr = mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);│  │
+│  │ memcpy(ptr, data, size);  // CRASH if mmap failed!                  │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│  Issue: "mmap failed: Cannot allocate memory"                               │
-│  Cause: Not enough virtual address space (rare on 64-bit)                   │
-│  Fix:   Check ulimit -v, or reduce buffer count                             │
+│  ✅ CORRECT:                                                                │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ void *ptr = mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);│  │
+│  │ if (ptr == MAP_FAILED) {                                            │   │
+│  │     fprintf(stderr, "mmap failed: %s\n", strerror(errno));          │   │
+│  │     close(fd);                                                      │   │
+│  │     return false;                                                   │   │
+│  │ }                                                                   │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│  Issue: State not restoring correctly                                       │
-│  Cause: total_size mismatch between save and restore                        │
-│  Fix:   Ensure same size passed to both functions                           │
+│  ═══════════════════════════════════════════════════════════════════════   │
 │                                                                             │
-│  Issue: Segfault when accessing buffer->memory_block                        │
-│  Cause: mmap failed but not checked, or buffer not initialized              │
-│  Fix:   Always check replay_buffer_is_valid() before use                    │
+│  MISTAKE 4: Forgetting to munmap before close                               │
+│  ────────────────────────────────────────────                               │
+│                                                                             │
+│  ❌ WRONG:                                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ close(fd);  // File closed but memory still mapped!                 │   │
+│  │ // ptr is now a dangling pointer to unmapped memory                 │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ✅ CORRECT:                                                                │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ munmap(ptr, size);  // Unmap first                                  │   │
+│  │ close(fd);          // Then close file                              │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ═══════════════════════════════════════════════════════════════════════   │
+│                                                                             │
+│  MISTAKE 5: Not resetting both input buffers on playback stop               │
+│  ───────────────────────────────────────────────────────────                │
+│                                                                             │
+│  ❌ WRONG:                                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ if (result == INPUT_RECORDING_TOGGLE_STOPPED_PLAYBACK) {            │   │
+│  │     // Only reset current inputs                                    │   │
+│  │     reset_inputs(game_state->inputs);                               │   │
+│  │     // OOPS! old_inputs still has D key down!                       │   │
+│  │     // Next frame: prepare_input_frame copies old → new             │   │
+│  │     // Result: D key is "stuck" again!                              │   │
+│  │ }                                                                   │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ✅ CORRECT:                                                                │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ if (result == INPUT_RECORDING_TOGGLE_STOPPED_PLAYBACK) {            │   │
+│  │     reset_inputs(game_state->inputs);      // Reset current         │   │
+│  │     reset_inputs(platform_state->old_inputs);  // Reset old too!    │   │
+│  │ }                                                                   │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ═══════════════════════════════════════════════════════════════════════   │
+│                                                                             │
+│  MISTAKE 6: Initializing replay buffers before game memory                  │
+│  ─────────────────────────────────────────────────────────                  │
+│                                                                             │
+│  ❌ WRONG:                                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ replay_buffers_init(exe_dir, &memory_state);  // total_size is 0!   │   │
+│  │ memory_state.total_size = permanent + transient;                    │   │
+│  │ memory_state.game_memory = allocate_memory(total_size);             │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ✅ CORRECT:                                                                │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ memory_state.total_size = permanent + transient;                    │   │
+│  │ memory_state.game_memory = allocate_memory(total_size);             │   │
+│  │ replay_buffers_init(exe_dir, &memory_state);  // Now total_size set!│   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
-````
+```
+
+---
+
+### Quick Reference
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    QUICK REFERENCE                                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  HEADERS TO INCLUDE:                                                        │
+│  ───────────────────                                                        │
+│                                                                             │
+│  #include "platforms/_common/input-recording.h"  // Toggle, record, play    │
+│  #include "platforms/_common/replay-buffer.h"    // Init, shutdown, buffers │
+│  #include "game/memory.h"                        // GameMemoryState          │
+│                                                                             │
+│  ═══════════════════════════════════════════════════════════════════════   │
+│                                                                             │
+│  STARTUP SEQUENCE:                                                          │
+│  ─────────────────                                                          │
+│                                                                             │
+│  1. Allocate game memory                                                    │
+│  2. Set memory_state.total_size and memory_state.game_memory                │
+│  3. Call replay_buffers_init()                                              │
+│  4. Initialize recording_fd = -1, playback_fd = -1                          │
+│  5. Initialize input_recording_index = 0, input_playing_index = 0           │
+│                                                                             │
+│  ═══════════════════════════════════════════════════════════════════════   │
+│                                                                             │
+│  MAIN LOOP SEQUENCE:                                                        │
+│  ───────────────────                                                        │
+│                                                                             │
+│  1. prepare_input_frame(old, new)                                           │
+│  2. Poll real inputs                                                        │
+│  3. if (is_recording) record_frame()                                        │
+│  4. if (is_playing) playback_frame()  // Overwrites inputs!                 │
+│  5. game_update_and_render()                                                │
+│  6. swap(old, new)                                                          │
+│                                                                             │
+│  ═══════════════════════════════════════════════════════════════════════   │
+│                                                                             │
+│  SHUTDOWN SEQUENCE:                                                         │
+│  ──────────────────                                                         │
+│                                                                             │
+│  1. input_recording_end()                                                   │
+│  2. input_recording_playback_end()                                          │
+│  3. replay_buffers_shutdown()                                               │
+│  4. Free game memory                                                        │
+│                                                                             │
+│  ═══════════════════════════════════════════════════════════════════════   │
+│                                                                             │
+│  KEY BINDINGS:                                                              │
+│  ─────────────                                                              │
+│                                                                             │
+│  L key: Toggle recording state                                              │
+│         IDLE → RECORDING → PLAYBACK → IDLE                                  │
+│                                                                             │
+│  P key: Pause/unpause game (independent of recording)                       │
+│                                                                             │
+│  ═══════════════════════════════════════════════════════════════════════   │
+│                                                                             │
+│  FILES CREATED:                                                             │
+│  ──────────────                                                             │
+│                                                                             │
+│  loop_edit_N_state.hmi  - Memory-mapped state snapshot (~1GB each)          │
+│  loop_edit_N_input.hmi  - Input frames (small, regular file)                │
+│                                                                             │
+│  Where N = slot index (0-3, default is 1)                                   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
@@ -1807,48 +1832,586 @@
 │                    DAY 25 SUMMARY                                           │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
-│  WHAT WE LEARNED:                                                           │
-│  ─────────────────                                                          │
-│                                                                             │
-│  1. File I/O is SLOW for large data (1GB+ takes seconds)                    │
-│                                                                             │
-│  2. Memory-mapped files give us RAM-speed access to file-backed memory      │
-│                                                                             │
-│  3. memcpy() between RAM regions is 20-50x faster than file I/O             │
-│                                                                             │
-│  4. The OS handles disk sync in the background (we don't wait for it)       │
-│                                                                             │
-│  5. Pre-allocating buffers at startup trades startup time for runtime       │
-│     smoothness                                                              │
-│                                                                             │
-│  ═══════════════════════════════════════════════════════════════════════   │
-│                                                                             │
-│  WHAT WE BUILT:                                                             │
+│  PROBLEM SOLVED:                                                            │
 │  ───────────────                                                            │
+│  Day 24's file I/O caused 2-5 second freezes when saving/restoring          │
+│  1GB+ of game state, making live code editing painful.                      │
 │                                                                             │
-│  1. replay-buffer.h/c - Platform-independent mmap abstraction               │
-│     • Uses existing de100_file_* and de100_mem_* APIs                       │
-│     • Only mmap/munmap is platform-specific                                 │
+│  SOLUTION:                                                                  │
+│  ─────────                                                                  │
+│  Memory-mapped files allow RAM-to-RAM copies (~100ms) instead of            │
+│  disk I/O (2-5 seconds), providing 20-50x speedup.                          │
 │                                                                             │
-│  2. Updated input-recording.c to use replay buffers                         │
-│     • Save state: memcpy to mmap'd region (~100ms)                          │
-│     • Restore state: memcpy from mmap'd region (~100ms)                     │
-│     • Smooth looping for live code editing!                                 │
+│  KEY CHANGES FROM DAY 24:                                                   │
+│  ────────────────────────                                                   │
 │                                                                             │
-│  3. Day 25 feature: Can exit playback with L key                            │
-│     • Day 24: L during playback did nothing                                 │
-│     • Day 25: L during playback stops playback                              │
+│  1. ReplayBuffer struct added to GameMemoryState                            │
+│  2. Separate files for state (mmap'd) and inputs (regular)                  │
+│  3. replay_buffer_save_state() uses memcpy, not write()                     │
+│  4. replay_buffer_restore_state() uses memcpy, not read()                   │
+│  5. Can now exit playback by pressing L (returns result code)               │
+│  6. Game handles stuck input reset based on result code                     │
 │                                                                             │
-│  ═══════════════════════════════════════════════════════════════════════   │
+│  LINUX-SPECIFIC NOTES:                                                      │
+│  ─────────────────────                                                      │
 │                                                                             │
-│  KEY TAKEAWAY:                                                              │
-│  ─────────────                                                              │
+│  • Must call ftruncate() before mmap() to set file size                     │
+│  • Use MAP_SHARED for changes to persist to file                            │
+│  • Check for MAP_FAILED, not NULL                                           │
+│  • munmap() before close()                                                  │
 │                                                                             │
-│  "When you need fast access to large data, think about whether you          │
-│   actually need FILE I/O, or whether you just need MEMORY that happens      │
-│   to be backed by a file. Memory-mapped files give you the latter."         │
-│                                                                             │
-│                                                    - Casey Muratori         │
+│  RESULT:                                                                    │
+│  ───────                                                                    │
+│  Smooth looping playback enables effective live code editing.               │
+│  Edit code → save → hot reload → see changes in next loop iteration!       │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+## Day 25 notes
+
+### Replay Buffer Initial Recording Delay Analysis
+
+#### The Problem
+
+First recording: ~2 seconds
+Subsequent recordings: Instantaneous
+
+This is **expected behavior** due to how memory-mapped files work!
+
+---
+
+#### Root Cause: Page Fault on First Write
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    MEMORY-MAPPED FILE BEHAVIOR                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  FIRST RECORDING (Slow ~2s):                                                │
+│  ───────────────────────────                                                │
+│                                                                             │
+│  1. mmap() returns immediately (just sets up page tables)                   │
+│     └─→ NO physical memory allocated yet!                                   │
+│     └─→ Pages are marked as "not present"                                   │
+│                                                                             │
+│  2. memcpy() starts writing to mapped region                                │
+│     └─→ CPU tries to write to page 0                                        │
+│     └─→ PAGE FAULT! (page not in RAM)                                       │
+│     └─→ OS must:                                                            │
+│         a) Allocate physical RAM page                                       │
+│         b) Zero the page (security)                                         │
+│         c) Update page tables                                               │
+│         d) Resume memcpy                                                    │
+│     └─→ Repeat for EVERY page (~262,144 faults for 1GB!)                   │
+│                                                                             │
+│  Time breakdown for 1GB:                                                    │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ Pages: 1GB / 4KB = 262,144 pages                                    │   │
+│  │ Page fault overhead: ~5-10μs per fault                              │   │
+│  │ Total: 262,144 × 7.5μs ≈ 2 seconds!                                 │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ═══════════════════════════════════════════════════════════════════════   │
+│                                                                             │
+│  SUBSEQUENT RECORDINGS (Fast ~100ms):                                       │
+│  ────────────────────────────────────                                       │
+│                                                                             │
+│  1. Pages are ALREADY in RAM from first recording                           │
+│     └─→ No page faults needed!                                              │
+│                                                                             │
+│  2. memcpy() is pure RAM-to-RAM copy                                        │
+│     └─→ ~10-15 GB/s on modern systems                                       │
+│     └─→ 1GB / 12GB/s ≈ 80-100ms                                            │
+│                                                                             │
+│  This is the EXPECTED behavior and matches Casey's experience!              │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### Visual Timeline
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    RECORDING TIMELINE                                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  STARTUP:                                                                   │
+│  ────────                                                                   │
+│  replay_buffers_init() called                                               │
+│  ├─→ open() creates file                    (~1ms)                          │
+│  ├─→ ftruncate() sets file size to 1GB      (~1ms)                          │
+│  └─→ mmap() maps file into address space    (~1ms)                          │
+│      └─→ Returns pointer immediately!                                       │
+│      └─→ But NO physical RAM allocated yet (lazy allocation)                │
+│                                                                             │
+│  Memory state after init:                                                   │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ Virtual Address Space:  [mapped region 1GB]                         │   │
+│  │ Physical RAM:           [nothing allocated!]                        │   │
+│  │ Page Tables:            [all pages marked "not present"]            │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ═══════════════════════════════════════════════════════════════════════   │
+│                                                                             │
+│  FIRST RECORDING (Press L):                                                 │
+│  ──────────────────────────                                                 │
+│                                                                             │
+│  replay_buffer_save_state() calls memcpy()                                  │
+│                                                                             │
+│  Time: 0ms────100ms────500ms────1000ms────1500ms────2000ms                  │
+│        │       │        │         │         │         │                     │
+│        ▼       ▼        ▼         ▼         ▼         ▼                     │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ [====PAGE FAULTS + ALLOCATION============================] memcpy   │   │
+│  │  ↑                                                              ↑    │   │
+│  │  First page fault                              Last page fault  │    │   │
+│  │  (page 0)                                      (page 262143)    │    │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  Memory state after first recording:                                        │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ Virtual Address Space:  [mapped region 1GB]                         │   │
+│  │ Physical RAM:           [1GB ALLOCATED AND POPULATED!]              │   │
+│  │ Page Tables:            [all pages marked "present"]                │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ═══════════════════════════════════════════════════════════════════════   │
+│                                                                             │
+│  SECOND RECORDING (Press L again after playback):                           │
+│  ────────────────────────────────────────────────                           │
+│                                                                             │
+│  replay_buffer_save_state() calls memcpy()                                  │
+│                                                                             │
+│  Time: 0ms────100ms                                                         │
+│        │       │                                                            │
+│        ▼       ▼                                                            │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ [===] memcpy (pure RAM-to-RAM, no page faults!)                     │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  Pages already in RAM → No allocation needed → FAST!                        │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### The Fix: Pre-fault Pages at Startup
+
+Casey mentions this in Day 25 - you can **pre-fault** the pages during initialization so the first recording is also fast:
+
+```c:project/engine/platforms/_common/replay-buffer.c
+// ═══════════════════════════════════════════════════════════════════════════
+// OPTION 1: Pre-fault by touching every page (simple but blocking)
+// ═══════════════════════════════════════════════════════════════════════════
+
+de100_file_scoped_fn void prefault_mapped_memory(void *ptr, size_t size) {
+    // Touch every page to force allocation
+    // Page size is typically 4KB on x86/x64
+    volatile char *p = (volatile char *)ptr;
+    size_t page_size = 4096;
+
+    for (size_t offset = 0; offset < size; offset += page_size) {
+        // Read then write to ensure page is fully faulted
+        char tmp = p[offset];
+        p[offset] = tmp;
+    }
+}
+
+// In replay_buffers_init(), after successful mmap:
+ReplayBufferInitResult replay_buffers_init(const char *exe_directory,
+                                           void *game_memory, uint64 total_size,
+                                           ReplayBuffer *out_buffers) {
+    // ... existing code ...
+
+    for (int32 slot = 0; slot < MAX_REPLAY_BUFFERS; ++slot) {
+        ReplayBuffer *buffer = &out_buffers[slot];
+
+        // ... existing mmap code ...
+
+        if (buffer->memory_block) {
+            // ─────────────────────────────────────────────────────────────
+            // PRE-FAULT: Touch all pages now so first recording is fast
+            // ─────────────────────────────────────────────────────────────
+            // This moves the 2-second delay from "first L press" to
+            // "game startup", which is more acceptable.
+            // ─────────────────────────────────────────────────────────────
+#if DE100_INTERNAL
+            printf("[REPLAY BUFFER] Pre-faulting slot %d (%zu MB)...\n",
+                   slot, (size_t)(total_size / (1024 * 1024)));
+#endif
+            prefault_mapped_memory(buffer->memory_block, (size_t)total_size);
+#if DE100_INTERNAL
+            printf("[REPLAY BUFFER] ✅ Slot %d pre-faulted\n", slot);
+#endif
+
+            buffer->mapped_size = (size_t)total_size;
+            buffer->is_valid = true;
+            // ...
+        }
+    }
+
+    // ...
+}
+```
+
+---
+
+#### Option 2: Use MAP_POPULATE (Linux-specific, better)
+
+Linux has a flag that tells the kernel to pre-fault all pages:
+
+```c:project/engine/platforms/_common/replay-buffer.c
+#if defined(__linux__)
+
+de100_file_scoped_fn void *
+platform_mmap_file(int32 fd, uint64 size, ReplayBufferErrorCode *out_error) {
+    *out_error = REPLAY_BUFFER_SUCCESS;
+
+    // MAP_POPULATE: Pre-fault all pages during mmap()
+    // This makes mmap() slower but subsequent access instant
+    void *ptr = mmap(NULL,
+                     (size_t)size,
+                     PROT_READ | PROT_WRITE,
+                     MAP_SHARED | MAP_POPULATE,  // ← ADD MAP_POPULATE
+                     fd,
+                     0);
+
+    if (ptr == MAP_FAILED) {
+#if DE100_INTERNAL && DE100_SLOW
+        fprintf(stderr, "[REPLAY BUFFER] mmap failed: %s\n", strerror(errno));
+#endif
+        *out_error = REPLAY_BUFFER_ERROR_MMAP_FAILED;
+        return NULL;
+    }
+
+    return ptr;
+}
+
+#endif
+```
+
+---
+
+#### Option 3: Casey's Approach - Accept the Delay
+
+Casey actually **doesn't fix this** in Day 25. He notes:
+
+> "The first time you press L, it takes a moment because Windows has to actually commit those pages. After that, it's instant."
+
+This is acceptable because:
+
+1. It only happens once per session
+2. The delay is at a user-initiated action (pressing L)
+3. Subsequent recordings are instant
+
+---
+
+#### Comparison of Options
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    FIX OPTIONS COMPARISON                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  OPTION 1: Manual Pre-fault Loop                                            │
+│  ───────────────────────────────                                            │
+│  Pros: Works on all platforms                                               │
+│  Cons: Adds ~2s to startup per buffer (8s total for 4 buffers!)            │
+│        Blocking - game doesn't start until done                             │
+│                                                                             │
+│  OPTION 2: MAP_POPULATE (Linux only)                                        │
+│  ───────────────────────────────────                                        │
+│  Pros: Kernel handles it efficiently, may use readahead                     │
+│  Cons: Linux-specific, still adds delay to mmap() call                      │
+│        Not available on macOS/Windows                                       │
+│                                                                             │
+│  OPTION 3: Accept First-Recording Delay (Casey's approach)                  │
+│  ─────────────────────────────────────────────────────────                  │
+│  Pros: No startup delay, simple code                                        │
+│  Cons: First L press has 2s delay                                           │
+│        User might think it's broken                                         │
+│                                                                             │
+│  OPTION 4: Background Pre-fault Thread (Best UX)                            │
+│  ───────────────────────────────────────────────                            │
+│  Pros: No blocking, game starts immediately                                 │
+│        First recording fast if thread finished                              │
+│  Cons: More complex, need thread synchronization                            │
+│        If L pressed before done, still delays                               │
+│                                                                             │
+│  RECOMMENDATION:                                                            │
+│  ───────────────                                                            │
+│  For learning: Use Option 3 (Casey's approach) - simplest                   │
+│  For polish: Use Option 2 on Linux, Option 1 on other platforms             │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### Quick Fix: Add MAP_POPULATE
+
+Here's the minimal change to make first recording fast on Linux:
+
+```c:project/engine/platforms/_common/replay-buffer.c
+#else // POSIX
+
+de100_file_scoped_fn void *
+platform_mmap_file(int32 fd, uint64 size, ReplayBufferErrorCode *out_error) {
+    *out_error = REPLAY_BUFFER_SUCCESS;
+
+    int mmap_flags = MAP_SHARED;
+
+#if defined(__linux__)
+    // MAP_POPULATE: Pre-fault pages during mmap() for faster first access
+    // This makes initialization slower but first recording instant
+    mmap_flags |= MAP_POPULATE;
+#endif
+
+    void *ptr = mmap(NULL,
+                     (size_t)size,
+                     PROT_READ | PROT_WRITE,
+                     mmap_flags,
+                     fd,
+                     0);
+
+    if (ptr == MAP_FAILED) {
+#if DE100_INTERNAL && DE100_SLOW
+        fprintf(stderr, "[REPLAY BUFFER] mmap failed: %s\n", strerror(errno));
+#endif
+        *out_error = REPLAY_BUFFER_ERROR_MMAP_FAILED;
+        return NULL;
+    }
+
+    return ptr;
+}
+
+#endif // Platform selection
+```
+
+**Trade-off:** This moves the ~2s delay from "first L press" to "game startup" (during `replay_buffers_init()`). The game will take longer to start, but recording will always be instant.
+
+---
+
+#### Summary
+
+| Behavior                            | Cause                                                   | Fix                       |
+| ----------------------------------- | ------------------------------------------------------- | ------------------------- |
+| First recording slow (~2s)          | Page faults - OS allocating physical RAM on first touch | Add `MAP_POPULATE` flag   |
+| Subsequent recordings fast (~100ms) | Pages already in RAM, pure memcpy                       | N/A - working as intended |
+
+**This is expected behavior, not a bug.** Casey experiences the same thing on Windows. The question is just whether you want the delay at startup or at first recording.
+
+### Why Multiple Replay Buffers?
+
+#### Short Answer
+
+**You don't need them for basic functionality.** One buffer is enough for the L-key loop editing Casey demonstrates.
+
+Casey creates 4 buffers for **future flexibility**, but only uses slot 1 in Day 25.
+
+---
+
+#### What Casey Actually Uses
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    CASEY'S DAY 25 USAGE                                     │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  win32_state struct:                                                        │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ win32_replay_buffer ReplayBuffers[4];  // ← 4 slots defined         │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  Actual usage in Day 25:                                                    │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ Win32BeginRecordingInput(State, 1);  // ← Always slot 1!            │   │
+│  │ Win32BeginInputPlayBack(State, 1);   // ← Always slot 1!            │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  Slots 0, 2, 3: NEVER USED in the Handmade Hero series!                    │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### Why Casey Defined 4 Slots (Speculation)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    POTENTIAL USE CASES (Never Implemented)                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  IDEA 1: Multiple Save Points                                               │
+│  ────────────────────────────                                               │
+│  F1 = Record/Play slot 1 (test jumping)                                     │
+│  F2 = Record/Play slot 2 (test combat)                                      │
+│  F3 = Record/Play slot 3 (test edge case)                                   │
+│  F4 = Record/Play slot 4 (test performance)                                 │
+│                                                                             │
+│  ═══════════════════════════════════════════════════════════════════════   │
+│                                                                             │
+│  IDEA 2: A/B Comparison                                                     │
+│  ──────────────────────                                                     │
+│  Slot 1: Record behavior with old code                                      │
+│  Slot 2: Record behavior with new code                                      │
+│  Compare side-by-side                                                       │
+│                                                                             │
+│  ═══════════════════════════════════════════════════════════════════════   │
+│                                                                             │
+│  IDEA 3: Undo Levels                                                        │
+│  ───────────────────                                                        │
+│  Slot 1: State 5 seconds ago                                                │
+│  Slot 2: State 10 seconds ago                                               │
+│  Slot 3: State 15 seconds ago                                               │
+│  Slot 4: State 20 seconds ago                                               │
+│                                                                             │
+│  ═══════════════════════════════════════════════════════════════════════   │
+│                                                                             │
+│  REALITY: None of these were implemented!                                   │
+│  Casey just used slot 1 with the L key.                                     │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### The Cost of Multiple Buffers
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    MEMORY COST                                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Game Memory Size: ~1 GB (64MB permanent + 1GB transient)                   │
+│                                                                             │
+│  With 4 replay buffers:                                                     │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ Slot 0: 1 GB  ─┐                                                    │   │
+│  │ Slot 1: 1 GB   │                                                    │   │
+│  │ Slot 2: 1 GB   ├─→ 4 GB total for replay buffers!                   │   │
+│  │ Slot 3: 1 GB  ─┘                                                    │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  Total memory footprint:                                                    │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ Game memory:     1 GB                                               │   │
+│  │ Replay buffers:  4 GB                                               │   │
+│  │ ─────────────────────                                               │   │
+│  │ Total:           5 GB (just for debug feature!)                     │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  With 1 replay buffer:                                                      │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ Game memory:     1 GB                                               │   │
+│  │ Replay buffer:   1 GB                                               │   │
+│  │ ─────────────────────                                               │   │
+│  │ Total:           2 GB (much more reasonable!)                       │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### My Recommendation: Use 1 Buffer
+
+For your learning project, **simplify to 1 buffer**:
+
+```c:project/engine/game/memory.h
+// Change from:
+#define MAX_REPLAY_BUFFERS 4
+
+// To:
+#define MAX_REPLAY_BUFFERS 1
+```
+
+Or even simpler - just embed the single buffer directly:
+
+```c:project/engine/game/memory.h
+typedef struct {
+    // Memory tracking
+    uint64 total_size;
+    void* game_memory;
+
+    // Recording state
+    int32 recording_fd;
+    int32 input_recording_index;
+
+    // Playback state
+    int32 playback_fd;
+    int32 input_playing_index;
+
+    // Single replay buffer (no array needed!)
+    ReplayBuffer replay_buffer;
+
+} GameMemoryState;
+```
+
+And simplify the API:
+
+```c:project/engine/platforms/_common/replay-buffer.h
+// Instead of:
+bool replay_buffers_init(const char *exe_directory, GameMemoryState *state);
+bool replay_buffer_save_state(GameMemoryState *state, int32 slot_index);
+bool replay_buffer_restore_state(GameMemoryState *state, int32 slot_index);
+
+// Just:
+bool replay_buffer_init(const char *exe_directory, GameMemoryState *state);
+bool replay_buffer_save_state(GameMemoryState *state);
+bool replay_buffer_restore_state(GameMemoryState *state);
+```
+
+---
+
+#### When You WOULD Want Multiple Buffers
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    LEGITIMATE USE CASES                                     │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  1. AUTOMATED TESTING                                                       │
+│     ─────────────────                                                       │
+│     Record multiple test scenarios, replay them automatically               │
+│     to verify game behavior after code changes.                             │
+│                                                                             │
+│  2. DEMO/REPLAY SYSTEM                                                      │
+│     ──────────────────                                                      │
+│     Save interesting gameplay moments for later playback.                   │
+│     (But you'd want to save to disk, not keep in RAM)                       │
+│                                                                             │
+│  3. NETWORK ROLLBACK                                                        │
+│     ─────────────────                                                       │
+│     Fighting games keep multiple past states for rollback netcode.          │
+│     (But typically only a few frames, not full game state)                  │
+│                                                                             │
+│  4. BRANCHING TIMELINES                                                     │
+│     ───────────────────                                                     │
+│     "What if I had gone left instead of right?"                             │
+│     Save state, try one path, restore, try another.                         │
+│                                                                             │
+│  FOR HANDMADE HERO DAY 25: None of these apply!                             │
+│  One buffer is sufficient for the L-key loop editing feature.               │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### Summary
+
+| Question                           | Answer                          |
+| ---------------------------------- | ------------------------------- |
+| Why did Casey define 4 buffers?    | Future flexibility (never used) |
+| How many does Day 25 actually use? | Just 1 (slot index 1)           |
+| How many do you need?              | **1 is enough**                 |
+| Cost of 4 buffers?                 | 4 GB RAM + 4 GB disk            |
+| Cost of 1 buffer?                  | 1 GB RAM + 1 GB disk            |
+
+**Recommendation:** Simplify to 1 buffer. You can always add more later if you find a real use case. This is Casey's own philosophy: _"Solve problems you have, not problems you might have."_

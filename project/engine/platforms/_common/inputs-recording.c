@@ -305,55 +305,62 @@ void input_recording_playback_frame(GameMemoryState *state, GameInput *input) {
   De100FileIOResult read_result =
       de100_file_read_all(state->playback_fd, input, sizeof(GameInput));
 
-  if (!read_result.success || read_result.bytes_processed == 0) {
-    // End of input stream - loop back!
-    int32 slot = state->input_playing_index;
-    printf("[INPUT PLAYBACK] 🔄 Looping back to start (slot %d)\n", slot);
+  if (read_result.success) {
+    return;
+  }
 
-    // Seek back to beginning of input file
-    De100FileSizeResult seek_result =
-        de100_file_seek(state->playback_fd, 0, DE100_SEEK_SET);
+  if (!read_result.success && read_result.error_code != DE100_FILE_ERROR_EOF) {
+    fprintf(stderr, "[INPUT PLAYBACK] Failed to read input: %s\n",
+            de100_file_strerror(read_result.error_code));
+    input_recording_playback_end(state);
+    return;
+  }
 
-    if (!seek_result.success) {
-      fprintf(stderr, "[INPUT PLAYBACK] Failed to seek: %s\n",
-              de100_file_strerror(seek_result.error_code));
-      input_recording_playback_end(state);
-      return;
-    }
+  // End of input stream - loop back!
+  int32 slot = state->input_playing_index;
+  printf("[INPUT PLAYBACK] 🔄 Looping back to start (slot %d)\n", slot);
 
-    // ─────────────────────────────────────────────────────────────────
-    // FAST: Restore state from replay buffer (memcpy, not file read!)
-    // ─────────────────────────────────────────────────────────────────
+  // Seek back to beginning of input file
+  De100FileSizeResult seek_result =
+      de100_file_seek(state->playback_fd, 0, DE100_SEEK_SET);
 
-    ReplayBuffer *replay_buffer =
-        replay_buffer_get(state->replay_buffers, slot);
-    if (!replay_buffer_is_valid(replay_buffer)) {
-      fprintf(stderr, "[INPUT PLAYBACK] Replay buffer became invalid\n");
-      input_recording_playback_end(state);
-      return;
-    }
+  if (!seek_result.success) {
+    fprintf(stderr, "[INPUT PLAYBACK] Failed to seek: %s\n",
+            de100_file_strerror(seek_result.error_code));
+    input_recording_playback_end(state);
+    return;
+  }
 
-    ReplayBufferResult restore_result = replay_buffer_restore_state(
-        replay_buffer, state->game_memory, state->total_size);
+  // ─────────────────────────────────────────────────────────────────
+  // FAST: Restore state from replay buffer (memcpy, not file read!)
+  // ─────────────────────────────────────────────────────────────────
 
-    if (!restore_result.success) {
-      fprintf(stderr, "[INPUT PLAYBACK] Failed to restore state on loop: %s\n",
-              replay_buffer_strerror(restore_result.error_code));
-      input_recording_playback_end(state);
-      return;
-    }
+  ReplayBuffer *replay_buffer = replay_buffer_get(state->replay_buffers, slot);
+  if (!replay_buffer_is_valid(replay_buffer)) {
+    fprintf(stderr, "[INPUT PLAYBACK] Replay buffer became invalid\n");
+    input_recording_playback_end(state);
+    return;
+  }
 
-    // Read first input frame
-    read_result =
-        de100_file_read_all(state->playback_fd, input, sizeof(GameInput));
+  ReplayBufferResult restore_result = replay_buffer_restore_state(
+      replay_buffer, state->game_memory, state->total_size);
 
-    if (!read_result.success) {
-      fprintf(stderr,
-              "[INPUT PLAYBACK] Failed to read first input on loop: %s\n",
-              de100_file_strerror(read_result.error_code));
-      input_recording_playback_end(state);
-      return;
-    }
+  if (!restore_result.success) {
+    fprintf(stderr, "[INPUT PLAYBACK] Failed to restore state on loop: %s\n",
+            replay_buffer_strerror(restore_result.error_code));
+    input_recording_playback_end(state);
+    return;
+  }
+
+  // Read first input frame
+  read_result =
+      de100_file_read_all(state->playback_fd, input, sizeof(GameInput));
+
+  if (!read_result.success) {
+    fprintf(stderr, "[INPUT PLAYBACK] Failed to read first input on loop: %s\n",
+            de100_file_strerror(read_result.error_code));
+    input_recording_playback_end(state);
+    return;
   }
 }
 

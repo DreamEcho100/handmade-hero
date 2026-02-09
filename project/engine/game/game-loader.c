@@ -365,7 +365,7 @@ bool32 game_main_code_needs_reload(GameCode *game_code, char *source_lib_name) {
   if (!current_mod_time.success) {
     // Only log if it's not a "file not found" error
     // (file might be temporarily missing during compilation)
-    if (current_mod_time.error_code != FILE_ERROR_NOT_FOUND) {
+    if (current_mod_time.error_code != DE100_FILE_ERROR_NOT_FOUND) {
       fprintf(stderr, "⚠️  Failed to check modification time\n");
       fprintf(stderr, "   File: %s\n", source_lib_name);
     }

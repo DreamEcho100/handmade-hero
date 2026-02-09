@@ -42,34 +42,34 @@ de100_debug_platform_de100_file_strerror(De100DebugDe100FileErrorCode code) {
   case DEBUG_FILE_SUCCESS:
     return "Success";
 
-  case DEBUG_FILE_ERROR_NULL_PATH:
+  case DEBUG_DE100_FILE_ERROR_NULL_PATH:
     return "NULL or empty file path";
 
-  case DEBUG_FILE_ERROR_NOT_FOUND:
+  case DEBUG_DE100_FILE_ERROR_NOT_FOUND:
     return "File not found";
 
-  case DEBUG_FILE_ERROR_EMPTY_FILE:
+  case DEBUG_DE100_FILE_ERROR_EMPTY_FILE:
     return "File is empty";
 
-  case DEBUG_FILE_ERROR_TOO_LARGE:
+  case DEBUG_DE100_FILE_ERROR_TOO_LARGE:
     return "File too large (exceeds 4GB limit for debug I/O)";
 
-  case DEBUG_FILE_ERROR_DE100_MEMORY_ALLOC:
+  case DEBUG_DE100_FILE_ERROR_DE100_MEMORY_ALLOC:
     return "Memory allocation failed";
 
-  case DEBUG_FILE_ERROR_READ_FAILED:
+  case DEBUG_DE100_FILE_ERROR_READ_FAILED:
     return "Failed to read file contents";
 
-  case DEBUG_FILE_ERROR_WRITE_FAILED:
+  case DEBUG_DE100_FILE_ERROR_WRITE_FAILED:
     return "Failed to write file contents";
 
-  case DEBUG_FILE_ERROR_NULL_DATA:
+  case DEBUG_DE100_FILE_ERROR_NULL_DATA:
     return "NULL data pointer with non-zero size";
 
-  case DEBUG_FILE_ERROR_OPEN_FAILED:
+  case DEBUG_DE100_FILE_ERROR_OPEN_FAILED:
     return "Failed to open file";
 
-  case DEBUG_FILE_ERROR_COUNT:
+  case DEBUG_DE100_FILE_ERROR_COUNT:
   default:
     return "Unknown debug file error";
   }
@@ -142,7 +142,7 @@ de100_debug_platform_read_entire_file(ThreadContext *thread_context,
   // ─────────────────────────────────────────────────────────────────────
   if (!filename || filename[0] == '\0') {
     SET_ERROR_DETAIL("[debug_read] NULL or empty filename");
-    return make_read_error(DEBUG_FILE_ERROR_NULL_PATH);
+    return make_read_error(DEBUG_DE100_FILE_ERROR_NULL_PATH);
   }
 
   // ─────────────────────────────────────────────────────────────────────
@@ -152,12 +152,12 @@ de100_debug_platform_read_entire_file(ThreadContext *thread_context,
   if (!exists_result.success) {
     SET_ERROR_DETAIL("[debug_read] de100_file_exists() failed for '%s': %s",
                      filename, de100_file_strerror(exists_result.error_code));
-    return make_read_error(DEBUG_FILE_ERROR_NOT_FOUND);
+    return make_read_error(DEBUG_DE100_FILE_ERROR_NOT_FOUND);
   }
 
   if (!exists_result.exists) {
     SET_ERROR_DETAIL("[debug_read] File not found: '%s'", filename);
-    return make_read_error(DEBUG_FILE_ERROR_NOT_FOUND);
+    return make_read_error(DEBUG_DE100_FILE_ERROR_NOT_FOUND);
   }
 
   // ─────────────────────────────────────────────────────────────────────
@@ -167,19 +167,19 @@ de100_debug_platform_read_entire_file(ThreadContext *thread_context,
   if (!size_result.success) {
     SET_ERROR_DETAIL("[debug_read] de100_file_get_size() failed for '%s': %s",
                      filename, de100_file_strerror(size_result.error_code));
-    return make_read_error(DEBUG_FILE_ERROR_READ_FAILED);
+    return make_read_error(DEBUG_DE100_FILE_ERROR_READ_FAILED);
   }
 
   if (size_result.value <= 0) {
     SET_ERROR_DETAIL("[debug_read] File is empty: '%s'", filename);
-    return make_read_error(DEBUG_FILE_ERROR_EMPTY_FILE);
+    return make_read_error(DEBUG_DE100_FILE_ERROR_EMPTY_FILE);
   }
 
   // Check for 32-bit overflow (debug I/O limited to 4GB)
   if (size_result.value > (int64)0xFFFFFFFF) {
     SET_ERROR_DETAIL("[debug_read] File too large: '%s' (%lld bytes, max 4GB)",
                      filename, (long long)size_result.value);
-    return make_read_error(DEBUG_FILE_ERROR_TOO_LARGE);
+    return make_read_error(DEBUG_DE100_FILE_ERROR_TOO_LARGE);
   }
 
   size_t de100_file_size = (size_t)size_result.value;
@@ -197,7 +197,7 @@ de100_debug_platform_read_entire_file(ThreadContext *thread_context,
                      "(requested %zu bytes)",
                      filename, de100_memory_error_str(result.memory.error_code),
                      de100_file_size);
-    return make_read_error(DEBUG_FILE_ERROR_DE100_MEMORY_ALLOC);
+    return make_read_error(DEBUG_DE100_FILE_ERROR_DE100_MEMORY_ALLOC);
   }
 
   // ─────────────────────────────────────────────────────────────────────
@@ -208,7 +208,7 @@ de100_debug_platform_read_entire_file(ThreadContext *thread_context,
     SET_ERROR_DETAIL("[debug_read] fopen() failed for '%s': %s", filename,
                      strerror(errno));
     de100_memory_free(&result.memory);
-    return make_read_error(DEBUG_FILE_ERROR_OPEN_FAILED);
+    return make_read_error(DEBUG_DE100_FILE_ERROR_OPEN_FAILED);
   }
 
   size_t bytes_read = fread(result.memory.base, 1, de100_file_size, file);
@@ -220,7 +220,7 @@ de100_debug_platform_read_entire_file(ThreadContext *thread_context,
         ferror(file) ? strerror(errno) : "unexpected EOF");
     fclose(file);
     de100_memory_free(&result.memory);
-    return make_read_error(DEBUG_FILE_ERROR_READ_FAILED);
+    return make_read_error(DEBUG_DE100_FILE_ERROR_READ_FAILED);
   }
 
   fclose(file);
@@ -276,12 +276,12 @@ de100_debug_platform_write_entire_file(ThreadContext *thread_context,
   // ─────────────────────────────────────────────────────────────────────
   if (!filename || filename[0] == '\0') {
     SET_ERROR_DETAIL("[debug_write] NULL or empty filename");
-    return make_write_error(DEBUG_FILE_ERROR_NULL_PATH);
+    return make_write_error(DEBUG_DE100_FILE_ERROR_NULL_PATH);
   }
 
   if (!data && size > 0) {
     SET_ERROR_DETAIL("[debug_write] NULL data with size=%u", size);
-    return make_write_error(DEBUG_FILE_ERROR_NULL_DATA);
+    return make_write_error(DEBUG_DE100_FILE_ERROR_NULL_DATA);
   }
 
   // ─────────────────────────────────────────────────────────────────────
@@ -291,7 +291,7 @@ de100_debug_platform_write_entire_file(ThreadContext *thread_context,
   if (!file) {
     SET_ERROR_DETAIL("[debug_write] fopen() failed for '%s': %s", filename,
                      strerror(errno));
-    return make_write_error(DEBUG_FILE_ERROR_OPEN_FAILED);
+    return make_write_error(DEBUG_DE100_FILE_ERROR_OPEN_FAILED);
   }
 
   // ─────────────────────────────────────────────────────────────────────
@@ -305,7 +305,7 @@ de100_debug_platform_write_entire_file(ThreadContext *thread_context,
           "[debug_write] fwrite() failed for '%s': expected %u, wrote %zu (%s)",
           filename, size, bytes_written, strerror(errno));
       fclose(file);
-      return make_write_error(DEBUG_FILE_ERROR_WRITE_FAILED);
+      return make_write_error(DEBUG_DE100_FILE_ERROR_WRITE_FAILED);
     }
   }
 
@@ -316,7 +316,7 @@ de100_debug_platform_write_entire_file(ThreadContext *thread_context,
     SET_ERROR_DETAIL("[debug_write] fflush() failed for '%s': %s", filename,
                      strerror(errno));
     fclose(file);
-    return make_write_error(DEBUG_FILE_ERROR_WRITE_FAILED);
+    return make_write_error(DEBUG_DE100_FILE_ERROR_WRITE_FAILED);
   }
 
   fclose(file);

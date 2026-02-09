@@ -3,11 +3,10 @@
 ## Urgent TODOs
 
 - [ ] Remove the `audio_samples` from the `EngineAllocations`
-- [ ] Revise the keyboard to action mapping
 - [ ] Implement proper detection window focus/active/inactive/minimized, by making the platform detect it and the game is what handles it.
-- [ ] Using `#if !defined(DE100_...)` to be able make the integrated game with engine to pass some variables/states from the engine to the game (like memory size, controllers count, etc) while having sensible defaults for when the game is built standalone, this will allow for not needing to have a `GAME_STARTUP` loaded dll since the game will be able to know these values at compile time. or having a dll for configs?
 - [ ] Implement proper error handling and reporting for all functions. and refactor what's needed to be on internal/dev mode only or/and every range of time.
 - [ ] review the usages of `target_seconds_per_frame`
+- [ ] For the `build-common.sh`, for `"$GAME_DIR/adapters/$backend/inputs/joystick.c"`, first check if the path exist and based on it you can decide to add it to the sources or not, this will allow for not needing to have empty files for the adapters that don't have any platform specific code, and also it will allow for having different platforms with different inputs handling without needing to have empty files for the ones that don't need it. and pass a macro to decide on the platform/backend whether to use the platform specific code or not, for example `#if DE100_USE_PLATFORM_JOYSTICK_INPUTS` and define it on the `PlatformConfig` based on the platform/backend.
 
 ## Future TODOs
 
@@ -17,7 +16,7 @@
 - [ ] Improve the `engine/build-common.sh` and `handmadehero/build.sh` scripts to avoid code duplication. and make sure the `build-common.sh` provides all what's needed to be able t integrate the engine with any game project.
 - [ ] Support dev mode _(hot reloading, debug logs, etc)_ and prod mode _(no debug logs, no hot reloading, etc)_
 - [ ] Duplicate logic between `game.config->target_refresh_rate_hz` and `g_fps`, should the `AdaptiveFPS` be global instead?
-- `AdaptiveFPS` is only working correctly on X11 since it just access and uses the value, but for Raylib it needs to call `SetTargetFPS` to apply the change, so should I make a function pointer on the `PlatformConfig` to handle that? or should I make a function pointer on the `PlatformConfig` to handle the `SetTargetFPS` call? or having a forward typedef of `SetTargetFPS` and deine it on X11 while on Raylib it's the actual function?
+- [ ] `AdaptiveFPS` is only working correctly on X11 since it just access and uses the value, but for Raylib it needs to call `SetTargetFPS` to apply the change, so should I make a function pointer on the `PlatformConfig` to handle that? or should I make a function pointer on the `PlatformConfig` to handle the `SetTargetFPS` call? or having a forward typedef of `SetTargetFPS` and deine it on X11 while on Raylib it's the actual function?
 
 ## Done TODOs
 
@@ -68,3 +67,4 @@
       - Will provide a way to handle keyboard inputs without having to worry about the platform specific code.
       - Will make the code cleaner and easier to read across different games.
   - After evaluating the pros and cons of each approach, I think the best approach would be to go with option 2, as it will provide more flexibility for the game to handle keyboard inputs and will make the platform code simpler and easier to maintain. and maybe looking more into option 3 if needed later on.
+- [x] Using `#if !defined(DE100_...)` to be able make the integrated game with engine to pass some variables/states from the engine to the game (like memory size, controllers count, etc) while having sensible defaults for when the game is built standalone, this will allow for not needing to have a `GAME_STARTUP` loaded dll since the game will be able to know these values at compile time. or having a dll for configs?

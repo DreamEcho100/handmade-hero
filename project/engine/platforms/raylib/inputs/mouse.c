@@ -1,8 +1,5 @@
-// IWYU pragma: keep // clangd: unused-include-ignore // NOLINTNEXTLINE(clang-diagnostic-unused-include)
-#include "../../../inputs.h"
-
-#include "../../../../../engine/game/inputs.h"
-#include "../../../../../engine/platforms/raylib/inputs/mouse.h"
+#include "./mouse.h"
+#include "../../../game/inputs.h"
 
 #include <raylib.h>
 

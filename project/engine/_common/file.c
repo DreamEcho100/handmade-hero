@@ -59,50 +59,50 @@ de100_file_scoped_fn inline De100FileErrorCode
 win32_error_to_de100_file_error(DWORD error_code) {
   switch (error_code) {
   case ERROR_SUCCESS:
-    return FILE_SUCCESS;
+    return DE100_FILE_SUCCESS;
 
   case ERROR_FILE_NOT_FOUND:
   case ERROR_PATH_NOT_FOUND:
   case ERROR_INVALID_DRIVE:
-    return FILE_ERROR_NOT_FOUND;
+    return DE100_FILE_ERROR_NOT_FOUND;
 
   case ERROR_ACCESS_DENIED:
   case ERROR_SHARING_VIOLATION:
   case ERROR_LOCK_VIOLATION:
   case ERROR_NETWORK_ACCESS_DENIED:
-    return FILE_ERROR_ACCESS_DENIED;
+    return DE100_FILE_ERROR_ACCESS_DENIED;
 
   case ERROR_ALREADY_EXISTS:
   case ERROR_FILE_EXISTS:
-    return FILE_ERROR_ALREADY_EXISTS;
+    return DE100_FILE_ERROR_ALREADY_EXISTS;
 
   case ERROR_DIRECTORY:
   case ERROR_DIRECTORY_NOT_SUPPORTED:
-    return FILE_ERROR_IS_DIRECTORY;
+    return DE100_FILE_ERROR_IS_DIRECTORY;
 
   case ERROR_DISK_FULL:
   case ERROR_HANDLE_DISK_FULL:
-    return FILE_ERROR_DISK_FULL;
+    return DE100_FILE_ERROR_DISK_FULL;
 
   case ERROR_READ_FAULT:
   case ERROR_CRC:
   case ERROR_SECTOR_NOT_FOUND:
-    return FILE_ERROR_READ_FAILED;
+    return DE100_FILE_ERROR_READ_FAILED;
 
   case ERROR_WRITE_FAULT:
   case ERROR_WRITE_PROTECT:
-    return FILE_ERROR_WRITE_FAILED;
+    return DE100_FILE_ERROR_WRITE_FAILED;
 
   case ERROR_INVALID_NAME:
   case ERROR_BAD_PATHNAME:
   case ERROR_FILENAME_EXCED_RANGE:
-    return FILE_ERROR_INVALID_PATH;
+    return DE100_FILE_ERROR_INVALID_PATH;
 
   case ERROR_FILE_TOO_LARGE:
-    return FILE_ERROR_TOO_LARGE;
+    return DE100_FILE_ERROR_TOO_LARGE;
 
   default:
-    return FILE_ERROR_UNKNOWN;
+    return DE100_FILE_ERROR_UNKNOWN;
   }
 }
 
@@ -132,45 +132,45 @@ de100_file_scoped_fn inline De100FileErrorCode
 errno_to_de100_file_error(int32 err) {
   switch (err) {
   case 0:
-    return FILE_SUCCESS;
+    return DE100_FILE_SUCCESS;
 
   case ENOENT:
   case ENOTDIR:
-    return FILE_ERROR_NOT_FOUND;
+    return DE100_FILE_ERROR_NOT_FOUND;
 
   case EACCES:
   case EPERM:
   case EROFS:
-    return FILE_ERROR_ACCESS_DENIED;
+    return DE100_FILE_ERROR_ACCESS_DENIED;
 
   case EEXIST:
-    return FILE_ERROR_ALREADY_EXISTS;
+    return DE100_FILE_ERROR_ALREADY_EXISTS;
 
   case EISDIR:
-    return FILE_ERROR_IS_DIRECTORY;
+    return DE100_FILE_ERROR_IS_DIRECTORY;
 
   case ENOSPC:
 #if defined(EDQUOT)
   case EDQUOT:
 #endif
-    return FILE_ERROR_DISK_FULL;
+    return DE100_FILE_ERROR_DISK_FULL;
 
   case EIO:
-    return FILE_ERROR_READ_FAILED;
+    return DE100_FILE_ERROR_READ_FAILED;
 
   case ENAMETOOLONG:
   case EINVAL:
   case ELOOP:
-    return FILE_ERROR_INVALID_PATH;
+    return DE100_FILE_ERROR_INVALID_PATH;
 
   case EFBIG:
 #if defined(EOVERFLOW)
   case EOVERFLOW:
 #endif
-    return FILE_ERROR_TOO_LARGE;
+    return DE100_FILE_ERROR_TOO_LARGE;
 
   default:
-    return FILE_ERROR_UNKNOWN;
+    return DE100_FILE_ERROR_UNKNOWN;
   }
 }
 
@@ -190,7 +190,7 @@ posix_set_error_detail(const char *operation, const char *path, int32 err) {
 
 de100_file_scoped_fn inline De100FileResult make_success(void) {
   CLEAR_ERROR_DETAIL();
-  return (De100FileResult){.success = true, .error_code = FILE_SUCCESS};
+  return (De100FileResult){.success = true, .error_code = DE100_FILE_SUCCESS};
 }
 
 de100_file_scoped_fn inline De100FileResult
@@ -209,7 +209,7 @@ De100FileTimeResult de100_file_get_mod_time(const char *filename) {
   // Validate inputs
   // ─────────────────────────────────────────────────────────────────────
   if (!filename) {
-    result.error_code = FILE_ERROR_INVALID_PATH;
+    result.error_code = DE100_FILE_ERROR_INVALID_PATH;
     SET_ERROR_DETAIL("[de100_file_get_mod_time] NULL filename provided");
     return result;
   }
@@ -240,7 +240,7 @@ De100FileTimeResult de100_file_get_mod_time(const char *filename) {
   result.value.seconds = (int64)(ull.QuadPart / 10000000ULL);
   result.value.nanoseconds = (int64)((ull.QuadPart % 10000000ULL) * 100);
   result.success = true;
-  result.error_code = FILE_SUCCESS;
+  result.error_code = DE100_FILE_SUCCESS;
 
   CLEAR_ERROR_DETAIL();
 
@@ -263,7 +263,7 @@ De100FileTimeResult de100_file_get_mod_time(const char *filename) {
   result.value.seconds = (int64)de100_file_stat.st_mtime;
   result.value.nanoseconds = (int64)de100_file_stat.st_mtimespec.tv_nsec;
   result.success = true;
-  result.error_code = FILE_SUCCESS;
+  result.error_code = DE100_FILE_SUCCESS;
 
   CLEAR_ERROR_DETAIL();
 
@@ -286,7 +286,7 @@ De100FileTimeResult de100_file_get_mod_time(const char *filename) {
   result.value.seconds = (int64)de100_file_stat.st_mtime;
   result.value.nanoseconds = (int64)de100_file_stat.st_mtim.tv_nsec;
   result.success = true;
-  result.error_code = FILE_SUCCESS;
+  result.error_code = DE100_FILE_SUCCESS;
 
   CLEAR_ERROR_DETAIL();
 
@@ -323,7 +323,7 @@ De100FileResult de100_file_copy(const char *source, const char *dest) {
     SET_ERROR_DETAIL(
         "[de100_file_copy] NULL path provided (source=%p, dest=%p)",
         (void *)source, (void *)dest);
-    return make_error(FILE_ERROR_INVALID_PATH);
+    return make_error(DE100_FILE_ERROR_INVALID_PATH);
   }
 
 #if defined(_WIN32)
@@ -375,14 +375,14 @@ De100FileResult de100_file_copy(const char *source, const char *dest) {
   if (S_ISDIR(source_stat.st_mode)) {
     close(source_fd);
     SET_ERROR_DETAIL("[de100_file_copy] Source '%s' is a directory", source);
-    return make_error(FILE_ERROR_IS_DIRECTORY);
+    return make_error(DE100_FILE_ERROR_IS_DIRECTORY);
   }
 
   if (!S_ISREG(source_stat.st_mode)) {
     close(source_fd);
     SET_ERROR_DETAIL("[de100_file_copy] Source '%s' is not a regular file",
                      source);
-    return make_error(FILE_ERROR_NOT_A_FILE);
+    return make_error(DE100_FILE_ERROR_NOT_A_FILE);
   }
 
   // Create destination file with same permissions
@@ -421,7 +421,7 @@ De100FileResult de100_file_copy(const char *source, const char *dest) {
           "[de100_file_copy] Write failed: wrote %zd of %zd bytes to '%s': %s",
           bytes_written, bytes_read, dest, strerror(err));
 #endif
-      return make_error(FILE_ERROR_WRITE_FAILED);
+      return make_error(DE100_FILE_ERROR_WRITE_FAILED);
     }
 
     total_copied += bytes_written;
@@ -436,7 +436,7 @@ De100FileResult de100_file_copy(const char *source, const char *dest) {
 #if DE100_INTERNAL && DE100_SLOW
     posix_set_error_detail("de100_file_copy:read", source, err);
 #endif
-    return make_error(FILE_ERROR_READ_FAILED);
+    return make_error(DE100_FILE_ERROR_READ_FAILED);
   }
 
   close(source_fd);
@@ -447,7 +447,7 @@ De100FileResult de100_file_copy(const char *source, const char *dest) {
     SET_ERROR_DETAIL("[de100_file_copy] Size mismatch: copied %zd bytes, "
                      "expected %lld bytes",
                      total_copied, (long long)source_stat.st_size);
-    return make_error(FILE_ERROR_SIZE_MISMATCH);
+    return make_error(DE100_FILE_ERROR_SIZE_MISMATCH);
   }
 
   return make_success();
@@ -462,7 +462,7 @@ De100FileExistsResult de100_file_exists(const char *filename) {
   De100FileExistsResult result = {0};
 
   if (!filename) {
-    result.error_code = FILE_ERROR_INVALID_PATH;
+    result.error_code = DE100_FILE_ERROR_INVALID_PATH;
     SET_ERROR_DETAIL("[de100_file_exists] NULL filename provided");
     return result;
   }
@@ -481,7 +481,7 @@ De100FileExistsResult de100_file_exists(const char *filename) {
         error_code == ERROR_PATH_NOT_FOUND) {
       result.exists = false;
       result.success = true;
-      result.error_code = FILE_SUCCESS;
+      result.error_code = DE100_FILE_SUCCESS;
       CLEAR_ERROR_DETAIL();
     } else {
       result.exists = false;
@@ -495,7 +495,7 @@ De100FileExistsResult de100_file_exists(const char *filename) {
     // File/directory exists - check if it's a file (not directory)
     result.exists = !(attrib & FILE_ATTRIBUTE_DIRECTORY);
     result.success = true;
-    result.error_code = FILE_SUCCESS;
+    result.error_code = DE100_FILE_SUCCESS;
     CLEAR_ERROR_DETAIL();
 
 #if DE100_INTERNAL && DE100_SLOW
@@ -515,7 +515,7 @@ De100FileExistsResult de100_file_exists(const char *filename) {
   if (stat(filename, &de100_file_stat) == 0) {
     // Path exists - check what it is
     result.success = true;
-    result.error_code = FILE_SUCCESS;
+    result.error_code = DE100_FILE_SUCCESS;
 
     if (S_ISREG(de100_file_stat.st_mode)) {
       result.exists = true;
@@ -541,7 +541,7 @@ De100FileExistsResult de100_file_exists(const char *filename) {
     if (err == ENOENT || err == ENOTDIR) {
       result.exists = false;
       result.success = true;
-      result.error_code = FILE_SUCCESS;
+      result.error_code = DE100_FILE_SUCCESS;
       CLEAR_ERROR_DETAIL();
     } else {
       result.exists = false;
@@ -565,7 +565,7 @@ De100FileSizeResult de100_file_get_size(const char *filename) {
   De100FileSizeResult result = {.value = -1};
 
   if (!filename) {
-    result.error_code = FILE_ERROR_INVALID_PATH;
+    result.error_code = DE100_FILE_ERROR_INVALID_PATH;
     SET_ERROR_DETAIL("[de100_file_get_size] NULL filename provided");
     return result;
   }
@@ -588,7 +588,7 @@ De100FileSizeResult de100_file_get_size(const char *filename) {
 
   // Check if it's a directory
   if (de100_file_info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-    result.error_code = FILE_ERROR_IS_DIRECTORY;
+    result.error_code = DE100_FILE_ERROR_IS_DIRECTORY;
     SET_ERROR_DETAIL("[de100_file_get_size] '%s' is a directory", filename);
     return result;
   }
@@ -599,7 +599,7 @@ De100FileSizeResult de100_file_get_size(const char *filename) {
 
   result.value = (int64)size.QuadPart;
   result.success = true;
-  result.error_code = FILE_SUCCESS;
+  result.error_code = DE100_FILE_SUCCESS;
   CLEAR_ERROR_DETAIL();
 
 #else
@@ -618,14 +618,14 @@ De100FileSizeResult de100_file_get_size(const char *filename) {
   }
 
   if (S_ISDIR(de100_file_stat.st_mode)) {
-    result.error_code = FILE_ERROR_IS_DIRECTORY;
+    result.error_code = DE100_FILE_ERROR_IS_DIRECTORY;
     SET_ERROR_DETAIL("[de100_file_get_size] '%s' is a directory", filename);
     return result;
   }
 
   result.value = (int64)de100_file_stat.st_size;
   result.success = true;
-  result.error_code = FILE_SUCCESS;
+  result.error_code = DE100_FILE_SUCCESS;
   CLEAR_ERROR_DETAIL();
 #endif
 
@@ -639,7 +639,7 @@ De100FileSizeResult de100_file_get_size(const char *filename) {
 De100FileResult de100_file_delete(const char *filename) {
   if (!filename) {
     SET_ERROR_DETAIL("[de100_file_delete] NULL filename provided");
-    return make_error(FILE_ERROR_INVALID_PATH);
+    return make_error(DE100_FILE_ERROR_INVALID_PATH);
   }
 
 #if defined(_WIN32)
@@ -694,7 +694,7 @@ De100FileOpenResult de100_file_open(const char *filename,
   De100FileOpenResult result = {.fd = -1, .success = false};
 
   if (!filename) {
-    result.error_code = FILE_ERROR_INVALID_PATH;
+    result.error_code = DE100_FILE_ERROR_INVALID_PATH;
     SET_ERROR_DETAIL("[de100_file_open] NULL filename provided");
     return result;
   }
@@ -733,7 +733,7 @@ De100FileOpenResult de100_file_open(const char *filename,
   result.fd = _open_osfhandle((intptr_t)handle, 0);
   if (result.fd == -1) {
     CloseHandle(handle);
-    result.error_code = FILE_ERROR_UNKNOWN;
+    result.error_code = DE100_FILE_ERROR_UNKNOWN;
     return result;
   }
 
@@ -769,7 +769,7 @@ De100FileOpenResult de100_file_open(const char *filename,
 #endif
 
   result.success = true;
-  result.error_code = FILE_SUCCESS;
+  result.error_code = DE100_FILE_SUCCESS;
   CLEAR_ERROR_DETAIL();
   return result;
 }
@@ -781,12 +781,12 @@ De100FileOpenResult de100_file_open(const char *filename,
 De100FileResult de100_file_close(int32 fd) {
   if (fd < 0) {
     SET_ERROR_DETAIL("[de100_file_close] Invalid file descriptor: %d", fd);
-    return make_error(FILE_ERROR_INVALID_FD);
+    return make_error(DE100_FILE_ERROR_INVALID_FD);
   }
 
 #if defined(_WIN32)
   if (_close(fd) != 0) {
-    return make_error(FILE_ERROR_UNKNOWN);
+    return make_error(DE100_FILE_ERROR_UNKNOWN);
   }
 #else
   if (close(fd) != 0) {
@@ -809,13 +809,14 @@ De100FileIOResult de100_file_read_all(int32 fd, void *buffer, size_t size) {
   De100FileIOResult result = {.bytes_processed = 0, .success = false};
 
   if (fd < 0) {
-    result.error_code = FILE_ERROR_INVALID_FD;
+    result.error_code = DE100_FILE_ERROR_INVALID_FD;
     SET_ERROR_DETAIL("[de100_file_read_all] Invalid file descriptor: %d", fd);
     return result;
   }
 
   if (!buffer && size > 0) {
-    result.error_code = FILE_ERROR_INVALID_PATH; // Reusing for invalid buffer
+    result.error_code =
+        DE100_FILE_ERROR_INVALID_PATH; // Reusing for invalid buffer
     SET_ERROR_DETAIL("[de100_file_read_all] NULL buffer with size %zu", size);
     return result;
   }
@@ -850,7 +851,7 @@ De100FileIOResult de100_file_read_all(int32 fd, void *buffer, size_t size) {
 
     if (bytes_read == 0) {
       // EOF - didn't get all the bytes we wanted
-      result.error_code = FILE_ERROR_EOF;
+      result.error_code = DE100_FILE_ERROR_EOF;
       SET_ERROR_DETAIL("[de100_file_read_all] EOF after %zu bytes, wanted %zu",
                        result.bytes_processed, size);
       return result;
@@ -862,7 +863,7 @@ De100FileIOResult de100_file_read_all(int32 fd, void *buffer, size_t size) {
   }
 
   result.success = true;
-  result.error_code = FILE_SUCCESS;
+  result.error_code = DE100_FILE_SUCCESS;
   CLEAR_ERROR_DETAIL();
   return result;
 }
@@ -895,13 +896,13 @@ De100FileIOResult de100_file_write_all(int32 fd, const void *buffer,
   De100FileIOResult result = {.bytes_processed = 0, .success = false};
 
   if (fd < 0) {
-    result.error_code = FILE_ERROR_INVALID_FD;
+    result.error_code = DE100_FILE_ERROR_INVALID_FD;
     SET_ERROR_DETAIL("[de100_file_write_all] Invalid file descriptor: %d", fd);
     return result;
   }
 
   if (!buffer && size > 0) {
-    result.error_code = FILE_ERROR_INVALID_PATH;
+    result.error_code = DE100_FILE_ERROR_INVALID_PATH;
     SET_ERROR_DETAIL("[de100_file_write_all] NULL buffer with size %zu", size);
     return result;
   }
@@ -940,7 +941,7 @@ De100FileIOResult de100_file_write_all(int32 fd, const void *buffer,
   }
 
   result.success = true;
-  result.error_code = FILE_SUCCESS;
+  result.error_code = DE100_FILE_SUCCESS;
   CLEAR_ERROR_DETAIL();
   return result;
 }
@@ -954,7 +955,7 @@ De100FileSizeResult de100_file_seek(int32 fd, int64 offset,
   De100FileSizeResult result = {.value = -1, .success = false};
 
   if (fd < 0) {
-    result.error_code = FILE_ERROR_INVALID_FD;
+    result.error_code = DE100_FILE_ERROR_INVALID_FD;
     SET_ERROR_DETAIL("[de100_file_seek] Invalid file descriptor: %d", fd);
     return result;
   }
@@ -971,7 +972,7 @@ De100FileSizeResult de100_file_seek(int32 fd, int64 offset,
     whence = SEEK_END;
     break;
   default:
-    result.error_code = FILE_ERROR_UNKNOWN;
+    result.error_code = DE100_FILE_ERROR_UNKNOWN;
     SET_ERROR_DETAIL("[de100_file_seek] Invalid origin: %d", origin);
     return result;
   }
@@ -984,7 +985,7 @@ De100FileSizeResult de100_file_seek(int32 fd, int64 offset,
 
   if (new_pos < 0) {
     int32 err = errno;
-    result.error_code = FILE_ERROR_SEEK_FAILED;
+    result.error_code = DE100_FILE_ERROR_SEEK_FAILED;
 #if DE100_INTERNAL && DE100_SLOW
     SET_ERROR_DETAIL("[de100_file_seek] lseek() failed: %s", strerror(err));
 #endif
@@ -993,7 +994,7 @@ De100FileSizeResult de100_file_seek(int32 fd, int64 offset,
 
   result.value = (int64)new_pos;
   result.success = true;
-  result.error_code = FILE_SUCCESS;
+  result.error_code = DE100_FILE_SUCCESS;
   CLEAR_ERROR_DETAIL();
   return result;
 }
@@ -1004,52 +1005,52 @@ De100FileSizeResult de100_file_seek(int32 fd, int64 offset,
 
 const char *de100_file_strerror(De100FileErrorCode code) {
   switch (code) {
-  case FILE_SUCCESS:
+  case DE100_FILE_SUCCESS:
     return "Success";
 
-  case FILE_ERROR_NOT_FOUND:
+  case DE100_FILE_ERROR_NOT_FOUND:
     return "File or path not found";
 
-  case FILE_ERROR_ACCESS_DENIED:
+  case DE100_FILE_ERROR_ACCESS_DENIED:
     return "Access denied (permission error, file locked, or read-only)";
 
-  case FILE_ERROR_ALREADY_EXISTS:
+  case DE100_FILE_ERROR_ALREADY_EXISTS:
     return "File already exists";
 
-  case FILE_ERROR_IS_DIRECTORY:
+  case DE100_FILE_ERROR_IS_DIRECTORY:
     return "Path is a directory, expected a file";
 
-  case FILE_ERROR_NOT_A_FILE:
+  case DE100_FILE_ERROR_NOT_A_FILE:
     return "Path exists but is not a regular file";
 
-  case FILE_ERROR_DISK_FULL:
+  case DE100_FILE_ERROR_DISK_FULL:
     return "Disk full or quota exceeded";
 
-  case FILE_ERROR_READ_FAILED:
+  case DE100_FILE_ERROR_READ_FAILED:
     return "Read operation failed (I/O error)";
 
-  case FILE_ERROR_WRITE_FAILED:
+  case DE100_FILE_ERROR_WRITE_FAILED:
     return "Write operation failed (I/O error or write-protected)";
 
-  case FILE_ERROR_INVALID_PATH:
+  case DE100_FILE_ERROR_INVALID_PATH:
     return "Invalid file path (NULL, too long, or contains invalid characters)";
 
-  case FILE_ERROR_TOO_LARGE:
+  case DE100_FILE_ERROR_TOO_LARGE:
     return "File too large for operation";
 
-  case FILE_ERROR_SIZE_MISMATCH:
+  case DE100_FILE_ERROR_SIZE_MISMATCH:
     return "File size mismatch after operation (possible corruption)";
 
-  case FILE_ERROR_SEEK_FAILED:
+  case DE100_FILE_ERROR_SEEK_FAILED:
     return "Seek operation failed";
 
-  case FILE_ERROR_EOF:
+  case DE100_FILE_ERROR_EOF:
     return "Unexpected end of file";
 
-  case FILE_ERROR_INVALID_FD:
+  case DE100_FILE_ERROR_INVALID_FD:
     return "Invalid file descriptor";
 
-  case FILE_ERROR_UNKNOWN:
+  case DE100_FILE_ERROR_UNKNOWN:
   default:
     return "Unknown file error";
   }

@@ -215,11 +215,6 @@ de100_file_scoped_fn inline void x11_handle_event(Display *display,
     break;
   }
 
-  case MotionNotify: {
-    handle_mouse_motion(event, game->inputs);
-    break;
-  }
-
   case ButtonPress: {
     handle_mouse_button_press(event, game->inputs);
     break;
@@ -310,11 +305,13 @@ de100_file_scoped_fn inline int x11_init(EngineState *engine) {
 
   XSetWindowAttributes attrs = {0};
   attrs.colormap = colormap;
-  attrs.event_mask = ExposureMask | StructureNotifyMask | KeyPressMask |
-                     KeyReleaseMask | ButtonPressMask |
-                     ButtonReleaseMask | // NEW: Mouse buttons
-                     PointerMotionMask | // NEW: Mouse movement
-                     FocusChangeMask;    // Already have this
+  attrs.event_mask =
+      ExposureMask | StructureNotifyMask | KeyPressMask |
+      KeyReleaseMask |    // Keyboard events
+      ButtonPressMask |   // Mouse button press
+      ButtonReleaseMask | // Mouse button release
+      // NOTE: PointerMotionMask is NOT needed - we poll with XQueryPointer!
+      FocusChangeMask; // Window focus
 
   x11->window = XCreateWindow(
       x11->display, root, 0, 0, engine->game.config.window_width,
@@ -428,6 +425,8 @@ int platform_main() {
     handle_game_reload_check(&engine.platform.code, &engine.platform.paths);
 
     prepare_input_frame(engine.platform.old_inputs, engine.game.inputs);
+    x11_poll_mouse(x11->display, x11->window, engine.game.inputs);
+    ;
     linux_poll_joystick(engine.game.inputs);
 
     // Input recording/playback: record after getting real inputs, playback

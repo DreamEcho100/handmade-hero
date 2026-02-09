@@ -10,24 +10,24 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 typedef enum {
-    FILE_SUCCESS = 0,
-    FILE_ERROR_NOT_FOUND,
-    FILE_ERROR_ACCESS_DENIED,
-    FILE_ERROR_ALREADY_EXISTS,
-    FILE_ERROR_IS_DIRECTORY,
-    FILE_ERROR_NOT_A_FILE,
-    FILE_ERROR_DISK_FULL,
-    FILE_ERROR_READ_FAILED,
-    FILE_ERROR_WRITE_FAILED,
-    FILE_ERROR_INVALID_PATH,
-    FILE_ERROR_TOO_LARGE,
-    FILE_ERROR_SIZE_MISMATCH,
-    FILE_ERROR_SEEK_FAILED,      // NEW
-    FILE_ERROR_EOF,              // NEW
-    FILE_ERROR_INVALID_FD,       // NEW
-    FILE_ERROR_UNKNOWN,
-    
-    FILE_ERROR_COUNT  // Sentinel for validation
+  DE100_FILE_SUCCESS = 0,
+  DE100_FILE_ERROR_NOT_FOUND,
+  DE100_FILE_ERROR_ACCESS_DENIED,
+  DE100_FILE_ERROR_ALREADY_EXISTS,
+  DE100_FILE_ERROR_IS_DIRECTORY,
+  DE100_FILE_ERROR_NOT_A_FILE,
+  DE100_FILE_ERROR_DISK_FULL,
+  DE100_FILE_ERROR_READ_FAILED,
+  DE100_FILE_ERROR_WRITE_FAILED,
+  DE100_FILE_ERROR_INVALID_PATH,
+  DE100_FILE_ERROR_TOO_LARGE,
+  DE100_FILE_ERROR_SIZE_MISMATCH,
+  DE100_FILE_ERROR_SEEK_FAILED,
+  DE100_FILE_ERROR_EOF,
+  DE100_FILE_ERROR_INVALID_FD,
+  DE100_FILE_ERROR_UNKNOWN,
+
+  DE100_FILE_ERROR_COUNT // Sentinel for validation
 } De100FileErrorCode;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -35,38 +35,38 @@ typedef enum {
 // ═══════════════════════════════════════════════════════════════════════════
 
 typedef struct {
-    bool success;
-    De100FileErrorCode error_code;
+  bool success;
+  De100FileErrorCode error_code;
 } De100FileResult;
 
 typedef struct {
-    PlatformTimeSpec value;
-    bool success;
-    De100FileErrorCode error_code;
+  PlatformTimeSpec value;
+  bool success;
+  De100FileErrorCode error_code;
 } De100FileTimeResult;
 
 typedef struct {
-    int64 value;  // -1 on error
-    bool success;
-    De100FileErrorCode error_code;
+  int64 value; // -1 on error
+  bool success;
+  De100FileErrorCode error_code;
 } De100FileSizeResult;
 
 typedef struct {
-    bool exists;
-    bool success;  // false if check itself failed (e.g., permission error)
-    De100FileErrorCode error_code;
+  bool exists;
+  bool success; // false if check itself failed (e.g., permission error)
+  De100FileErrorCode error_code;
 } De100FileExistsResult;
 
 typedef struct {
-    int32 fd;       // -1 on error
-    bool success;
-    De100FileErrorCode error_code;
+  int32 fd; // -1 on error
+  bool success;
+  De100FileErrorCode error_code;
 } De100FileOpenResult;
 
 typedef struct {
-    size_t bytes_processed;  // How many bytes were actually read/written
-    bool success;
-    De100FileErrorCode error_code;
+  size_t bytes_processed; // How many bytes were actually read/written
+  bool success;
+  De100FileErrorCode error_code;
 } De100FileIOResult;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -74,11 +74,11 @@ typedef struct {
 // ═══════════════════════════════════════════════════════════════════════════
 
 typedef enum {
-    DE100_FILE_READ      = 1 << 0,
-    DE100_FILE_WRITE     = 1 << 1,
-    DE100_FILE_CREATE    = 1 << 2,  // Create if doesn't exist
-    DE100_FILE_TRUNCATE  = 1 << 3,  // Truncate if exists
-    DE100_FILE_APPEND    = 1 << 4,
+  DE100_FILE_READ = 1 << 0,
+  DE100_FILE_WRITE = 1 << 1,
+  DE100_FILE_CREATE = 1 << 2,   // Create if doesn't exist
+  DE100_FILE_TRUNCATE = 1 << 3, // Truncate if exists
+  DE100_FILE_APPEND = 1 << 4,
 } De100FileOpenFlags;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -86,9 +86,9 @@ typedef enum {
 // ═══════════════════════════════════════════════════════════════════════════
 
 typedef enum {
-    DE100_SEEK_SET = 0,  // From beginning
-    DE100_SEEK_CUR = 1,  // From current position
-    DE100_SEEK_END = 2,  // From end
+  DE100_SEEK_SET = 0, // From beginning
+  DE100_SEEK_CUR = 1, // From current position
+  DE100_SEEK_END = 2, // From end
 } De100FileSeekOrigin;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -103,7 +103,8 @@ De100FileTimeResult de100_file_get_mod_time(const char *filename);
 /**
  * Compare two file modification times.
  */
-real64 de100_file_time_diff(const PlatformTimeSpec *a, const PlatformTimeSpec *b);
+real64 de100_file_time_diff(const PlatformTimeSpec *a,
+                            const PlatformTimeSpec *b);
 
 /**
  * Copy a file from source to destination.
@@ -143,7 +144,8 @@ De100FileResult de100_file_delete(const char *filename);
  *       de100_file_close(r.fd);
  *   }
  */
-De100FileOpenResult de100_file_open(const char *filename, De100FileOpenFlags flags);
+De100FileOpenResult de100_file_open(const char *filename,
+                                    De100FileOpenFlags flags);
 
 /**
  * Close a file descriptor.
@@ -163,7 +165,7 @@ De100FileResult de100_file_close(int32 fd);
  * @param size    Number of bytes to read
  * @return        De100FileIOResult with bytes_processed and status
  *
- * Note: Returns FILE_ERROR_EOF if EOF reached before reading all bytes.
+ * Note: Returns DE100_FILE_ERROR_EOF if EOF reached before reading all bytes.
  */
 De100FileIOResult de100_file_read_all(int32 fd, void *buffer, size_t size);
 
@@ -177,17 +179,20 @@ De100FileIOResult de100_file_read_all(int32 fd, void *buffer, size_t size);
  * @param size    Number of bytes to write
  * @return        De100FileIOResult with bytes_processed and status
  */
-De100FileIOResult de100_file_write_all(int32 fd, const void *buffer, size_t size);
+De100FileIOResult de100_file_write_all(int32 fd, const void *buffer,
+                                       size_t size);
 
 /**
  * Seek to a position in a file.
  *
  * @param fd      File descriptor
  * @param offset  Offset in bytes
- * @param origin  Where to seek from (DE100_SEEK_SET, DE100_SEEK_CUR, DE100_SEEK_END)
+ * @param origin  Where to seek from (DE100_SEEK_SET, DE100_SEEK_CUR,
+ * DE100_SEEK_END)
  * @return        De100FileSizeResult with new position or error
  */
-De100FileSizeResult de100_file_seek(int32 fd, int64 offset, De100FileSeekOrigin origin);
+De100FileSizeResult de100_file_seek(int32 fd, int64 offset,
+                                    De100FileSeekOrigin origin);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ERROR HANDLING
