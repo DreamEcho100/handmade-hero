@@ -144,7 +144,7 @@ Examples:
 
 ---
 
-### 5.2 `engine/platform/`
+### 5.2 `engine/platforms/`
 
 This layer deals with **platform reality**.
 
@@ -156,6 +156,15 @@ Responsibilities:
 - Audio output
 - Timing
 - Backend‑specific APIs
+
+Structure:
+
+- `_common/` — Shared platform logic (NOT game logic)
+- `[platform]/` — Platform-specific implementation (raylib/x11)
+  - `hooks/` — Platform interfaces exposed to the game
+    - `inputs/` — Input headers for game to implement (joystick.h, keyboard.h)
+    - `utils.c` — Utility functions like `de100_get_frame_time`, `de100_get_time`, `de100_get_fps`
+  - `backend.c`, `audio.c`, `inputs/mouse.c` — Other platform-specific code
 
 Rules:
 
@@ -190,6 +199,18 @@ The engine:
 
 This is where **meaning exists**.
 
+Structure:
+
+- `build/` — Build output
+- `build-dev.sh` — Build the game in dev mode
+- `src/`
+  - `adapters/[platform]/inputs/` — Platform-specific input adapters (joystick.c, keyboard.c)
+  - `init.c` — Defines `GAME_INIT`, called after startup, before game loop
+  - `inputs.h` — Defines game _actions_, imported by adapters
+  - `main.c` — Defines `GAME_UPDATE_AND_RENDER` and `GAME_GET_AUDIO_SAMPLES`
+  - `main.h` — Game header
+  - `startup.c` — Defines `GAME_STARTUP`, called before game loop
+
 Responsibilities:
 
 - Game logic
@@ -214,7 +235,7 @@ Adapters are **game‑owned, backend‑specific glue code**.
 
 They:
 
-- Live inside the game directory
+- Live inside the game directory (`src/adapters/[platform]/`)
 - Are compiled/linked per backend
 - Are allowed to include backend headers
 - Mostly for translating what normalizing between different backends/games/cases would be a hurdle/cause-performance-issues, for example: backend input → game actions. at least until I find a better way to do it.
@@ -251,6 +272,8 @@ Game Adapter (backend‑specific)
     ↓ actions
 Game Logic
 ```
+
+The platform exposes input headers via `engine/platforms/[platform]/hooks/inputs/` (e.g., `keyboard.h`, `joystick.h`) which the game implements in `src/adapters/[platform]/inputs/`.
 
 #### Why this is intentional
 
@@ -478,22 +501,62 @@ typedef struct {
 ```
 project/
 ├── engine/
+│   ├── backend.h
+│   ├── build-common.sh
 │   ├── _common/
 │   │   ├── base.h
 │   │   ├── memory.h          ← De100MemoryBlock
 │   │   ├── memory.c          ← de100_memory_alloc()
 │   │   ├── debug-file-io.h
 │   │   └── debug-file-io.c
+│   ├── engine.c
+│   ├── engine.h
 │   ├── game/
 │   │   ├── game-loader.h     ← De100GameCode
 │   │   └── input.h           ← De100GameInput
-│   └── platform/
-│       └── x11/
-│           ├── backend.c
-│           └── audio.c
+│   ├── hooks/
+│   │   └── ...
+│   ├── _internal/
+│   │   └── ...
+│   ├── main.c
+│   ├── platforms/
+│   │   ├── _common/
+│   │   │   └── ...
+│   │   ├── x11/
+│   │   │   ├── backend.c
+│   │   │   ├── audio.c
+│   │   │   └── hooks/
+│   │   │       ├── inputs/
+│   │   │       │   ├── joystick.h
+│   │   │       │   └── keyboard.h
+│   │   │       └── utils.c
+│   │   └── raylib/
+│   │       ├── backend.c
+│   │       ├── audio.c
+│   │       └── hooks/
+│   │           ├── inputs/
+│   │           │   ├── joystick.h
+│   │           │   └── keyboard.h
+│   │           └── utils.c
+│   └── todos.md
 └── games/handmade-hero/
+    ├── build/
+    │   └── ...
+    ├── build-dev.sh
     └── src/
+        ├── adapters/
+        │   ├── x11/
+        │   │   └── inputs/
+        │   │       ├── joystick.c
+        │   │       └── keyboard.c
+        │   └── raylib/
+        │       └── inputs/
+        │           ├── joystick.c
+        │           └── keyboard.c
+        ├── init.c
+        ├── inputs.h
         ├── main.c            ← GameState (no prefix)
+        ├── main.h
         └── startup.c
 ```
 

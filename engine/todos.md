@@ -2,6 +2,7 @@
 
 ## Urgent TODOs
 
+- [ ] Move `games/handmade-hero` to a private submodule repo and link it to the main repo. This improves organization and separation between the engine and game, allows multiple games to share the same engine, avoids licensing issues with Handmade Hero code, and enables collaboration on the game without affecting the engine.
 - [ ] Remove the `audio_samples` from the `EngineAllocations`
 - [ ] Implement proper detection window focus/active/inactive/minimized, by making the platform detect it and the game is what handles it.
 - [ ] Implement proper error handling and reporting for all functions. and refactor what's needed to be on internal/dev mode only or/and every range of time.

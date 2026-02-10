@@ -15,22 +15,6 @@ GameControllerInput *GetController(GameInput *Input,
                                    unsigned int ControllerIndex);
 
 typedef struct {
-  int32 offset_x;
-  int32 offset_y;
-} GradientState;
-
-typedef struct {
-  int32 offset_x;
-  int32 offset_y;
-} PixelState;
-
-typedef struct {
-  int32 x;
-  int32 y;
-  real32 t_jump;
-} PlayerState;
-
-typedef struct {
   // Audio state (embedded struct, not pointer)
   GameAudioState audio;
   // Future: More game-specific state
@@ -42,9 +26,6 @@ typedef struct {
   // real32 t_sine; // Phase accumulator
 
   // Your other state
-  GradientState gradient_state;
-  PixelState pixel_state;
-  PlayerState player_state;
   int32 speed;
 } HandMadeHeroGameState;
 

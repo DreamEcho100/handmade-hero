@@ -53,8 +53,6 @@ GAME_INIT(game_init) {
     game_state->audio.tone.is_playing = true;
     game_state->audio.master_volume = 1.0f;
 
-    game_state->gradient_state = (GradientState){0};
-    game_state->pixel_state = (PixelState){0};
     game_state->speed = 5;
 
     memory->is_initialized = true;
