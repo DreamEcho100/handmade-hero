@@ -1,4 +1,4 @@
-# DE100 - Multi-Backend Engine Architecture (Learning-Oriented)
+# DE100 Game Engine - Multi-Backend Engine Architecture (Learning/Fun-Oriented)
 
 > **Purpose of this document**
 > This README exists to remove ambiguity. It explains **what this project is**, **why it is structured the way it is**, and **how it intentionally differs from conventional game engines**.
@@ -10,7 +10,7 @@
 
 ### What it _is_
 
-- A **learning‑first, systems‑oriented game engine project** inspired by _Handmade Hero_.
+- A **learning‑first, systems‑oriented game engine project** inspired by _Casey's Handmade Hero_.
 - A deliberate exploration of:
   - C as a low‑level language
   - OS/platform APIs (For now X11 and Raylib for comparison and cross-platformness).
@@ -49,6 +49,42 @@ This project follows a few non‑negotiable principles:
 
 5. **Portability is explored, not assumed**
    The project deliberately compares low‑level OS APIs with higher‑level libraries.
+
+---
+
+## Repository Structure & Cloning
+
+This project uses **git submodules** for games. The engine is public, but some games are private.
+
+### Repository Layout
+
+| Repository                        | Visibility | Path                        | Description                  |
+| --------------------------------- | ---------- | --------------------------- | ---------------------------- |
+| `DreamEcho100/de100-game-engine`  | PUBLIC     | `/`                         | Engine core                  |
+| `DreamEcho100/handmade-hero-game` | PRIVATE    | `games/handmade-hero-game/` | Handmade Hero implementation |
+
+### Cloning
+
+```bash
+# Full clone with all submodules (requires access to private repos)
+git clone --recursive git@github.com:DreamEcho100/de100-game-engine.git
+
+# Engine only (works for everyone)
+git clone https://github.com/DreamEcho100/de100-game-engine.git
+
+# Initialize submodules after clone
+git submodule update --init --recursive
+```
+
+### No Private Access?
+
+You can still:
+
+- Use and modify the engine
+- Create your own game in `games/your-game/`
+- Contribute to public submodules
+
+> **See also:** [Git Submodules Guide](ai-knowledge-dump/converting-games-handmade-hero-to-a-private-git-submodule.md) for detailed submodule workflows.
 
 ---
 
@@ -431,7 +467,7 @@ void de100_time_sleep_ms(uint32 ms);
 ### Game Types (Your Game - No Prefix)
 
 ```c
-// games/handmade-hero/src/main.h
+// games/handmade-hero-game/src/main.h
 typedef struct {
     real32 frequency;
     real32 volume;
@@ -449,7 +485,7 @@ typedef struct {
 ### Game Functions (Your Game - No Prefix)
 
 ```c
-// games/handmade-hero/src/main.c
+// games/handmade-hero-game/src/main.c
 void update_player(GameState *state, De100GameInput *input);
 void render_gradient(De100GameBackBuffer *buffer, int offset_x, int offset_y);
 ```
@@ -539,7 +575,7 @@ project/
 │   │           │   └── keyboard.h
 │   │           └── utils.c
 │   └── todos.md
-└── games/handmade-hero/
+└── games/handmade-hero-game/  ← Git submodule (PRIVATE)
     ├── build/
     │   └── ...
     ├── build-dev.sh
