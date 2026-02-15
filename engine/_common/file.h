@@ -46,7 +46,7 @@ typedef struct {
 } De100FileTimeResult;
 
 typedef struct {
-  int64 value; // -1 on error
+  i64 value; // -1 on error
   bool success;
   De100FileErrorCode error_code;
 } De100FileSizeResult;
@@ -58,7 +58,7 @@ typedef struct {
 } De100FileExistsResult;
 
 typedef struct {
-  int32 fd; // -1 on error
+  i32 fd; // -1 on error
   bool success;
   De100FileErrorCode error_code;
 } De100FileOpenResult;
@@ -152,7 +152,7 @@ De100FileOpenResult de100_file_open(const char *filename,
  * @param fd  File descriptor to close
  * @return    De100FileResult indicating success or failure
  */
-De100FileResult de100_file_close(int32 fd);
+De100FileResult de100_file_close(i32 fd);
 
 /**
  * Read exactly `size` bytes from a file descriptor.
@@ -166,7 +166,7 @@ De100FileResult de100_file_close(int32 fd);
  *
  * Note: Returns DE100_FILE_ERROR_EOF if EOF reached before reading all bytes.
  */
-De100FileIOResult de100_file_read_all(int32 fd, void *buffer, size_t size);
+De100FileIOResult de100_file_read_all(i32 fd, void *buffer, size_t size);
 
 /**
  * Write exactly `size` bytes to a file descriptor.
@@ -178,8 +178,7 @@ De100FileIOResult de100_file_read_all(int32 fd, void *buffer, size_t size);
  * @param size    Number of bytes to write
  * @return        De100FileIOResult with bytes_processed and status
  */
-De100FileIOResult de100_file_write_all(int32 fd, const void *buffer,
-                                       size_t size);
+De100FileIOResult de100_file_write_all(i32 fd, const void *buffer, size_t size);
 
 /**
  * Seek to a position in a file.
@@ -190,7 +189,7 @@ De100FileIOResult de100_file_write_all(int32 fd, const void *buffer,
  * DE100_SEEK_END)
  * @return        De100FileSizeResult with new position or error
  */
-De100FileSizeResult de100_file_seek(int32 fd, int64 offset,
+De100FileSizeResult de100_file_seek(i32 fd, i64 offset,
                                     De100FileSeekOrigin origin);
 
 // ═══════════════════════════════════════════════════════════════════════════

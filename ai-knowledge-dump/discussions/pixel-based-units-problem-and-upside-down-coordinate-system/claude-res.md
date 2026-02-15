@@ -265,8 +265,8 @@ Same for Y coordinate
 ```c
 // Single position representation
 struct TilePosition {
-    uint32_t absoluteTileX;  // Entire world X coordinate
-    uint32_t absoluteTileY;  // Entire world Y coordinate
+    u32_t absoluteTileX;  // Entire world X coordinate
+    u32_t absoluteTileY;  // Entire world Y coordinate
     float offsetX;           // Meters within tile (0.0 to 1.4)
     float offsetY;
 };
@@ -275,11 +275,11 @@ struct TilePosition {
 #define TILE_CHUNK_SHIFT 4  // Low 4 bits = tile index
 #define TILE_CHUNK_MASK 0xF // 0b1111
 
-uint32_t GetChunkX(uint32_t absoluteTileX) {
+u32_t GetChunkX(u32_t absoluteTileX) {
     return absoluteTileX >> TILE_CHUNK_SHIFT;  // High bits
 }
 
-uint32_t GetTileXInChunk(uint32_t absoluteTileX) {
+u32_t GetTileXInChunk(u32_t absoluteTileX) {
     return absoluteTileX & TILE_CHUNK_MASK;     // Low bits
 }
 
@@ -317,8 +317,8 @@ struct GameState {
     int tileSideInPixels;      // 60 pixels (can change!)
 
     // Player position in WORLD coordinates
-    uint32_t playerAbsoluteTileX;
-    uint32_t playerAbsoluteTileY;
+    u32_t playerAbsoluteTileX;
+    u32_t playerAbsoluteTileY;
     float playerOffsetX;  // 0.0 to tileSideInMeters
     float playerOffsetY;
 };
@@ -342,8 +342,8 @@ void RenderPlayer(GameState* state) {
     float metersToPixels = state->tileSideInPixels / state->tileSideInMeters;
 
     // Which chunk is visible?
-    uint32_t cameraChunkX = GetChunkX(state->playerAbsoluteTileX);
-    uint32_t cameraTileX = GetTileXInChunk(state->playerAbsoluteTileX);
+    u32_t cameraChunkX = GetChunkX(state->playerAbsoluteTileX);
+    u32_t cameraTileX = GetTileXInChunk(state->playerAbsoluteTileX);
 
     // Convert to screen pixels
     float worldX = cameraTileX * state->tileSideInMeters + state->playerOffsetX;
@@ -623,8 +623,8 @@ void MovePlayer(CanonicalPosition* pos, float pixelsToMove) {
 
 ```c
 struct TilePosition {
-    uint32_t absTileX;  // Packed: [chunk bits][tile bits]
-    uint32_t absTileY;
+    u32_t absTileX;  // Packed: [chunk bits][tile bits]
+    u32_t absTileY;
     float offsetX;      // Still pixels for now
     float offsetY;
 };
@@ -658,8 +658,8 @@ float GetMetersToPixels(World* world) {
 
 ```c
 struct TilePosition {
-    uint32_t absTileX;
-    uint32_t absTileY;
+    u32_t absTileX;
+    u32_t absTileY;
     float offsetX;  // NOW IN METERS (0.0 to 1.4)
     float offsetY;  // NOW IN METERS
 };
@@ -686,8 +686,8 @@ void UpdatePlayer(World* world, TilePosition* pos, Input input, float dt) {
 ```c
 void RenderPlayer(World* world, TilePosition* pos, int screenW, int screenH) {
     // Get visible area in tile coordinates
-    uint32_t cameraTileX = pos->absTileX;
-    uint32_t cameraTileY = pos->absTileY;
+    u32_t cameraTileX = pos->absTileX;
+    u32_t cameraTileY = pos->absTileY;
 
     // Convert position to meters from camera
     float relativeMetersX = pos->offsetX;
@@ -736,7 +736,7 @@ Fixed MetersToFixed(float meters) {
 }
 
 struct Position {
-    uint32_t tileX, tileY;
+    u32_t tileX, tileY;
     Fixed offsetX;  // Fixed-point, no floating-point math!
     Fixed offsetY;
 };
@@ -760,7 +760,7 @@ void Move(Position* pos, Fixed distance) {
 
 ```c
 struct Position {
-    uint32_t tileX, tileY;
+    u32_t tileX, tileY;
     float offsetX;  // Always 0.0 to 1.0 (fraction of tile)
     float offsetY;
 };
@@ -1016,28 +1016,28 @@ Example value: 0b0000_0000_0000_0000_0000_0000_0011_0101
 
 // Single position representation
 typedef struct {
-    uint32_t absTileX;  // Bits [31:4]=chunk, [3:0]=tile
-    uint32_t absTileY;
+    u32_t absTileX;  // Bits [31:4]=chunk, [3:0]=tile
+    u32_t absTileY;
     float offsetMetersX;  // 0.0 to tileSideInMeters
     float offsetMetersY;
 } TilePosition;
 
 // Extract chunk coordinate (which 16×16 region)
-inline uint32_t GetChunkX(uint32_t absTileX) {
+inline u32_t GetChunkX(u32_t absTileX) {
     return absTileX >> CHUNK_SHIFT;
     // Shift right by 4 = divide by 16, drops low bits
     // 0b...0011_0101 >> 4 = 0b...0000_0011 = 3
 }
 
 // Extract tile within chunk (0-15)
-inline uint32_t GetTileInChunkX(uint32_t absTileX) {
+inline u32_t GetTileInChunkX(u32_t absTileX) {
     return absTileX & CHUNK_MASK;
     // Mask keeps only low 4 bits
     // 0b...0011_0101 & 0xF = 0b...0000_0101 = 5
 }
 
 // Build absolute tile coordinate
-inline uint32_t MakeAbsTileX(uint32_t chunkX, uint32_t tileX) {
+inline u32_t MakeAbsTileX(u32_t chunkX, u32_t tileX) {
     return (chunkX << CHUNK_SHIFT) | tileX;
     // (3 << 4) | 5 = 0b0011_0000 | 0b0101 = 0b0011_0101
 }
@@ -1117,8 +1117,8 @@ GetTileInChunkX(7);  // = 7 (in tile 7 of that chunk)
 // For worlds that wrap around (like Pac-Man)
 #define WORLD_SIZE_TILES (1 << 20)  // 1 million tiles
 
-uint32_t WrapX(int32_t x) {
-    return ((uint32_t)x) & (WORLD_SIZE_TILES - 1);
+u32_t WrapX(int32_t x) {
+    return ((u32_t)x) & (WORLD_SIZE_TILES - 1);
     // Fast modulo for power-of-2
 }
 
@@ -1403,7 +1403,7 @@ typedef struct {
 
 // Game SHOULD use world space
 typedef struct {
-    uint32_t absTileX, absTileY;
+    u32_t absTileX, absTileY;
     float offsetMetersX, offsetMetersY;
 } Position;
 
@@ -1653,8 +1653,8 @@ typedef struct {
 } World;
 
 typedef struct {
-    uint32_t absTileX;
-    uint32_t absTileY;
+    u32_t absTileX;
+    u32_t absTileY;
     float offsetX;  // Will be meters later
     float offsetY;
 } TilePosition;
@@ -1669,14 +1669,14 @@ typedef struct {
 
 ```c
 typedef struct {
-    uint32_t absTileX;
+    u32_t absTileX;
     // NOTE(yourname): I don't fully understand the bit-packing yet
     // but Casey says high bits = chunk, low bits = tile
     // Will make sense after implementing it
 } TilePosition;
 
 // Helper I'm copying from Casey
-inline uint32_t GetChunkX(uint32_t absTileX) {
+inline u32_t GetChunkX(u32_t absTileX) {
     return absTileX >> CHUNK_SHIFT;
     // TODO: Understand bit shifting better
     // For now: this extracts the chunk number
@@ -1719,8 +1719,8 @@ class CoordinateSystem {
 // RIGHT approach (Casey's way):
 // Just make a struct that works for THIS game
 typedef struct {
-    uint32_t absTileX;
-    uint32_t absTileY;
+    u32_t absTileX;
+    u32_t absTileY;
     float offsetX;
     float offsetY;
 } TilePosition;
@@ -1739,11 +1739,11 @@ typedef struct {
 
    ```c
    // Make this compile and run
-   uint32_t absTileX = 0;
+   u32_t absTileX = 0;
    absTileX++;  // Should increment tile
 
-   uint32_t chunk = GetChunkX(absTileX);
-   uint32_t tile = GetTileInChunk(absTileX);
+   u32_t chunk = GetChunkX(absTileX);
+   u32_t tile = GetTileInChunk(absTileX);
    printf("Chunk: %u, Tile: %u\n", chunk, tile);
    ```
 
@@ -1851,8 +1851,8 @@ void TestCoordinatePacking() {
         pos.absTileX++;  // Should become 16 (tile 0 of chunk 1)
     }
 
-    uint32_t chunk = GetChunkX(pos.absTileX);
-    uint32_t tile = GetTileInChunk(pos.absTileX);
+    u32_t chunk = GetChunkX(pos.absTileX);
+    u32_t tile = GetTileInChunk(pos.absTileX);
 
     printf("Expected: Chunk=1, Tile=0\n");
     printf("Got: Chunk=%u, Tile=%u\n", chunk, tile);
@@ -1910,13 +1910,13 @@ typedef struct {
 
 // After day 31:
 typedef struct {
-    uint32_t absTileX, absTileY;
+    u32_t absTileX, absTileY;
     float offsetX, offsetY;
 } TilePosition;  // Better! Can handle huge world
 
 // After day 50:
 typedef struct {
-    uint32_t absTileX, absTileY;
+    u32_t absTileX, absTileY;
     float offsetMetersX, offsetMetersY;  // Now in meters!
 } TilePosition;
 
@@ -2031,7 +2031,7 @@ Confidence: [#######---]  70%
 ```c
 // Just make this work:
 typedef struct {
-    uint32_t absTileX, absTileY;
+    u32_t absTileX, absTileY;
     float offsetX, offsetY;  // Still pixels for now
 } TilePosition;
 
@@ -2042,8 +2042,8 @@ typedef struct {
 
 ```c
 // Add these:
-uint32_t GetChunkX(uint32_t abs);
-uint32_t GetTileInChunk(uint32_t abs);
+u32_t GetChunkX(u32_t abs);
+u32_t GetTileInChunk(u32_t abs);
 
 // Test them with prints
 ```
@@ -2223,8 +2223,8 @@ typedef struct {
     CoordinateSystemType coordSystem;  // Default: COORD_SYSTEM_Y_UP
 
     // Chunk configuration (for sparse storage)
-    uint32_t chunkShift;            // Default: 4 (16x16 tiles per chunk)
-    uint32_t tilesPerChunkSide;     // Default: 16
+    u32_t chunkShift;            // Default: 4 (16x16 tiles per chunk)
+    u32_t tilesPerChunkSide;     // Default: 16
 
     // Allow game to override conversions
     void* gameOverride;             // Optional: game can inject custom behavior
@@ -2254,15 +2254,15 @@ EngineCoordinateConfig EngineGetDefaultCoordinateConfig() {
 // This works for ANY game using the engine
 typedef struct {
     // Tile-based position (supports huge worlds via bit-packing)
-    uint32_t absTileX;
-    uint32_t absTileY;
+    u32_t absTileX;
+    u32_t absTileY;
 
     // Sub-tile position (in engine's unit system)
     float offsetX;  // 0.0 to config.unitsPerTile
     float offsetY;
 
     // Optional: Z for 3D games (ignored by 2D engine functions)
-    uint32_t absTileZ;
+    u32_t absTileZ;
     float offsetZ;
 } EnginePosition;
 
@@ -2312,8 +2312,8 @@ typedef struct {
     float (*metersToUnits)(void* gameData, float meters);
 
     // Optional: Game's custom chunk configuration
-    uint32_t (*getChunkX)(void* gameData, uint32_t absTileX);
-    uint32_t (*getTileInChunk)(void* gameData, uint32_t absTileX);
+    u32_t (*getChunkX)(void* gameData, u32_t absTileX);
+    u32_t (*getTileInChunk)(void* gameData, u32_t absTileX);
 
     // Game's data pointer (for custom functions to use)
     void* gameData;
@@ -2392,7 +2392,7 @@ ScreenPosition EngineWorldToScreen(
 }
 
 // Engine's chunk management (with override support)
-uint32_t EngineGetChunkX(EngineCoordinateConfig* config, uint32_t absTileX) {
+u32_t EngineGetChunkX(EngineCoordinateConfig* config, u32_t absTileX) {
     if (HasGameOverride(config)) {
         GameCoordinateOverride* override = GetOverride(config);
         if (override->getChunkX) {
@@ -2404,7 +2404,7 @@ uint32_t EngineGetChunkX(EngineCoordinateConfig* config, uint32_t absTileX) {
     return absTileX >> config->chunkShift;
 }
 
-uint32_t EngineGetTileInChunk(EngineCoordinateConfig* config, uint32_t absTileX) {
+u32_t EngineGetTileInChunk(EngineCoordinateConfig* config, u32_t absTileX) {
     if (HasGameOverride(config)) {
         GameCoordinateOverride* override = GetOverride(config);
         if (override->getTileInChunk) {
@@ -2413,7 +2413,7 @@ uint32_t EngineGetTileInChunk(EngineCoordinateConfig* config, uint32_t absTileX)
     }
 
     // Default: mask low bits
-    uint32_t mask = (1 << config->chunkShift) - 1;
+    u32_t mask = (1 << config->chunkShift) - 1;
     return absTileX & mask;
 }
 ```
@@ -3009,7 +3009,7 @@ As you watch Casey code, ask yourself these questions for each piece of code:
 
 ```c
 // This code doesn't change between games:
-uint32_t GetChunkX(uint32_t absTileX, uint32_t chunkShift) {
+u32_t GetChunkX(u32_t absTileX, u32_t chunkShift) {
     return absTileX >> chunkShift;  // Math is math
 }
 
@@ -3095,7 +3095,7 @@ if (entity.visible) {
 ```c
 // Bit operations: Same for all games
 #define CHUNK_SHIFT 4
-uint32_t chunk = absTileX >> CHUNK_SHIFT;
+u32_t chunk = absTileX >> CHUNK_SHIFT;
 
 // Memory management: Same for all games
 void* Allocate(size_t size);
@@ -3158,8 +3158,8 @@ void CheckGameOver(Hero* hero) {
 ```c
 // Changing this breaks everything
 typedef struct {
-    uint32_t absTileX;
-    uint32_t absTileY;
+    u32_t absTileX;
+    u32_t absTileY;
 } Position;
 
 // If you change Position, you break:
@@ -3259,7 +3259,7 @@ float Lerp(float a, float b, float t);
 float Clamp(float value, float min, float max);
 
 // Bit operations
-uint32_t GetChunkX(uint32_t absTile, uint32_t shift);
+u32_t GetChunkX(u32_t absTile, u32_t shift);
 
 // Platform abstraction
 bool ReadFileToMemory(char* filename, void* buffer);
@@ -3297,7 +3297,7 @@ typedef struct {
 
 // Tile system (configurable)
 typedef struct {
-    uint32_t chunkShift;        // Configurable (4, 8, 16)
+    u32_t chunkShift;        // Configurable (4, 8, 16)
     TileType* tiles;            // Game defines TileType
 } TileSystem;
 ```
@@ -3484,7 +3484,7 @@ For each piece of code, ask:
 // In your implementation, use comments:
 
 // ENGINE_CORE: Universal bit operations
-uint32_t GetChunkX(uint32_t absTileX) {
+u32_t GetChunkX(u32_t absTileX) {
     return absTileX >> CHUNK_SHIFT;
 }
 

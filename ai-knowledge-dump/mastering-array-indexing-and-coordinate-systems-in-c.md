@@ -243,7 +243,7 @@ Create a simple rule and ALWAYS follow it:
 │                         ARRAY INDICES                                   │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
-│   Declaration: uint32 map[ROW_COUNT][COL_COUNT];                        │
+│   Declaration: u32 map[ROW_COUNT][COL_COUNT];                        │
 │                           ↑           ↑                                 │
 │                        first dim   second dim                           │
 │                         (rows)     (columns)                            │
@@ -318,30 +318,30 @@ int value = map[tile_row][tile_col];  // Obviously correct!
 // ❌ AMBIGUOUS: What's the first dimension?
 #define MAP_WIDTH 17
 #define MAP_HEIGHT 9
-uint32 map[MAP_WIDTH][MAP_HEIGHT];  // Is this right?
+u32 map[MAP_WIDTH][MAP_HEIGHT];  // Is this right?
 
 // ✅ EXPLICIT: Dimensions are clear
 #define MAP_ROW_COUNT 9    // Number of rows (Y direction)
 #define MAP_COL_COUNT 17   // Number of columns (X direction)
-uint32 map[MAP_ROW_COUNT][MAP_COL_COUNT];  // [rows][cols] - obviously correct!
+u32 map[MAP_ROW_COUNT][MAP_COL_COUNT];  // [rows][cols] - obviously correct!
 ```
 
 ### 4.3 Strategy #3: Create Type Aliases
 
 ```c
 // Define semantic types
-typedef int32 TileRow;  // Y coordinate in tile space
-typedef int32 TileCol;  // X coordinate in tile space
+typedef i32 TileRow;  // Y coordinate in tile space
+typedef i32 TileCol;  // X coordinate in tile space
 
 // Function signatures become self-documenting
-uint32 get_tile_value(TileRow row, TileCol col) {
+u32 get_tile_value(TileRow row, TileCol col) {
     return map[row][col];  // Parameter order matches array order!
 }
 
 // Usage is clear
 TileCol col = screen_x_to_tile_col(player.x);
 TileRow row = screen_y_to_tile_row(player.y);
-uint32 value = get_tile_value(row, col);  // Can't mess this up!
+u32 value = get_tile_value(row, col);  // Can't mess this up!
 ```
 
 ### 4.4 Strategy #4: Create Helper Functions
@@ -349,8 +349,8 @@ uint32 value = get_tile_value(row, col);  // Can't mess this up!
 ```c
 // Encapsulate the translation in one place
 typedef struct {
-    int32 row;
-    int32 col;
+    i32 row;
+    i32 col;
 } TileCoord;
 
 TileCoord screen_to_tile(f32 screen_x, f32 screen_y, TileState* tiles) {
@@ -385,7 +385,7 @@ typedef struct {
     //   row = Y direction (0 = top, increases downward)
     //   col = X direction (0 = left, increases rightward)
     // Access: map[tile_y][tile_x]
-    uint32 map[MAP_ROW_COUNT][MAP_COL_COUNT];
+    u32 map[MAP_ROW_COUNT][MAP_COL_COUNT];
 
     f32 upper_left_x;  // Screen X of tile [0][0]'s left edge
     f32 upper_left_y;  // Screen Y of tile [0][0]'s top edge
@@ -407,8 +407,8 @@ void debug_tile_check(f32 screen_x, f32 screen_y, TileState* tiles) {
     f32 relative_x = screen_x - tiles->upper_left_x;
     f32 relative_y = screen_y - tiles->upper_left_y;
 
-    int32 tile_col = floor_f32_to_int32(relative_x / tiles->width);
-    int32 tile_row = floor_f32_to_int32(relative_y / tiles->height);
+    i32 tile_col = floor_f32_to_int32(relative_x / tiles->width);
+    i32 tile_row = floor_f32_to_int32(relative_y / tiles->height);
 
     printf("═══════════════════════════════════════\n");
     printf("TILE DEBUG:\n");
@@ -438,14 +438,14 @@ Draw the tile grid and highlight the player's current tile:
 void draw_debug_overlay(GameBackBuffer* buffer, TileState* tiles,
                         f32 player_x, f32 player_y) {
     // Calculate player's tile
-    int32 player_col = floor_f32_to_int32(
+    i32 player_col = floor_f32_to_int32(
         (player_x - tiles->upper_left_x) / tiles->width);
-    int32 player_row = floor_f32_to_int32(
+    i32 player_row = floor_f32_to_int32(
         (player_y - tiles->upper_left_y) / tiles->height);
 
     // Draw all tiles with their coordinates
-    for (int32 row = 0; row < MAP_ROW_COUNT; ++row) {
-        for (int32 col = 0; col < MAP_COL_COUNT; ++col) {
+    for (i32 row = 0; row < MAP_ROW_COUNT; ++row) {
+        for (i32 col = 0; col < MAP_COL_COUNT; ++col) {
             f32 min_x = tiles->upper_left_x + col * tiles->width;
             f32 min_y = tiles->upper_left_y + row * tiles->height;
 
@@ -458,7 +458,7 @@ void draw_debug_overlay(GameBackBuffer* buffer, TileState* tiles,
             }
 
             // Draw tile value as color
-            uint32 tile_value = tiles->map[row][col];
+            u32 tile_value = tiles->map[row][col];
             if (tile_value == 1) {
                 // Solid tile - draw red X
                 draw_x_mark(buffer, min_x, min_y,
@@ -478,7 +478,7 @@ void draw_debug_overlay(GameBackBuffer* buffer, TileState* tiles,
 Add assertions that catch the bug immediately:
 
 ```c
-uint32 get_tile_at(TileState* tiles, int32 row, int32 col) {
+u32 get_tile_at(TileState* tiles, i32 row, i32 col) {
     // These assertions will fire if you swap row/col
     DEV_ASSERT_MSG(row >= 0 && row < MAP_ROW_COUNT,
         "Row %d out of bounds [0, %d)", row, MAP_ROW_COUNT);
@@ -506,8 +506,8 @@ void test_tile_coordinates(TileState* tiles) {
     {
         f32 test_x = tiles->upper_left_x + 1;  // Just inside
         f32 test_y = tiles->upper_left_y + 1;
-        int32 col = floor_f32_to_int32((test_x - tiles->upper_left_x) / tiles->width);
-        int32 row = floor_f32_to_int32((test_y - tiles->upper_left_y) / tiles->height);
+        i32 col = floor_f32_to_int32((test_x - tiles->upper_left_x) / tiles->width);
+        i32 row = floor_f32_to_int32((test_y - tiles->upper_left_y) / tiles->height);
         printf("Test 1: pos(%.1f, %.1f) -> tile[%d][%d] (expected [0][0]): %s\n",
                test_x, test_y, row, col,
                (row == 0 && col == 0) ? "PASS" : "FAIL");
@@ -517,8 +517,8 @@ void test_tile_coordinates(TileState* tiles) {
     {
         f32 test_x = tiles->upper_left_x + 2 * tiles->width + 1;
         f32 test_y = tiles->upper_left_y + 1 * tiles->height + 1;
-        int32 col = floor_f32_to_int32((test_x - tiles->upper_left_x) / tiles->width);
-        int32 row = floor_f32_to_int32((test_y - tiles->upper_left_y) / tiles->height);
+        i32 col = floor_f32_to_int32((test_x - tiles->upper_left_x) / tiles->width);
+        i32 row = floor_f32_to_int32((test_y - tiles->upper_left_y) / tiles->height);
         printf("Test 2: pos(%.1f, %.1f) -> tile[%d][%d] (expected [1][2]): %s\n",
                test_x, test_y, row, col,
                (row == 1 && col == 2) ? "PASS" : "FAIL");
@@ -528,8 +528,8 @@ void test_tile_coordinates(TileState* tiles) {
     {
         f32 test_x = tiles->upper_left_x + (MAP_COL_COUNT - 1) * tiles->width + 1;
         f32 test_y = tiles->upper_left_y + (MAP_ROW_COUNT - 1) * tiles->height + 1;
-        int32 col = floor_f32_to_int32((test_x - tiles->upper_left_x) / tiles->width);
-        int32 row = floor_f32_to_int32((test_y - tiles->upper_left_y) / tiles->height);
+        i32 col = floor_f32_to_int32((test_x - tiles->upper_left_x) / tiles->width);
+        i32 row = floor_f32_to_int32((test_y - tiles->upper_left_y) / tiles->height);
         printf("Test 3: pos(%.1f, %.1f) -> tile[%d][%d] (expected [%d][%d]): %s\n",
                test_x, test_y, row, col,
                MAP_ROW_COUNT - 1, MAP_COL_COUNT - 1,
@@ -592,11 +592,11 @@ When debugging, trace the ENTIRE data flow from input to output:
 
 ```c
 // Calculating tile coordinates correctly...
-int32 tile_x = floor((player_x - offset_x) / tile_width);  // Column
-int32 tile_y = floor((player_y - offset_y) / tile_height); // Row
+i32 tile_x = floor((player_x - offset_x) / tile_width);  // Column
+i32 tile_y = floor((player_y - offset_y) / tile_height); // Row
 
 // ...but accessing array incorrectly
-int32 value = map[tile_x][tile_y];  // ❌ WRONG! Should be [tile_y][tile_x]
+i32 value = map[tile_x][tile_y];  // ❌ WRONG! Should be [tile_y][tile_x]
 ```
 
 **How to Spot It:**
@@ -608,16 +608,16 @@ int32 value = map[tile_x][tile_y];  // ❌ WRONG! Should be [tile_y][tile_x]
 **The Fix:**
 
 ```c
-int32 value = map[tile_y][tile_x];  // ✅ [row][col] = [y][x]
+i32 value = map[tile_y][tile_x];  // ✅ [row][col] = [y][x]
 ```
 
 **Prevention:**
 
 ```c
 // Rename variables to match array semantics
-int32 tile_col = floor((player_x - offset_x) / tile_width);
-int32 tile_row = floor((player_y - offset_y) / tile_height);
-int32 value = map[tile_row][tile_col];  // Now it's obvious!
+i32 tile_col = floor((player_x - offset_x) / tile_width);
+i32 tile_row = floor((player_y - offset_y) / tile_height);
+i32 value = map[tile_row][tile_col];  // Now it's obvious!
 ```
 
 ---
@@ -629,7 +629,7 @@ int32 value = map[tile_row][tile_col];  // Now it's obvious!
 ```c
 #define MAP_WIDTH 17   // Columns (X)
 #define MAP_HEIGHT 9   // Rows (Y)
-uint32 map[MAP_HEIGHT][MAP_WIDTH];  // [9][17]
+u32 map[MAP_HEIGHT][MAP_WIDTH];  // [9][17]
 
 // Later...
 if (tile_x >= 0 && tile_x < MAP_HEIGHT &&  // ❌ Using HEIGHT for X!
@@ -659,7 +659,7 @@ if (tile_x >= 0 && tile_x < MAP_WIDTH &&   // ✅ X uses WIDTH (columns)
 // Use unambiguous names
 #define MAP_COL_COUNT 17  // X direction
 #define MAP_ROW_COUNT 9   // Y direction
-uint32 map[MAP_ROW_COUNT][MAP_COL_COUNT];
+u32 map[MAP_ROW_COUNT][MAP_COL_COUNT];
 
 if (tile_col >= 0 && tile_col < MAP_COL_COUNT &&
     tile_row >= 0 && tile_row < MAP_ROW_COUNT) {
@@ -675,7 +675,7 @@ if (tile_col >= 0 && tile_col < MAP_COL_COUNT &&
 
 ```c
 // In init.c - initializing as [row][col]
-uint32 temp_map[9][17] = {
+u32 temp_map[9][17] = {
     {1, 1, 1, ...},  // Row 0
     {1, 0, 0, ...},  // Row 1
     // ...
@@ -684,7 +684,7 @@ uint32 temp_map[9][17] = {
 // In main.h - declaring with swapped dimensions
 #define MAP_X_COUNT 9
 #define MAP_Y_COUNT 17
-uint32 map[MAP_X_COUNT][MAP_Y_COUNT];  // ❌ [9][17] but semantics are wrong!
+u32 map[MAP_X_COUNT][MAP_Y_COUNT];  // ❌ [9][17] but semantics are wrong!
 
 // In main.c - accessing based on wrong mental model
 value = map[tile_x][tile_y];  // Thinks first index is X
@@ -703,10 +703,10 @@ Ensure ALL three locations use consistent semantics:
 // main.h
 #define MAP_ROW_COUNT 9
 #define MAP_COL_COUNT 17
-uint32 map[MAP_ROW_COUNT][MAP_COL_COUNT];  // [rows][cols]
+u32 map[MAP_ROW_COUNT][MAP_COL_COUNT];  // [rows][cols]
 
 // init.c
-uint32 temp_map[MAP_ROW_COUNT][MAP_COL_COUNT] = {
+u32 temp_map[MAP_ROW_COUNT][MAP_COL_COUNT] = {
     {1, 1, 1, ...},  // Row 0 (top)
     {1, 0, 0, ...},  // Row 1
     // ...
@@ -786,13 +786,13 @@ value = map[tile_row][tile_col];  // [row][col]
 ```c
 // CASE 1: Coordinates are ALWAYS non-negative (most tile games)
 // → Use (int) cast or integer division — simpler, faster, same result
-int32 tile_col = (int32)(pixel_x / tile_width);        // ✅ Fine for positive coords!
-int32 tile_row = (int32)(pixel_y / tile_height);
+i32 tile_col = (i32)(pixel_x / tile_width);        // ✅ Fine for positive coords!
+i32 tile_row = (i32)(pixel_y / tile_height);
 
 // CASE 2: Coordinates CAN be negative (infinite world, centered origin)
 // → Use floorf() to get consistent tile boundaries
-int32 tile_col = (int32)floorf(pixel_x / tile_width);  // ✅ Correct for negatives
-int32 tile_row = (int32)floorf(pixel_y / tile_height);
+i32 tile_col = (i32)floorf(pixel_x / tile_width);  // ✅ Correct for negatives
+i32 tile_row = (i32)floorf(pixel_y / tile_height);
 ```
 
 **The Fix for Handmade Hero:**
@@ -800,17 +800,17 @@ int32 tile_row = (int32)floorf(pixel_y / tile_height);
 ```c
 // Early days: tile maps use non-negative coordinates
 // Simple cast is appropriate and faster:
-int32 tile_col = (int32)(relative_x / tile_width);
-int32 tile_row = (int32)(relative_y / tile_height);
+i32 tile_col = (i32)(relative_x / tile_width);
+i32 tile_row = (i32)(relative_y / tile_height);
 
 // Later: world coordinates may go negative
 // Use floor for correct tile boundaries:
-de100_file_scoped_fn inline int32 floor_f32_to_int32(f32 value) {
-    return (int32)floorf(value);
+de100_file_scoped_fn inline i32 floor_f32_to_int32(f32 value) {
+    return (i32)floorf(value);
 }
 
-int32 tile_col = floor_f32_to_int32(relative_x / tile_width);
-int32 tile_row = floor_f32_to_int32(relative_y / tile_height);
+i32 tile_col = floor_f32_to_int32(relative_x / tile_width);
+i32 tile_row = floor_f32_to_int32(relative_y / tile_height);
 ```
 
 **Summary Table:**
@@ -855,12 +855,12 @@ if (tile_col >= 0 && tile_col < MAP_COL_COUNT) {  // ✅ Strictly less than
 
 ```c
 // Use a helper function with built-in bounds checking
-bool32 is_valid_tile(int32 row, int32 col) {
+bool32 is_valid_tile(i32 row, i32 col) {
     return (row >= 0 && row < MAP_ROW_COUNT &&
             col >= 0 && col < MAP_COL_COUNT);
 }
 
-uint32 get_tile_safe(TileState* tiles, int32 row, int32 col) {
+u32 get_tile_safe(TileState* tiles, i32 row, i32 col) {
     if (!is_valid_tile(row, col)) {
         return 1;  // Treat out-of-bounds as solid
     }
@@ -876,15 +876,15 @@ uint32 get_tile_safe(TileState* tiles, int32 row, int32 col) {
 
 ```c
 // Rendering - correct order
-for (uint32 row = 0; row < MAP_ROW_COUNT; ++row) {
-    for (uint32 col = 0; col < MAP_COL_COUNT; ++col) {
-        uint32 tile_id = map[row][col];  // ✅ Correct
+for (u32 row = 0; row < MAP_ROW_COUNT; ++row) {
+    for (u32 col = 0; col < MAP_COL_COUNT; ++col) {
+        u32 tile_id = map[row][col];  // ✅ Correct
         // Draw at position based on row/col...
     }
 }
 
 // Collision - wrong order!
-int32 tile_value = map[tile_x][tile_y];  // ❌ Swapped!
+i32 tile_value = map[tile_x][tile_y];  // ❌ Swapped!
 ```
 
 **How to Spot It:**
@@ -898,10 +898,10 @@ Ensure both use the same access pattern:
 
 ```c
 // Rendering
-uint32 tile_id = map[row][col];
+u32 tile_id = map[row][col];
 
 // Collision
-uint32 tile_value = map[tile_row][tile_col];  // Same pattern!
+u32 tile_value = map[tile_row][tile_col];  // Same pattern!
 ```
 
 ---
@@ -915,7 +915,7 @@ Never access the map array directly. Always go through a function:
 ```c
 // tile_map.h
 typedef struct {
-    uint32 data[MAP_ROW_COUNT][MAP_COL_COUNT];
+    u32 data[MAP_ROW_COUNT][MAP_COL_COUNT];
     f32 origin_x;
     f32 origin_y;
     f32 tile_width;
@@ -923,23 +923,23 @@ typedef struct {
 } TileMap;
 
 // Get tile value with bounds checking
-uint32 tilemap_get(TileMap* map, int32 row, int32 col);
+u32 tilemap_get(TileMap* map, i32 row, i32 col);
 
 // Check if a tile is walkable
-bool32 tilemap_is_walkable(TileMap* map, int32 row, int32 col);
+bool32 tilemap_is_walkable(TileMap* map, i32 row, i32 col);
 
 // Convert screen position to tile coordinates
 void tilemap_screen_to_tile(TileMap* map, f32 screen_x, f32 screen_y,
-                            int32* out_row, int32* out_col);
+                            i32* out_row, i32* out_col);
 
 // tile_map.c
-uint32 tilemap_get(TileMap* map, int32 row, int32 col) {
+u32 tilemap_get(TileMap* map, i32 row, i32 col) {
     DEV_ASSERT(row >= 0 && row < MAP_ROW_COUNT);
     DEV_ASSERT(col >= 0 && col < MAP_COL_COUNT);
     return map->data[row][col];
 }
 
-bool32 tilemap_is_walkable(TileMap* map, int32 row, int32 col) {
+bool32 tilemap_is_walkable(TileMap* map, i32 row, i32 col) {
     if (row < 0 || row >= MAP_ROW_COUNT ||
         col < 0 || col >= MAP_COL_COUNT) {
         return false;  // Out of bounds = not walkable
@@ -948,9 +948,9 @@ bool32 tilemap_is_walkable(TileMap* map, int32 row, int32 col) {
 }
 
 void tilemap_screen_to_tile(TileMap* map, f32 screen_x, f32 screen_y,
-                            int32* out_row, int32* out_col) {
-    *out_col = (int32)floorf((screen_x - map->origin_x) / map->tile_width);
-    *out_row = (int32)floorf((screen_y - map->origin_y) / map->tile_height);
+                            i32* out_row, i32* out_col) {
+    *out_col = (i32)floorf((screen_x - map->origin_x) / map->tile_width);
+    *out_row = (i32)floorf((screen_y - map->origin_y) / map->tile_height);
 }
 ```
 
@@ -958,7 +958,7 @@ void tilemap_screen_to_tile(TileMap* map, f32 screen_x, f32 screen_y,
 
 ```c
 // Now it's impossible to get wrong!
-int32 row, col;
+i32 row, col;
 tilemap_screen_to_tile(&tile_map, player.x, player.y, &row, &col);
 
 if (tilemap_is_walkable(&tile_map, row, col)) {
@@ -972,8 +972,8 @@ if (tilemap_is_walkable(&tile_map, row, col)) {
 
 ```c
 typedef struct {
-    int32 row;
-    int32 col;
+    i32 row;
+    i32 col;
 } TileCoord;
 
 typedef struct {
@@ -984,12 +984,12 @@ typedef struct {
 // Functions use these types - can't mix them up!
 TileCoord screen_to_tile(ScreenPos pos, TileMap* map) {
     TileCoord result;
-    result.col = (int32)floorf((pos.x - map->origin_x) / map->tile_width);
-    result.row = (int32)floorf((pos.y - map->origin_y) / map->tile_height);
+    result.col = (i32)floorf((pos.x - map->origin_x) / map->tile_width);
+    result.row = (i32)floorf((pos.y - map->origin_y) / map->tile_height);
     return result;
 }
 
-uint32 get_tile_at(TileMap* map, TileCoord coord) {
+u32 get_tile_at(TileMap* map, TileCoord coord) {
     // Can't accidentally swap row/col - they're in a struct!
     return map->data[coord.row][coord.col];
 }
@@ -997,7 +997,7 @@ uint32 get_tile_at(TileMap* map, TileCoord coord) {
 // Usage
 ScreenPos player_pos = { player.x, player.y };
 TileCoord player_tile = screen_to_tile(player_pos, &tile_map);
-uint32 tile_value = get_tile_at(&tile_map, player_tile);
+u32 tile_value = get_tile_at(&tile_map, player_tile);
 ```
 
 ---
@@ -1010,10 +1010,10 @@ uint32 tile_value = get_tile_at(&tile_map, player_tile);
 #define MAP_COL_COUNT 17
 
 // In init.c
-uint32 temp_map[MAP_ROW_COUNT][MAP_COL_COUNT] = { ... };
+u32 temp_map[MAP_ROW_COUNT][MAP_COL_COUNT] = { ... };
 
 // Compile-time check that dimensions match
-_Static_assert(sizeof(temp_map) == sizeof(uint32) * MAP_ROW_COUNT * MAP_COL_COUNT,
+_Static_assert(sizeof(temp_map) == sizeof(u32) * MAP_ROW_COUNT * MAP_COL_COUNT,
                "Map dimensions mismatch!");
 
 // Also verify the struct matches
@@ -1033,8 +1033,8 @@ _Static_assert(sizeof(((TileState*)0)->map) == sizeof(temp_map),
 void handle_controls(...) {
     // ... calculate new position ...
 
-    int32 tile_col = floor_div(new_x - offset_x, tile_width);
-    int32 tile_row = floor_div(new_y - offset_y, tile_height);
+    i32 tile_col = floor_div(new_x - offset_x, tile_width);
+    i32 tile_row = floor_div(new_y - offset_y, tile_height);
 
 #if DEBUG_TILE_COLLISION
     // Store for debug rendering
@@ -1086,7 +1086,7 @@ void run_tile_coordinate_tests(void) {
 
     typedef struct {
         f32 screen_x, screen_y;
-        int32 expected_row, expected_col;
+        i32 expected_row, expected_col;
     } TestCase;
 
     TestCase tests[] = {
@@ -1107,7 +1107,7 @@ void run_tile_coordinate_tests(void) {
 
     for (int i = 0; i < num_tests; i++) {
         TestCase* t = &tests[i];
-        int32 row, col;
+        i32 row, col;
         tilemap_screen_to_tile(&test_map, t->screen_x, t->screen_y, &row, &col);
 
         bool32 pass = (row == t->expected_row && col == t->expected_col);
@@ -1139,7 +1139,7 @@ The player can walk through some walls but gets blocked by empty space. Find the
 ```c
 #define TILE_ROWS 5
 #define TILE_COLS 8
-uint32 map[TILE_ROWS][TILE_COLS] = {
+u32 map[TILE_ROWS][TILE_COLS] = {
     {1, 1, 1, 1, 1, 1, 1, 1},
     {1, 0, 0, 0, 0, 0, 0, 1},
     {1, 0, 0, 0, 0, 0, 0, 1},
@@ -1148,8 +1148,8 @@ uint32 map[TILE_ROWS][TILE_COLS] = {
 };
 
 void check_collision(f32 player_x, f32 player_y) {
-    int32 tile_x = (int32)(player_x / 32.0f);
-    int32 tile_y = (int32)(player_y / 32.0f);
+    i32 tile_x = (i32)(player_x / 32.0f);
+    i32 tile_y = (i32)(player_y / 32.0f);
 
     if (tile_x >= 0 && tile_x < TILE_ROWS &&
         tile_y >= 0 && tile_y < TILE_COLS) {
@@ -1214,8 +1214,8 @@ map[tile_y][tile_x]  // [row][col]
 
 ```c
 void check_collision(f32 player_x, f32 player_y) {
-    int32 tile_col = (int32)(player_x / 32.0f);
-    int32 tile_row = (int32)(player_y / 32.0f);
+    i32 tile_col = (i32)(player_x / 32.0f);
+    i32 tile_row = (i32)(player_y / 32.0f);
 
     if (tile_col >= 0 && tile_col < TILE_COLS &&
         tile_row >= 0 && tile_row < TILE_ROWS) {
@@ -1243,14 +1243,14 @@ The player sometimes teleports when walking near the left edge of the map. Find 
 #define MAP_OFFSET_Y 0.0f
 #define TILE_SIZE 32.0f
 
-int32 get_tile_col(f32 screen_x) {
+i32 get_tile_col(f32 screen_x) {
     f32 relative_x = screen_x - MAP_OFFSET_X;
-    return (int32)(relative_x / TILE_SIZE);
+    return (i32)(relative_x / TILE_SIZE);
 }
 
 void update_player(Player* player, f32 dx) {
     f32 new_x = player->x + dx;
-    int32 tile_col = get_tile_col(new_x);
+    i32 tile_col = get_tile_col(new_x);
 
     // Check if tile is valid
     if (tile_col >= 0 && tile_col < MAP_COLS) {
@@ -1281,7 +1281,7 @@ What happens when `relative_x` is negative? Try calculating `get_tile_col(-70)` 
 When you cast a negative float to int, C truncates toward zero, not toward negative infinity.
 
 ```
-(int32)(-0.1875) = 0   // Truncates toward zero
+(i32)(-0.1875) = 0   // Truncates toward zero
 floor(-0.1875) = -1    // Rounds toward negative infinity
 ```
 
@@ -1294,7 +1294,7 @@ floor(-0.1875) = -1    // Rounds toward negative infinity
 screen_x = -70
 relative_x = -70 - (-64) = -6
 -6 / 32 = -0.1875
-(int32)(-0.1875) = 0  // BUG! Should be -1
+(i32)(-0.1875) = 0  // BUG! Should be -1
 ```
 
 The player at x=-70 is calculated as being in tile 0, but they're actually outside the map!
@@ -1304,7 +1304,7 @@ The player at x=-70 is calculated as being in tile 0, but they're actually outsi
 <details>
 <summary>🔓 Complete Solution</summary>
 
-**The Bug:** Using `(int32)` cast instead of `floor()` for negative numbers.
+**The Bug:** Using `(i32)` cast instead of `floor()` for negative numbers.
 
 **Why It Matters:**
 
@@ -1314,20 +1314,20 @@ Position x = -70, offset = -64, tile_size = 32
 relative_x = -70 - (-64) = -6
 -6 / 32 = -0.1875
 
-(int32)(-0.1875) = 0   ❌ Truncates toward zero
+(i32)(-0.1875) = 0   ❌ Truncates toward zero
 floorf(-0.1875) = -1   ✅ Correct tile index
 ```
 
 **Fixed Code:**
 
 ```c
-int32 get_tile_col(f32 screen_x) {
+i32 get_tile_col(f32 screen_x) {
     f32 relative_x = screen_x - MAP_OFFSET_X;
-    return (int32)floorf(relative_x / TILE_SIZE);  // Use floor for negative coords!
+    return (i32)floorf(relative_x / TILE_SIZE);  // Use floor for negative coords!
 }
 ```
 
-**General Rule:** Use `floorf()` when converting screen coordinates to tile indices if coordinates can be negative (world space with centered origin). For non-negative coordinates (screen pixels with top-left origin), a simple `(int32)` cast works fine and is faster.
+**General Rule:** Use `floorf()` when converting screen coordinates to tile indices if coordinates can be negative (world space with centered origin). For non-negative coordinates (screen pixels with top-left origin), a simple `(i32)` cast works fine and is faster.
 
 </details>
 
@@ -1345,12 +1345,12 @@ The map renders correctly, but collision detection seems mirrored. Walls on the 
 #define MAP_WIDTH 10
 #define MAP_HEIGHT 8
 typedef struct {
-    uint32 tiles[MAP_WIDTH][MAP_HEIGHT];
+    u32 tiles[MAP_WIDTH][MAP_HEIGHT];
 } TileMap;
 
 // init.c
 void init_map(TileMap* map) {
-    uint32 data[8][10] = {
+    u32 data[8][10] = {
         {1,1,1,1,1,1,1,1,1,1},
         {1,0,0,0,0,0,0,0,0,1},
         {1,0,1,1,0,0,0,0,0,1},
@@ -1366,14 +1366,14 @@ void init_map(TileMap* map) {
 // main.c - Rendering (works correctly)
 for (int row = 0; row < MAP_HEIGHT; row++) {
     for (int col = 0; col < MAP_WIDTH; col++) {
-        uint32 tile = map->tiles[col][row];  // Note the order
+        u32 tile = map->tiles[col][row];  // Note the order
         draw_tile(col * TILE_SIZE, row * TILE_SIZE, tile);
     }
 }
 
 // main.c - Collision (broken)
-int32 check_col = (int32)(player_x / TILE_SIZE);
-int32 check_row = (int32)(player_y / TILE_SIZE);
+i32 check_col = (i32)(player_x / TILE_SIZE);
+i32 check_row = (i32)(player_y / TILE_SIZE);
 if (map->tiles[check_row][check_col] == 1) {
     // Block movement
 }
@@ -1419,20 +1419,20 @@ The render and collision use DIFFERENT access patterns!
 
 ```c
 // ❌ Wrong - [width][height] = [cols][rows]
-uint32 tiles[MAP_WIDTH][MAP_HEIGHT];
+u32 tiles[MAP_WIDTH][MAP_HEIGHT];
 
 // ✅ Correct - [height][width] = [rows][cols]
-uint32 tiles[MAP_HEIGHT][MAP_WIDTH];
+u32 tiles[MAP_HEIGHT][MAP_WIDTH];
 ```
 
 2. **Render loop uses wrong access pattern:**
 
 ```c
 // ❌ Wrong - [col][row]
-uint32 tile = map->tiles[col][row];
+u32 tile = map->tiles[col][row];
 
 // ✅ Correct - [row][col]
-uint32 tile = map->tiles[row][col];
+u32 tile = map->tiles[row][col];
 ```
 
 3. **Collision happens to be correct but for wrong reasons!**
@@ -1444,12 +1444,12 @@ uint32 tile = map->tiles[row][col];
 #define MAP_COLS 10
 #define MAP_ROWS 8
 typedef struct {
-    uint32 tiles[MAP_ROWS][MAP_COLS];  // [rows][cols]
+    u32 tiles[MAP_ROWS][MAP_COLS];  // [rows][cols]
 } TileMap;
 
 // init.c
 void init_map(TileMap* map) {
-    uint32 data[MAP_ROWS][MAP_COLS] = {
+    u32 data[MAP_ROWS][MAP_COLS] = {
         {1,1,1,1,1,1,1,1,1,1},  // Row 0
         // ...
     };
@@ -1459,14 +1459,14 @@ void init_map(TileMap* map) {
 // main.c - Rendering
 for (int row = 0; row < MAP_ROWS; row++) {
     for (int col = 0; col < MAP_COLS; col++) {
-        uint32 tile = map->tiles[row][col];  // [row][col]
+        u32 tile = map->tiles[row][col];  // [row][col]
         draw_tile(col * TILE_SIZE, row * TILE_SIZE, tile);
     }
 }
 
 // main.c - Collision
-int32 check_col = (int32)(player_x / TILE_SIZE);
-int32 check_row = (int32)(player_y / TILE_SIZE);
+i32 check_col = (i32)(player_x / TILE_SIZE);
+i32 check_row = (i32)(player_y / TILE_SIZE);
 if (map->tiles[check_row][check_col] == 1) {  // [row][col]
     // Block movement
 }
@@ -1488,11 +1488,11 @@ The game crashes when the player reaches the bottom-right corner of the map. Fin
 ```c
 #define MAP_ROWS 9
 #define MAP_COLS 17
-uint32 map[MAP_ROWS][MAP_COLS];
+u32 map[MAP_ROWS][MAP_COLS];
 
 bool32 can_move_to(f32 x, f32 y) {
-    int32 col = (int32)floorf(x / TILE_SIZE);
-    int32 row = (int32)floorf(y / TILE_SIZE);
+    i32 col = (i32)floorf(x / TILE_SIZE);
+    i32 row = (i32)floorf(y / TILE_SIZE);
 
     // Bounds check
     if (col < 0 || col > MAP_COLS ||
@@ -1588,8 +1588,8 @@ The check passes, then `map[9][17]` causes a buffer overflow!
 
 ```c
 bool32 can_move_to(f32 x, f32 y) {
-    int32 col = (int32)floorf(x / TILE_SIZE);
-    int32 row = (int32)floorf(y / TILE_SIZE);
+    i32 col = (i32)floorf(x / TILE_SIZE);
+    i32 row = (i32)floorf(y / TILE_SIZE);
 
     // Bounds check - use >= not >
     if (col < 0 || col >= MAP_COLS ||    // ✅ >= instead of >
@@ -1640,10 +1640,10 @@ bool32 is_blocked(Player* p, TileMap* map) {
     f32 bottom = p->y + p->height / 2;
 
     // Convert to tile coordinates
-    int32 left_col = (int32)(left / TILE_SIZE);
-    int32 right_col = (int32)(right / TILE_SIZE);
-    int32 top_row = (int32)(top / TILE_SIZE);
-    int32 bottom_row = (int32)(bottom / TILE_SIZE);
+    i32 left_col = (i32)(left / TILE_SIZE);
+    i32 right_col = (i32)(right / TILE_SIZE);
+    i32 top_row = (i32)(top / TILE_SIZE);
+    i32 bottom_row = (i32)(bottom / TILE_SIZE);
 
     // Check each corner
     if (get_tile(map, top_row, left_col) == 1) return true;
@@ -1675,17 +1675,17 @@ Now convert to tile coordinates...
 <summary>💡 Hint 2 (Concept)</summary>
 
 ```
-left_col = (int32)(72 / 64) = (int32)(1.125) = 1
-right_col = (int32)(120 / 64) = (int32)(1.875) = 1
-top_row = (int32)(72 / 64) = 1
-bottom_row = (int32)(120 / 64) = 1
+left_col = (i32)(72 / 64) = (i32)(1.125) = 1
+right_col = (i32)(120 / 64) = (i32)(1.875) = 1
+top_row = (i32)(72 / 64) = 1
+bottom_row = (i32)(120 / 64) = 1
 ```
 
 All corners are in tile [1][1]. But what if the player is at (128, 128)?
 
 ```
-left = 128 - 24 = 104   → col = (int32)(104/64) = 1
-right = 128 + 24 = 152  → col = (int32)(152/64) = 2
+left = 128 - 24 = 104   → col = (i32)(104/64) = 1
+right = 128 + 24 = 152  → col = (i32)(152/64) = 2
 ```
 
 The player spans TWO tiles horizontally! But wait, that's expected...
@@ -1697,26 +1697,26 @@ The bug is elsewhere. What about negative positions?
 <details>
 <summary>💡 Hint 3 (Specific)</summary>
 
-The bug is using `(int32)` cast instead of `floor()`.
+The bug is using `(i32)` cast instead of `floor()`.
 
 When player is at (32, 32):
 
 ```
-left = 32 - 24 = 8     → (int32)(8/64) = 0    ✅
-right = 32 + 24 = 56   → (int32)(56/64) = 0   ✅
+left = 32 - 24 = 8     → (i32)(8/64) = 0    ✅
+right = 32 + 24 = 56   → (i32)(56/64) = 0   ✅
 ```
 
 When player is at (24, 24):
 
 ```
-left = 24 - 24 = 0     → (int32)(0/64) = 0    ✅
-right = 24 + 24 = 48   → (int32)(48/64) = 0   ✅
+left = 24 - 24 = 0     → (i32)(0/64) = 0    ✅
+right = 24 + 24 = 48   → (i32)(48/64) = 0   ✅
 ```
 
 When player is at (20, 20):
 
 ```
-left = 20 - 24 = -4    → (int32)(-4/64) = (int32)(-0.0625) = 0  ❌
+left = 20 - 24 = -4    → (i32)(-4/64) = (i32)(-0.0625) = 0  ❌
                           Should be -1!
 ```
 
@@ -1727,12 +1727,12 @@ The player's left edge is in tile -1 (off map), but it's calculated as tile 0!
 <details>
 <summary>🔓 Complete Solution</summary>
 
-**The Bug:** Using `(int32)` cast instead of `floorf()` for tile coordinate conversion.
+**The Bug:** Using `(i32)` cast instead of `floorf()` for tile coordinate conversion.
 
 **The Problem:**
 
 ```c
-int32 left_col = (int32)(left / TILE_SIZE);
+i32 left_col = (i32)(left / TILE_SIZE);
 ```
 
 When `left` is negative (player near left edge):
@@ -1740,7 +1740,7 @@ When `left` is negative (player near left edge):
 ```
 left = -4
 -4 / 64 = -0.0625
-(int32)(-0.0625) = 0    ❌ Truncates toward zero!
+(i32)(-0.0625) = 0    ❌ Truncates toward zero!
 floorf(-0.0625) = -1    ✅ Correct tile index
 ```
 
@@ -1783,7 +1783,7 @@ bottom = 128 + 24 = 152 → row 2
 When `right = 128` exactly:
 
 ```
-right_col = (int32)(128 / 64) = 2
+right_col = (i32)(128 / 64) = 2
 ```
 
 The player's rightmost pixel is AT x=128, which is the START of tile 2. But the player doesn't actually occupy tile 2 - they occupy up to but not including x=128.
@@ -1798,10 +1798,10 @@ bool32 is_blocked(Player* p, TileMap* map) {
     f32 bottom = p->y + p->height / 2 - 0.001f;  // Subtract epsilon
 
     // Use floor for negative coordinate safety
-    int32 left_col = (int32)floorf(left / TILE_SIZE);
-    int32 right_col = (int32)floorf(right / TILE_SIZE);
-    int32 top_row = (int32)floorf(top / TILE_SIZE);
-    int32 bottom_row = (int32)floorf(bottom / TILE_SIZE);
+    i32 left_col = (i32)floorf(left / TILE_SIZE);
+    i32 right_col = (i32)floorf(right / TILE_SIZE);
+    i32 top_row = (i32)floorf(top / TILE_SIZE);
+    i32 bottom_row = (i32)floorf(bottom / TILE_SIZE);
 
     // ... rest of function
 }
@@ -1814,7 +1814,7 @@ bool32 is_blocked(Player* p, TileMap* map) {
 f32 right = p->x + p->width / 2;  // This pixel is NOT part of player
 
 // When checking tiles, the rightmost tile is:
-int32 right_col = (int32)floorf((right - 0.001f) / TILE_SIZE);
+i32 right_col = (i32)floorf((right - 0.001f) / TILE_SIZE);
 // Or equivalently, if right is exactly on boundary, use previous tile
 ```
 
@@ -1840,7 +1840,7 @@ Complete this helper function to safely get a tile value:
 #define TILE_EMPTY 0
 
 typedef struct {
-    uint32 data[MAP_ROWS][MAP_COLS];
+    u32 data[MAP_ROWS][MAP_COLS];
     f32 origin_x;
     f32 origin_y;
     f32 tile_size;
@@ -1850,7 +1850,7 @@ typedef struct {
 // - Convert screen position to tile coordinates
 // - Return TILE_SOLID if out of bounds
 // - Return the tile value if in bounds
-uint32 get_tile_at_position(TileMap* map, f32 screen_x, f32 screen_y) {
+u32 get_tile_at_position(TileMap* map, f32 screen_x, f32 screen_y) {
     // Your code here
 }
 ```
@@ -1865,7 +1865,7 @@ First calculate the relative position by subtracting the origin.
 <details>
 <summary>💡 Hint 2</summary>
 
-For coordinate-to-tile conversion: use `(int32)` cast if coordinates are always non-negative, or `floorf()` if they can be negative (handles negative coordinates correctly by rounding toward -∞).
+For coordinate-to-tile conversion: use `(i32)` cast if coordinates are always non-negative, or `floorf()` if they can be negative (handles negative coordinates correctly by rounding toward -∞).
 
 </details>
 
@@ -1880,14 +1880,14 @@ Check bounds BEFORE accessing the array. Remember: `row < MAP_ROWS` and `col < M
 <summary>🔓 Complete Solution</summary>
 
 ```c
-uint32 get_tile_at_position(TileMap* map, f32 screen_x, f32 screen_y) {
+u32 get_tile_at_position(TileMap* map, f32 screen_x, f32 screen_y) {
     // Step 1: Calculate relative position
     f32 relative_x = screen_x - map->origin_x;
     f32 relative_y = screen_y - map->origin_y;
 
     // Step 2: Convert to tile coordinates using floor (handles negatives)
-    int32 col = (int32)floorf(relative_x / map->tile_size);
-    int32 row = (int32)floorf(relative_y / map->tile_size);
+    i32 col = (i32)floorf(relative_x / map->tile_size);
+    i32 row = (i32)floorf(relative_y / map->tile_size);
 
     // Step 3: Bounds check - treat out of bounds as solid
     if (col < 0 || col >= MAP_COLS ||
@@ -1923,7 +1923,7 @@ This rendering code draws the map incorrectly (rotated 90 degrees). Fix it:
 #define MAP_COLS 8
 #define TILE_SIZE 32
 
-uint32 map[MAP_ROWS][MAP_COLS] = {
+u32 map[MAP_ROWS][MAP_COLS] = {
     {1,1,1,1,1,1,1,1},  // Row 0 - should be TOP
     {1,0,0,0,0,0,0,1},
     {1,0,0,0,0,0,0,1},
@@ -1934,7 +1934,7 @@ uint32 map[MAP_ROWS][MAP_COLS] = {
 void render_map(void) {
     for (int x = 0; x < MAP_COLS; x++) {
         for (int y = 0; y < MAP_ROWS; y++) {
-            uint32 tile = map[x][y];
+            u32 tile = map[x][y];
 
             f32 screen_x = x * TILE_SIZE;
             f32 screen_y = y * TILE_SIZE;
@@ -1973,7 +1973,7 @@ But the array access is `map[x][y]`... is that correct?
 void render_map(void) {
     for (int col = 0; col < MAP_COLS; col++) {
         for (int row = 0; row < MAP_ROWS; row++) {
-            uint32 tile = map[row][col];  // [row][col] order
+            u32 tile = map[row][col];  // [row][col] order
 
             f32 screen_x = col * TILE_SIZE;  // col determines X
             f32 screen_y = row * TILE_SIZE;  // row determines Y
@@ -1990,7 +1990,7 @@ void render_map(void) {
 void render_map(void) {
     for (int row = 0; row < MAP_ROWS; row++) {
         for (int col = 0; col < MAP_COLS; col++) {
-            uint32 tile = map[row][col];
+            u32 tile = map[row][col];
 
             f32 screen_x = col * TILE_SIZE;
             f32 screen_y = row * TILE_SIZE;
@@ -2025,7 +2025,7 @@ This collision system has multiple bugs. Find and fix all of them:
 #define TILE_HEIGHT 50
 
 typedef struct {
-    uint32 tiles[WORLD_COLS][WORLD_ROWS];  // Bug #1 is here
+    u32 tiles[WORLD_COLS][WORLD_ROWS];  // Bug #1 is here
     int origin_x, origin_y;
 } World;
 
@@ -2100,7 +2100,7 @@ The player has a radius, but only the center point is checked. What if the playe
 
 typedef struct {
     // Bug #1 FIXED: [ROWS][COLS] not [COLS][ROWS]
-    uint32 tiles[WORLD_ROWS][WORLD_COLS];
+    u32 tiles[WORLD_ROWS][WORLD_COLS];
     int origin_x, origin_y;
 } World;
 
@@ -2194,7 +2194,7 @@ TileCoord screen_to_tile(ScreenPos pos, TileMap* map);
 bool32 is_tile_in_bounds(TileCoord coord, TileMap* map);
 
 // Get the tile value at a coordinate (returns SOLID if out of bounds)
-uint32 get_tile(TileMap* map, TileCoord coord);
+u32 get_tile(TileMap* map, TileCoord coord);
 
 // Check if a screen position is walkable
 bool32 is_walkable(ScreenPos pos, TileMap* map);
@@ -2221,7 +2221,7 @@ The conversion function should:
 
 1. Subtract the map origin
 2. Divide by tile size
-3. Use `floorf()` if coordinates can be negative, or `(int32)` cast if always non-negative
+3. Use `floorf()` if coordinates can be negative, or `(i32)` cast if always non-negative
 
 </details>
 
@@ -2239,8 +2239,8 @@ typedef struct {
 } ScreenPos;
 
 typedef struct {
-    int32 row;  // Y direction (vertical)
-    int32 col;  // X direction (horizontal)
+    i32 row;  // Y direction (vertical)
+    i32 col;  // X direction (horizontal)
 } TileCoord;
 
 #define MAP_ROW_COUNT 9
@@ -2250,7 +2250,7 @@ typedef struct {
 
 typedef struct {
     // Array is [row][col] - comment makes it explicit
-    uint32 data[MAP_ROW_COUNT][MAP_COL_COUNT];
+    u32 data[MAP_ROW_COUNT][MAP_COL_COUNT];
 
     // Screen position of tile [0][0]'s top-left corner
     f32 origin_x;
@@ -2273,8 +2273,8 @@ TileCoord screen_to_tile(ScreenPos pos, TileMap* map) {
     f32 relative_y = pos.y - map->origin_y;
 
     // Convert to tile indices using floor (handles negatives correctly)
-    result.col = (int32)floorf(relative_x / map->tile_width);
-    result.row = (int32)floorf(relative_y / map->tile_height);
+    result.col = (i32)floorf(relative_x / map->tile_width);
+    result.row = (i32)floorf(relative_y / map->tile_height);
 
     return result;
 }
@@ -2311,7 +2311,7 @@ bool32 is_tile_in_bounds(TileCoord coord, TileMap* map) {
 // TILE ACCESS
 // ═══════════════════════════════════════════════════════════════════════════
 
-uint32 get_tile(TileMap* map, TileCoord coord) {
+u32 get_tile(TileMap* map, TileCoord coord) {
     // Out of bounds = solid (safe default)
     if (!is_tile_in_bounds(coord, map)) {
         return TILE_SOLID;
@@ -2321,7 +2321,7 @@ uint32 get_tile(TileMap* map, TileCoord coord) {
     return map->data[coord.row][coord.col];
 }
 
-void set_tile(TileMap* map, TileCoord coord, uint32 value) {
+void set_tile(TileMap* map, TileCoord coord, u32 value) {
     if (!is_tile_in_bounds(coord, map)) {
         return;  // Silently ignore out-of-bounds writes
     }
@@ -2335,7 +2335,7 @@ void set_tile(TileMap* map, TileCoord coord, uint32 value) {
 
 bool32 is_walkable(ScreenPos pos, TileMap* map) {
     TileCoord coord = screen_to_tile(pos, map);
-    uint32 tile = get_tile(map, coord);
+    u32 tile = get_tile(map, coord);
     return (tile == TILE_EMPTY);
 }
 
@@ -2351,8 +2351,8 @@ bool32 is_rect_walkable(ScreenPos top_left, ScreenPos bottom_right, TileMap* map
     TileCoord max_tile = screen_to_tile(adjusted_br, map);
 
     // Check all tiles in the range
-    for (int32 row = min_tile.row; row <= max_tile.row; row++) {
-        for (int32 col = min_tile.col; col <= max_tile.col; col++) {
+    for (i32 row = min_tile.row; row <= max_tile.row; row++) {
+        for (i32 col = min_tile.col; col <= max_tile.col; col++) {
             TileCoord coord = { row, col };
             if (get_tile(map, coord) != TILE_EMPTY) {
                 return false;
@@ -2377,7 +2377,7 @@ void debug_print_screen_pos(ScreenPos pos) {
 
 void debug_tile_at_screen(ScreenPos pos, TileMap* map) {
     TileCoord coord = screen_to_tile(pos, map);
-    uint32 tile = get_tile(map, coord);
+    u32 tile = get_tile(map, coord);
 
     printf("Screen (%.1f, %.1f) -> Tile [row=%d, col=%d] = %u (%s)\n",
            pos.x, pos.y, coord.row, coord.col, tile,
@@ -2410,7 +2410,7 @@ After all this analysis, here are the **absolute rules** to follow for 2D tile-b
 │                                                                         │
 │  RULE 1: Arrays are [ROW][COL], always                                 │
 │  ─────────────────────────────────────                                  │
-│  uint32 map[ROW_COUNT][COL_COUNT];                                     │
+│  u32 map[ROW_COUNT][COL_COUNT];                                     │
 │  value = map[row][col];                                                │
 │                                                                         │
 │  RULE 2: ROW = Y, COL = X                                              │
@@ -2421,9 +2421,9 @@ After all this analysis, here are the **absolute rules** to follow for 2D tile-b
 │  RULE 3: Use floor() for negative coords, cast for non-negative        │
 │  ───────────────────────────────────────────────────────────            │
 │  // If coords can be negative (world space):                           │
-│  col = (int32)floorf(relative_x / tile_width);                         │
+│  col = (i32)floorf(relative_x / tile_width);                         │
 │  // If coords always non-negative (screen pixels):                     │
-│  col = (int32)(relative_x / tile_width);  // Faster!                   │
+│  col = (i32)(relative_x / tile_width);  // Faster!                   │
 │                                                                         │
 │  RULE 4: Bounds check with < COUNT, not <= COUNT                       │
 │  ───────────────────────────────────────────────                        │
@@ -2432,7 +2432,7 @@ After all this analysis, here are the **absolute rules** to follow for 2D tile-b
 │                                                                         │
 │  RULE 5: Encapsulate array access                                      │
 │  ────────────────────────────────                                       │
-│  uint32 get_tile(TileMap* map, int32 row, int32 col);                  │
+│  u32 get_tile(TileMap* map, i32 row, i32 col);                  │
 │  // Never access map->data directly outside this function              │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -2484,22 +2484,22 @@ Before committing any tile-related code, verify:
 │  DECLARATION:                                                           │
 │    #define MAP_ROWS 9                                                  │
 │    #define MAP_COLS 17                                                 │
-│    uint32 map[MAP_ROWS][MAP_COLS];                                     │
+│    u32 map[MAP_ROWS][MAP_COLS];                                     │
 │                                                                         │
 │  SCREEN TO TILE:                                                        │
 │    // If coords can be negative:                                       │
-│    int32 col = (int32)floorf((screen_x - origin_x) / tile_width);      │
-│    int32 row = (int32)floorf((screen_y - origin_y) / tile_height);     │
+│    i32 col = (i32)floorf((screen_x - origin_x) / tile_width);      │
+│    i32 row = (i32)floorf((screen_y - origin_y) / tile_height);     │
 │    // If coords always non-negative:                                   │
-│    int32 col = (int32)((screen_x - origin_x) / tile_width);            │
-│    int32 row = (int32)((screen_y - origin_y) / tile_height);           │
+│    i32 col = (i32)((screen_x - origin_x) / tile_width);            │
+│    i32 row = (i32)((screen_y - origin_y) / tile_height);           │
 │                                                                         │
 │  BOUNDS CHECK:                                                          │
 │    bool valid = (row >= 0 && row < MAP_ROWS &&                         │
 │                  col >= 0 && col < MAP_COLS);                          │
 │                                                                         │
 │  ARRAY ACCESS:                                                          │
-│    uint32 tile = map[row][col];  // [row][col] = [y][x]                │
+│    u32 tile = map[row][col];  // [row][col] = [y][x]                │
 │                                                                         │
 │  TILE TO SCREEN:                                                        │
 │    f32 screen_x = origin_x + col * tile_width;                      │
@@ -2528,7 +2528,7 @@ Now let's look at your actual code and identify what needs to be fixed:
 #define TILE_MAP_COLUMN_COUNT 9
 #define TILE_MAP_ROW_COUNT 17
 typedef struct {
-  uint32 map[TILE_MAP_COLUMN_COUNT][TILE_MAP_ROW_COUNT];  // [9][17]
+  u32 map[TILE_MAP_COLUMN_COUNT][TILE_MAP_ROW_COUNT];  // [9][17]
   // ...
 } TileState;
 ```
@@ -2538,7 +2538,7 @@ typedef struct {
 **In `init.c`:**
 
 ```c
-uint32 temp_map[9][17] = {
+u32 temp_map[9][17] = {
     {1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1},  // 17 elements
     // ... 9 rows total
 };
@@ -2549,7 +2549,7 @@ uint32 temp_map[9][17] = {
 **In `main.c`:**
 
 ```c
-int32 tile_map_value = game_state->tile_state.map[player_tile_x][player_tile_y];
+i32 tile_map_value = game_state->tile_state.map[player_tile_x][player_tile_y];
 ```
 
 **Problem:** Accessing as `[x][y]` when it should be `[row][col]` = `[y][x]`.
@@ -2566,7 +2566,7 @@ Here's exactly what you need to change:
 
 typedef struct {
   // Array is [rows][cols] - matches C convention
-  uint32 map[TILE_MAP_ROW_COUNT][TILE_MAP_COL_COUNT];
+  u32 map[TILE_MAP_ROW_COUNT][TILE_MAP_COL_COUNT];
   f32 upper_left_x;
   f32 upper_left_y;
   f32 width;   // Width of each tile in pixels
@@ -2579,7 +2579,7 @@ typedef struct {
 ```c
 // The visual layout is correct - 9 rows, 17 columns
 // Just update the declaration to use new constant names
-uint32 temp_map[TILE_MAP_ROW_COUNT][TILE_MAP_COL_COUNT] = {
+u32 temp_map[TILE_MAP_ROW_COUNT][TILE_MAP_COL_COUNT] = {
     {1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1},  // Row 0 (top)
     {1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1},  // Row 1
     {1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1},  // Row 2
@@ -2598,11 +2598,11 @@ uint32 temp_map[TILE_MAP_ROW_COUNT][TILE_MAP_COL_COUNT] = {
 // In handle_controls():
 
 // Calculate tile coordinates - use CLEAR variable names
-int32 player_tile_col = truncate_f32_to_int32(
+i32 player_tile_col = truncate_f32_to_int32(
     (new_player_state_x - game_state->tile_state.upper_left_x) /
     game_state->tile_state.width);
 
-int32 player_tile_row = truncate_f32_to_int32(
+i32 player_tile_row = truncate_f32_to_int32(
     (new_player_state_y - game_state->tile_state.upper_left_y) /
     game_state->tile_state.height);
 
@@ -2613,7 +2613,7 @@ if (player_tile_col >= 0 && player_tile_col < TILE_MAP_COL_COUNT &&
     player_tile_row >= 0 && player_tile_row < TILE_MAP_ROW_COUNT) {
 
     // Array access - [row][col] order!
-    int32 tile_map_value =
+    i32 tile_map_value =
         game_state->tile_state.map[player_tile_row][player_tile_col];
 
     is_valid_player_pos = (tile_map_value == 0);
@@ -2635,10 +2635,10 @@ if (player_tile_col >= 0 && player_tile_col < TILE_MAP_COL_COUNT &&
 TileState *tile_state = &game_state->tile_state;
 
 // Iterate in row-major order (better cache performance)
-for (uint32 row = 0; row < TILE_MAP_ROW_COUNT; ++row) {
-    for (uint32 col = 0; col < TILE_MAP_COL_COUNT; ++col) {
+for (u32 row = 0; row < TILE_MAP_ROW_COUNT; ++row) {
+    for (u32 col = 0; col < TILE_MAP_COL_COUNT; ++col) {
         // Access array as [row][col]
-        uint32 tile_id = tile_state->map[row][col];
+        u32 tile_id = tile_state->map[row][col];
         f32 gray = tile_id == 1 ? 1.0f : 0.5f;
 
         // Screen position: col determines X, row determines Y
@@ -2681,7 +2681,7 @@ typedef struct {
   // Array layout: [row][col] - standard C convention
   // Row 0 is the TOP of the map, Row 8 is the BOTTOM
   // Col 0 is the LEFT of the map, Col 16 is the RIGHT
-  uint32 map[TILE_MAP_ROW_COUNT][TILE_MAP_COL_COUNT];
+  u32 map[TILE_MAP_ROW_COUNT][TILE_MAP_COL_COUNT];
 
   // Screen position of tile [0][0]'s top-left corner
   f32 upper_left_x;
@@ -2693,8 +2693,8 @@ typedef struct {
 } TileState;
 
 typedef struct {
-  int32 x;
-  int32 y;
+  i32 x;
+  i32 y;
   f32 width;
   f32 height;
   f32 t_jump;
@@ -2708,7 +2708,7 @@ typedef struct {
   GameAudioState audio;
   TileState tile_state;
   PlayerState player_state;
-  int32 speed;
+  i32 speed;
 } HandMadeHeroGameState;
 
 #endif // DE100_HERO_GAME_H
@@ -2763,7 +2763,7 @@ GAME_INIT(game_init) {
     // Row 8: 1 1 1 1 1 1 1 1 0 1 ...  <- BOTTOM
     // ═══════════════════════════════════════════════════════════════════
 
-    uint32 temp_map[TILE_MAP_ROW_COUNT][TILE_MAP_COL_COUNT] = {
+    u32 temp_map[TILE_MAP_ROW_COUNT][TILE_MAP_COL_COUNT] = {
         //   0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16  <- Column indices
         {1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1},  // Row 0 (top)
         {1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1},  // Row 1
@@ -2836,8 +2836,8 @@ void handle_controls(GameControllerInput *inputs,
     d_player_y *= game_state->speed;
 
     // Calculate new position
-    int32 new_player_x = game_state->player_state.x + (int32)(d_player_x * frame_time);
-    int32 new_player_y = game_state->player_state.y + (int32)(d_player_y * frame_time);
+    i32 new_player_x = game_state->player_state.x + (i32)(d_player_x * frame_time);
+    i32 new_player_y = game_state->player_state.y + (i32)(d_player_y * frame_time);
 
     // ═══════════════════════════════════════════════════════════════════
     // TILE COLLISION
@@ -2850,9 +2850,9 @@ void handle_controls(GameControllerInput *inputs,
 
     // Calculate tile coordinates
     // Note: Using truncate for now, should use floor for negative coords
-    int32 player_tile_col = truncate_f32_to_int32(
+    i32 player_tile_col = truncate_f32_to_int32(
         (new_player_x - tiles->upper_left_x) / tiles->width);
-    int32 player_tile_row = truncate_f32_to_int32(
+    i32 player_tile_row = truncate_f32_to_int32(
         (new_player_y - tiles->upper_left_y) / tiles->height);
 
     bool32 is_valid_player_pos = false;
@@ -2862,7 +2862,7 @@ void handle_controls(GameControllerInput *inputs,
         player_tile_row >= 0 && player_tile_row < TILE_MAP_ROW_COUNT) {
 
         // Array access: [row][col] - THIS IS THE KEY FIX!
-        uint32 tile_map_value = tiles->map[player_tile_row][player_tile_col];
+        u32 tile_map_value = tiles->map[player_tile_row][player_tile_col];
 
         is_valid_player_pos = (tile_map_value == 0);
 
@@ -2906,10 +2906,10 @@ GAME_UPDATE_AND_RENDER(game_update_and_render) {
 
   TileState *tile_state = &game_state->tile_state;
 
-  for (uint32 row = 0; row < TILE_MAP_ROW_COUNT; ++row) {
-    for (uint32 col = 0; col < TILE_MAP_COL_COUNT; ++col) {
+  for (u32 row = 0; row < TILE_MAP_ROW_COUNT; ++row) {
+    for (u32 col = 0; col < TILE_MAP_COL_COUNT; ++col) {
       // Array access: [row][col]
-      uint32 tile_id = tile_state->map[row][col];
+      u32 tile_id = tile_state->map[row][col];
       f32 gray = tile_id == 1 ? 1.0f : 0.5f;
 
       // Screen position: col determines X, row determines Y
@@ -2959,8 +2959,8 @@ Before moving on, answer these questions to verify your understanding:
    - Think about how C stores 2D arrays in memory
    - What does "row-major order" mean?
 
-2. **Why use `floorf()` vs `(int32)` cast for tile coordinates?**
-   - **For non-negative coordinates (screen pixels, early tile maps):** `(int32)` cast is fine and faster
+2. **Why use `floorf()` vs `(i32)` cast for tile coordinates?**
+   - **For non-negative coordinates (screen pixels, early tile maps):** `(i32)` cast is fine and faster
      - Both give the same result: `(int)3.7 = 3` and `floor(3.7) = 3`
    - **For potentially negative coordinates (world space):** Must use `floorf()`
      - They differ for negatives: `(int)(-3.7) = -3` but `floor(-3.7) = -4`
@@ -3037,13 +3037,13 @@ Here's a helper function you can add to visualize the current tile during develo
 de100_file_scoped_fn void debug_draw_player_tile(
     GameBackBuffer *buffer,
     TileState *tile_state,
-    int32 player_x,
-    int32 player_y) {
+    i32 player_x,
+    i32 player_y) {
 
     // Calculate which tile the player center is in
-    int32 col = truncate_f32_to_int32(
+    i32 col = truncate_f32_to_int32(
         (player_x - tile_state->upper_left_x) / tile_state->width);
-    int32 row = truncate_f32_to_int32(
+    i32 row = truncate_f32_to_int32(
         (player_y - tile_state->upper_left_y) / tile_state->height);
 
     // Only draw if in bounds
@@ -3058,7 +3058,7 @@ de100_file_scoped_fn void debug_draw_player_tile(
         // Draw a semi-transparent overlay on the current tile
         // Using a different color to distinguish from regular tiles
         // Red = solid tile, Green = empty tile
-        uint32 tile_value = tile_state->map[row][col];
+        u32 tile_value = tile_state->map[row][col];
         if (tile_value == 0) {
             // Green tint for walkable
             draw_rect(buffer, min_x + 2, min_y + 2, max_x - 2, max_y - 2,
@@ -3071,7 +3071,7 @@ de100_file_scoped_fn void debug_draw_player_tile(
     }
 
     // Print debug info
-    static int32 debug_frame_counter = 0;
+    static i32 debug_frame_counter = 0;
     if (++debug_frame_counter % 60 == 0) {
         printf("[DEBUG] Player at (%d, %d) -> Tile [row=%d, col=%d]\n",
                player_x, player_y, row, col);
@@ -3283,7 +3283,7 @@ In C, there's no "true" 2D array at runtime—everything is flat memory. When yo
 // Allocate flat buffer for 2D data
 int width = 1280;
 int height = 720;
-uint32 *pixels = (uint32 *)malloc(width * height * sizeof(uint32));
+u32 *pixels = (u32 *)malloc(width * height * sizeof(u32));
 
 // ❌ WRONG: Can't use 2D syntax with pointer
 // pixels[y][x] = color;  // Compiler error!
@@ -3292,7 +3292,7 @@ uint32 *pixels = (uint32 *)malloc(width * height * sizeof(uint32));
 pixels[y * width + x] = color;
 
 // ✅ CORRECT: Read a pixel
-uint32 color = pixels[y * width + x];
+u32 color = pixels[y * width + x];
 ```
 
 #### **2. Macro for Clean 2D Access**
@@ -3307,10 +3307,10 @@ uint32 color = pixels[y * width + x];
 #define AT_2D(ptr, x, y, width) ((ptr)[(y) * (width) + (x)])
 
 // Usage examples:
-uint32 *pixels = (uint32 *)buffer->memory;
+u32 *pixels = (u32 *)buffer->memory;
 
 // Read pixel at (100, 50)
-uint32 color = AT_2D(pixels, 100, 50, buffer->width);
+u32 color = AT_2D(pixels, 100, 50, buffer->width);
 
 // Write pixel at (100, 50)
 AT_2D(pixels, 100, 50, buffer->width) = 0xFF00FF00;
@@ -3345,27 +3345,27 @@ for (int y = 0; y < height; y++) {
 // If you use width instead of pitch, you'll read into padding garbage!
 // ═══════════════════════════════════════════════════════════════════════
 
-// Pitch-aware macro (ptr is void* or uint8*, pitch is in BYTES)
+// Pitch-aware macro (ptr is void* or u8*, pitch is in BYTES)
 #define AT_2D_PITCH(base, x, y, pitch, type) \
-    (((type *)((uint8 *)(base) + (y) * (pitch)))[(x)])
+    (((type *)((u8 *)(base) + (y) * (pitch)))[(x)])
 
 // Usage:
-uint32 color = AT_2D_PITCH(buffer->memory, x, y, buffer->pitch, uint32);
-AT_2D_PITCH(buffer->memory, x, y, buffer->pitch, uint32) = 0xFFFF0000;
+u32 color = AT_2D_PITCH(buffer->memory, x, y, buffer->pitch, u32);
+AT_2D_PITCH(buffer->memory, x, y, buffer->pitch, u32) = 0xFFFF0000;
 
 // ═══════════════════════════════════════════════════════════════════════
 // ALTERNATIVE: Row pointer approach (Casey's pattern)
 // ═══════════════════════════════════════════════════════════════════════
 
 void render_gradient(GameOffscreenBuffer *buffer) {
-    uint8 *row = (uint8 *)buffer->memory;  // Start at first row
+    u8 *row = (u8 *)buffer->memory;  // Start at first row
 
     for (int y = 0; y < buffer->height; y++) {
-        uint32 *pixel = (uint32 *)row;  // Cast row to pixel pointer
+        u32 *pixel = (u32 *)row;  // Cast row to pixel pointer
 
         for (int x = 0; x < buffer->width; x++) {
-            uint8 blue = (uint8)(x);
-            uint8 green = (uint8)(y);
+            u8 blue = (u8)(x);
+            u8 green = (u8)(y);
             *pixel++ = (green << 8) | blue;  // Write and advance
         }
 
@@ -3385,7 +3385,7 @@ void render_gradient(GameOffscreenBuffer *buffer) {
 #define TILE_MAP_HEIGHT 9
 
 // Store as flat array
-uint32 tilemap[TILE_MAP_HEIGHT * TILE_MAP_WIDTH] = {
+u32 tilemap[TILE_MAP_HEIGHT * TILE_MAP_WIDTH] = {
     1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,  // Row 0
     1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,  // Row 1
     1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,  // Row 2
@@ -3411,22 +3411,22 @@ TILE_AT(5, 3) = 2;  // Place tile type 2 at (5, 3)
 
 // Define accessor for a specific array
 #define DEFINE_2D_ACCESSOR(name, array, width) \
-    static inline uint32 name##_get(int x, int y) { \
+    static inline u32 name##_get(int x, int y) { \
         return (array)[(y) * (width) + (x)]; \
     } \
-    static inline void name##_set(int x, int y, uint32 value) { \
+    static inline void name##_set(int x, int y, u32 value) { \
         (array)[(y) * (width) + (x)] = value; \
     }
 
 // Usage:
-uint32 g_world_tiles[100 * 100];
-uint32 g_collision_map[50 * 50];
+u32 g_world_tiles[100 * 100];
+u32 g_collision_map[50 * 50];
 
 DEFINE_2D_ACCESSOR(world, g_world_tiles, 100)
 DEFINE_2D_ACCESSOR(collision, g_collision_map, 50)
 
 // Now you have type-safe functions:
-uint32 tile = world_get(10, 20);
+u32 tile = world_get(10, 20);
 world_set(10, 20, TILE_GRASS);
 
 bool blocked = (collision_get(px, py) != 0);
@@ -3443,7 +3443,7 @@ bool blocked = (collision_get(px, py) != 0);
 | **Image appears sheared/skewed**           | Pitch != width × bytes_per_pixel (alignment padding) | Use pitch-aware access pattern                                       |
 | **X and Y swapped**                        | Used `x * width + y` instead of `y * width + x`      | Remember: Y selects ROW, X selects COLUMN within row                 |
 | **Vertical stripes instead of horizontal** | Iterating X in outer loop, Y in inner                | Outer loop = Y (rows), inner loop = X (columns) for cache efficiency |
-| **Only top-left corner renders**           | Forgot to multiply by `sizeof(type)` in byte offset  | Use typed pointer (`uint32*`) so compiler handles size               |
+| **Only top-left corner renders**           | Forgot to multiply by `sizeof(type)` in byte offset  | Use typed pointer (`u32*`) so compiler handles size                  |
 
 ---
 
@@ -3498,17 +3498,17 @@ bool blocked = (collision_get(px, py) != 0);
 // From Day 3-5: Casey's gradient rendering pattern
 void render_weird_gradient(GameOffscreenBuffer *buffer, int x_offset, int y_offset) {
     // Start at first byte of buffer
-    uint8 *row = (uint8 *)buffer->memory;
+    u8 *row = (u8 *)buffer->memory;
 
     for (int y = 0; y < buffer->height; y++) {
         // Cast current row to 32-bit pixels
-        uint32 *pixel = (uint32 *)row;
+        u32 *pixel = (u32 *)row;
 
         for (int x = 0; x < buffer->width; x++) {
             // Calculate color based on position + offset
-            uint8 blue = (uint8)(x + x_offset);
-            uint8 green = (uint8)(y + y_offset);
-            uint8 red = 0;
+            u8 blue = (u8)(x + x_offset);
+            u8 green = (u8)(y + y_offset);
+            u8 red = 0;
 
             // Pack into 32-bit ARGB (or BGRA depending on platform)
             *pixel++ = (red << 16) | (green << 8) | blue;
@@ -3524,8 +3524,8 @@ void render_weird_gradient(GameOffscreenBuffer *buffer, int x_offset, int y_offs
 // WHY CASEY USES THIS PATTERN:
 // ═══════════════════════════════════════════════════════════════════════
 //
-// 1. `row` is uint8* so we can add pitch (bytes) directly
-// 2. `pixel` is uint32* so *pixel++ advances by 4 bytes automatically
+// 1. `row` is u8* so we can add pitch (bytes) directly
+// 2. `pixel` is u32* so *pixel++ advances by 4 bytes automatically
 // 3. Handles pitch != width * 4 (memory alignment padding)
 // 4. Sequential memory access = cache efficient
 // 5. No multiplication per pixel (just pointer increment)
@@ -3533,7 +3533,7 @@ void render_weird_gradient(GameOffscreenBuffer *buffer, int x_offset, int y_offs
 // EQUIVALENT USING MACRO:
 // for (int y = 0; y < buffer->height; y++) {
 //     for (int x = 0; x < buffer->width; x++) {
-//         AT_2D_PITCH(buffer->memory, x, y, buffer->pitch, uint32) = color;
+//         AT_2D_PITCH(buffer->memory, x, y, buffer->pitch, u32) = color;
 //     }
 // }
 // ═══════════════════════════════════════════════════════════════════════
@@ -3554,7 +3554,7 @@ void render_weird_gradient(GameOffscreenBuffer *buffer, int x_offset, int y_offs
 
 // Pitch-aware 2D access (handles alignment padding)
 #define AT_2D_PITCH(base, x, y, pitch, type) \
-    (((type *)((uint8 *)(base) + (y) * (pitch)))[(x)])
+    (((type *)((u8 *)(base) + (y) * (pitch)))[(x)])
 
 // Bounds-checked access (debug builds)
 #define AT_2D_SAFE(ptr, x, y, width, height) \
@@ -3573,14 +3573,14 @@ void render_weird_gradient(GameOffscreenBuffer *buffer, int x_offset, int y_offs
 // ═══════════════════════════════════════════════════════════════════════
 
 // Pixel buffer
-uint32 *pixels = buffer->memory;
+u32 *pixels = buffer->memory;
 AT_2D(pixels, 100, 50, buffer->width) = 0xFF0000FF;
 
 // Tilemap
-uint32 tile = AT_2D(tilemap, tile_x, tile_y, MAP_WIDTH);
+u32 tile = AT_2D(tilemap, tile_x, tile_y, MAP_WIDTH);
 
 // With pitch (image with alignment)
-uint32 color = AT_2D_PITCH(image->data, x, y, image->pitch, uint32);
+u32 color = AT_2D_PITCH(image->data, x, y, image->pitch, u32);
 
 // Get index for external use
 int idx = INDEX_2D(x, y, width);

@@ -34,9 +34,9 @@ de100_detect_os() {
     os_name="$(uname -s)"
     
     case "$os_name" in
-        Linux*)     echo "linux" ;;
-        Darwin*)    echo "macos" ;;
-        FreeBSD*)   echo "freebsd" ;;
+        Linux*)               echo "linux" ;;
+        Darwin*)              echo "macos" ;;
+        FreeBSD*)             echo "freebsd" ;;
         MINGW*|MSYS*|CYGWIN*) echo "windows" ;;
         *)
             echo "Warning: Unknown OS '$os_name', assuming POSIX-like" >&2
@@ -104,52 +104,6 @@ case "$DE100_OS" in
 esac
 
 # ───────────────────────────────────────────────────────────────────────────────
-# COMPILER FLAGS
-# ───────────────────────────────────────────────────────────────────────────────
-
-# Base flags (always applied)
-DE100_BASE_FLAGS="-std=c11 -pedantic"
-
-case "$DE100_OS" in
-    linux|freebsd|posix)
-        DE100_BASE_FLAGS+=" -ffunction-sections -fdata-sections"
-        DE100_BASE_FLAGS+=" -D_POSIX_C_SOURCE=200809L"
-    ;;
-    macos)
-        DE100_BASE_FLAGS+=" -ffunction-sections -fdata-sections"
-    ;;
-    windows)
-        DE100_BASE_FLAGS+=" -D_CRT_SECURE_NO_WARNINGS"
-    ;;
-esac
-
-# Linker flags
-case "$DE100_OS" in
-    linux|freebsd|posix)
-        DE100_LINKER_FLAGS="-Wl,--gc-sections"
-    ;;
-    macos)
-        DE100_LINKER_FLAGS="-Wl,-dead_strip"
-    ;;
-    windows)
-        DE100_LINKER_FLAGS=""
-    ;;
-esac
-
-# Shared library flags
-case "$DE100_OS" in
-    linux|freebsd|posix)
-        DE100_SHARED_FLAGS="-shared -fPIC -fvisibility=default"
-    ;;
-    macos)
-        DE100_SHARED_FLAGS="-dynamiclib -fPIC -fvisibility=default"
-    ;;
-    windows)
-        DE100_SHARED_FLAGS="-shared -fvisibility=default"
-    ;;
-esac
-
-# ───────────────────────────────────────────────────────────────────────────────
 # ENGINE SOURCE FILES
 # ───────────────────────────────────────────────────────────────────────────────
 
@@ -186,7 +140,6 @@ DE100_SRC_PLATFORM_COMMON=(
 # BACKEND CONFIGURATION
 # ───────────────────────────────────────────────────────────────────────────────
 
-# Backend source files (set by de100_set_backend)
 DE100_SRC_BACKEND=()
 DE100_BACKEND_LIBS=""
 DE100_BACKEND=""
@@ -196,18 +149,17 @@ de100_set_backend() {
     local GAME_DIR="$2"
     local DE100_INTERNAL="$3"
     
+    # Add internal debug sources if enabled
     if [[ "$DE100_INTERNAL" == "1" ]]; then
         DE100_SRC_PLATFORM_COMMON+=(
             "$DE100_ENGINE_DIR/platforms/_common/frame-stats.c"
         )
     fi
     
-    # Auto-select if not specified
+    # Auto-select backend if not specified
     if [[ -z "$backend" || "$backend" == "auto" ]]; then
         case "$DE100_OS" in
             linux|freebsd) backend="x11" ;;
-            # macos)         backend="macos" ;;
-            # windows)       backend="win32" ;;
             *)             backend="raylib" ;;
         esac
         echo "Auto-selected backend: $backend"
@@ -218,35 +170,27 @@ de100_set_backend() {
     DE100_SRC_BACKEND=(
         "$backend_dir/audio.c"
         "$backend_dir/backend.c"
-        # "$backend_dir/inputs/joystick.c"
-        # "$backend_dir/inputs/keyboard.c"
         "$backend_dir/inputs/mouse.c"
         "$backend_dir/hooks/utils.c"
-        #
         "$GAME_DIR/adapters/$backend/inputs/keyboard.c"
         "$GAME_DIR/adapters/$backend/inputs/joystick.c"
     )
     
+    # Set backend-specific library dependencies
     case "$backend" in
         x11)
             DE100_BACKEND_LIBS="-lX11 -lXrandr -lGL -lGLX -lasound -ldl"
         ;;
-        # macos)
-        #     DE100_BACKEND_LIBS="-framework Cocoa -framework OpenGL -framework AudioToolbox -framework IOKit"
-        # ;;
-        # win32)
-        #     DE100_BACKEND_LIBS="-luser32 -lgdi32 -lopengl32 -lwinmm -lole32"
-        # ;;
         raylib)
             case "$DE100_OS" in
-                windows) DE100_BACKEND_LIBS="-lraylib -lpthread" ;;
+                windows) DE100_BACKEND_LIBS="-lraylib -lpthread -ldl" ;;
                 macos)   DE100_BACKEND_LIBS="-lraylib -lpthread -framework Cocoa -framework IOKit" ;;
                 *)       DE100_BACKEND_LIBS="-lraylib -lpthread -ldl" ;;
             esac
         ;;
         *)
             echo "Error: Unknown backend '$backend'" >&2
-            echo "Available: x11, macos, win32, raylib, auto" >&2
+            echo "Available: x11, raylib, auto" >&2
             return 1
         ;;
     esac
@@ -259,41 +203,36 @@ de100_set_backend() {
 # HELPER FUNCTIONS
 # ───────────────────────────────────────────────────────────────────────────────
 
-# Get executable filename with platform extension
 de100_exe_name() {
     echo "${1}${DE100_EXE_EXT}"
 }
 
-# Get shared library filename with platform prefix/extension
 de100_shared_name() {
     echo "${DE100_SHARED_PREFIX}${1}${DE100_SHARED_EXT}"
 }
 
-# Get all platform source files as a single string
 de100_get_platform_sources() {
     echo "$DE100_SRC_MAIN ${DE100_SRC_COMMON[*]} ${DE100_SRC_GAME[*]} ${DE100_SRC_PLATFORM_COMMON[*]} ${DE100_SRC_BACKEND[*]}"
 }
 
-# Generate -D flags for library paths (passed to C code)
 de100_get_lib_defines() {
     local build_dir="$1"
     local main_lib="$2"
     local startup_lib="$3"
     local init_lib="$4"
-    
     local defines=""
     
-    # Library names (just the name, no path)
+    # Library names
     defines+=" -DDE100_GAME_MAIN_LIB_NAME=\"$main_lib\""
     defines+=" -DDE100_GAME_STARTUP_LIB_NAME=\"$startup_lib\""
     defines+=" -DDE100_GAME_INIT_LIB_NAME=\"$init_lib\""
     
-    # Full paths
+    # Full library paths
     defines+=" -DDE100_GAME_MAIN_LIB_PATH=\"$build_dir/$(de100_shared_name "$main_lib")\""
     defines+=" -DDE100_GAME_STARTUP_LIB_PATH=\"$build_dir/$(de100_shared_name "$startup_lib")\""
     defines+=" -DDE100_GAME_INIT_LIB_PATH=\"$build_dir/$(de100_shared_name "$init_lib")\""
     
-    # Temp library paths (for hot-reload)
+    # Temporary library paths (for hot-reload)
     defines+=" -DDE100_GAME_MAIN_TMP_LIB_PATH=\"$build_dir/$(de100_shared_name "${main_lib}_tmp")\""
     defines+=" -DDE100_GAME_STARTUP_TMP_LIB_PATH=\"$build_dir/$(de100_shared_name "${startup_lib}_tmp")\""
     defines+=" -DDE100_GAME_INIT_TMP_LIB_PATH=\"$build_dir/$(de100_shared_name "${init_lib}_tmp")\""
@@ -301,7 +240,6 @@ de100_get_lib_defines() {
     echo "$defines"
 }
 
-# Print build configuration summary
 de100_print_config() {
     echo ""
     echo "DE100 Build Configuration:"

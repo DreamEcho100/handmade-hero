@@ -64,9 +64,9 @@ typedef struct {
   // scratch data!
   void *transient_storage;
   // Size of the permanent storage block in bytes
-  uint64 permanent_storage_size;
+  u64 permanent_storage_size;
   // Size of the temporary storage block in bytes
-  uint64 transient_storage_size;
+  u64 transient_storage_size;
   // Has this memory been initialized?
   bool32 is_initialized;
 } GameMemory;
@@ -87,7 +87,7 @@ typedef struct {
   // ─────────────────────────────────────────────────────────────────────
   // MEMORY TRACKING
   // ─────────────────────────────────────────────────────────────────────
-  uint64 total_size; // permanent_storage_size + transient_storage_size
+  u64 total_size;    // permanent_storage_size + transient_storage_size
   void *game_memory; // Pointer to the allocated game memory block
 
   // ─────────────────────────────────────────────────────────────────────
@@ -101,14 +101,14 @@ typedef struct {
   // ─────────────────────────────────────────────────────────────────────
   // INPUT RECORDING STATE
   // ─────────────────────────────────────────────────────────────────────
-  int32 recording_fd; // File descriptor for input events (-1 = not recording)
-  int32 input_recording_index; // 0 = not recording, N = recording to slot N
+  i32 recording_fd; // File descriptor for input events (-1 = not recording)
+  i32 input_recording_index; // 0 = not recording, N = recording to slot N
 
   // ─────────────────────────────────────────────────────────────────────
   // INPUT PLAYBACK STATE
   // ─────────────────────────────────────────────────────────────────────
-  int32 playback_fd; // File descriptor for input events (-1 = not playing)
-  int32 input_playing_index; // 0 = not playing, N = playing from slot N
+  i32 playback_fd; // File descriptor for input events (-1 = not playing)
+  i32 input_playing_index; // 0 = not playing, N = playing from slot N
 } GameMemoryState;
 
 #endif // DE100_GAME_De100_MEMORY_H

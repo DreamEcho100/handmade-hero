@@ -99,8 +99,8 @@ adaptive_fps_should_increase(GameConfig *game_config,
   }
 
   // Calculate required samples based on time window
-  uint32 required_samples = (uint32)(g_adaptive_fps.sample_window_seconds *
-                                     (f32)game_config->target_refresh_rate_hz);
+  u32 required_samples = (u32)(g_adaptive_fps.sample_window_seconds *
+                               (f32)game_config->target_refresh_rate_hz);
 
   // Regular evaluation
   if (g_adaptive_fps.frames_sampled >= required_samples &&
@@ -123,8 +123,8 @@ adaptive_fps_should_increase(GameConfig *game_config,
 de100_file_scoped_fn inline bool
 adaptive_fps_should_decrease(GameConfig *game_config) {
   // Calculate required samples based on time window
-  uint32 required_samples = (uint32)(g_adaptive_fps.sample_window_seconds *
-                                     (f32)game_config->target_refresh_rate_hz);
+  u32 required_samples = (u32)(g_adaptive_fps.sample_window_seconds *
+                               (f32)game_config->target_refresh_rate_hz);
 
   if (g_adaptive_fps.frames_sampled >= required_samples &&
       g_adaptive_fps.frames_since_last_change >=
@@ -141,9 +141,9 @@ adaptive_fps_should_decrease(GameConfig *game_config) {
   return false;
 }
 
-de100_file_scoped_fn inline uint32
-adaptive_fps_get_next_higher(uint32 current_fps, uint32 monitor_hz) {
-  uint32 next_fps;
+de100_file_scoped_fn inline u32 adaptive_fps_get_next_higher(u32 current_fps,
+                                                             u32 monitor_hz) {
+  u32 next_fps;
 
   switch (current_fps) {
   case FPS_30:
@@ -166,8 +166,7 @@ adaptive_fps_get_next_higher(uint32 current_fps, uint32 monitor_hz) {
   return (next_fps > monitor_hz) ? monitor_hz : next_fps;
 }
 
-de100_file_scoped_fn inline uint32
-adaptive_fps_get_next_lower(uint32 current_fps) {
+de100_file_scoped_fn inline u32 adaptive_fps_get_next_lower(u32 current_fps) {
   switch (current_fps) {
   case FPS_120:
     return FPS_90;
@@ -183,7 +182,7 @@ adaptive_fps_get_next_lower(uint32 current_fps) {
 }
 
 de100_file_scoped_fn inline void
-adaptive_fps_apply_change(GameConfig *game_config, uint32 new_fps) {
+adaptive_fps_apply_change(GameConfig *game_config, u32 new_fps) {
   game_config->target_refresh_rate_hz = new_fps;
   game_config->target_seconds_per_frame = 1.0f / (f32)new_fps;
 
@@ -211,12 +210,12 @@ void adaptive_fps_update(GameConfig *game_config, f32 frame_time_ms) {
   adaptive_fps_record_frame(frame_time_ms, target_frame_time_ms);
 
   // Calculate required samples for window reset check
-  uint32 required_samples = (uint32)(g_adaptive_fps.sample_window_seconds *
-                                     (f32)game_config->target_refresh_rate_hz);
+  u32 required_samples = (u32)(g_adaptive_fps.sample_window_seconds *
+                               (f32)game_config->target_refresh_rate_hz);
 
   if (adaptive_fps_should_increase(game_config, target_frame_time_ms)) {
-    uint32 old_fps = game_config->target_refresh_rate_hz;
-    uint32 new_fps = adaptive_fps_get_next_higher(
+    u32 old_fps = game_config->target_refresh_rate_hz;
+    u32 new_fps = adaptive_fps_get_next_higher(
         old_fps, game_config->max_allowed_refresh_rate_hz);
 
     if (new_fps != old_fps) {
@@ -227,8 +226,8 @@ void adaptive_fps_update(GameConfig *game_config, f32 frame_time_ms) {
     }
   } else if (adaptive_fps_should_decrease(
                  game_config)) { // Changed: added game_config
-    uint32 old_fps = game_config->target_refresh_rate_hz;
-    uint32 new_fps = adaptive_fps_get_next_lower(old_fps);
+    u32 old_fps = game_config->target_refresh_rate_hz;
+    u32 new_fps = adaptive_fps_get_next_lower(old_fps);
 
     if (new_fps != old_fps) {
       adaptive_fps_apply_change(game_config, new_fps);

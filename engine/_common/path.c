@@ -208,7 +208,7 @@ De100PathResult de100_path_get_executable(void) {
   // MACOS: Use _NSGetExecutablePath
   // ─────────────────────────────────────────────────────────────────────
 
-  uint32 size = sizeof(result.path);
+  u32 size = sizeof(result.path);
 
   if (_NSGetExecutablePath(result.path, &size) != 0) {
     result.error_code = DE100_PATH_ERROR_BUFFER_TOO_SMALL;

@@ -57,7 +57,7 @@ typedef enum {
 
 typedef struct {
   De100MemoryBlock memory; // Memory block containing file data
-  uint32 size;             // Size of file in bytes (0 on failure)
+  u32 size;                // Size of file in bytes (0 on failure)
   De100DebugDe100FileErrorCode error_code;
 } De100DebugDe100FileReadResult;
 
@@ -118,9 +118,8 @@ void de100_debug_free_de100_file_memory(De100MemoryBlock *memory);
  * de100_debug_de100_file_strerror(r.error_code));
  *   }
  */
-De100DebugFileWriteResult de100_debug_write_entire_file(const char *filename,
-                                                        uint32 size,
-                                                        const void *data);
+De100DebugFileWriteResult
+de100_debug_write_entire_file(const char *filename, u32 size, const void *data);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ERROR HANDLING

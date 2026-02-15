@@ -348,8 +348,8 @@ void linux_load_alsa(void) {
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
-bool linux_init_audio(PlatformAudioConfig *audio_config,
-                      int32 samples_per_second, int32 game_update_hz) {
+bool linux_init_audio(PlatformAudioConfig *audio_config, i32 samples_per_second,
+                      i32 game_update_hz) {
 
   printf("═══════════════════════════════════════════════════════════\n");
   printf("🔊 ALSA AUDIO INITIALIZATION\n");
@@ -405,15 +405,15 @@ bool linux_init_audio(PlatformAudioConfig *audio_config,
   //
   // ─────────────────────────────────────────────────────────────────────
 
-  int32 samples_per_frame = samples_per_second / game_update_hz;
-  int32 latency_sample_count = samples_per_frame * FRAMES_OF_AUDIO_LATENCY;
+  i32 samples_per_frame = samples_per_second / game_update_hz;
+  i32 latency_sample_count = samples_per_frame * FRAMES_OF_AUDIO_LATENCY;
 
   // Safety margin: 1/3 of a frame (prevents underruns due to timing variance)
-  int32 safety_sample_count = samples_per_frame / 3;
+  i32 safety_sample_count = samples_per_frame / 3;
 
   // Convert to microseconds for ALSA (they use µs for latency parameter)
-  int32 latency_microseconds =
-      (int32)((f64)latency_sample_count / (f64)samples_per_second * 1000000.0);
+  i32 latency_microseconds =
+      (i32)((f64)latency_sample_count / (f64)samples_per_second * 1000000.0);
 
   printf("[AUDIO] Samples per frame: %d (at %d Hz game logic)\n",
          samples_per_frame, game_update_hz);
@@ -496,16 +496,16 @@ bool linux_init_audio(PlatformAudioConfig *audio_config,
 
   // Platform audio config (read by the whole platform layer)
   audio_config->samples_per_second = samples_per_second;
-  audio_config->bytes_per_sample = sizeof(int16) * 2; // 16-bit stereo
+  audio_config->bytes_per_sample = sizeof(i16) * 2; // 16-bit stereo
   audio_config->running_sample_index = 0;
   audio_config->game_update_hz = game_update_hz;
   audio_config->latency_samples = latency_sample_count;
   audio_config->safety_samples = safety_sample_count;
   audio_config->buffer_size_bytes =
-      (int32)actual_buffer_size * audio_config->bytes_per_sample;
+      (i32)actual_buffer_size * audio_config->bytes_per_sample;
 
   // Linux-specific state
-  g_linux_audio_output.buffer_size = (uint32)actual_buffer_size;
+  g_linux_audio_output.buffer_size = (u32)actual_buffer_size;
   g_linux_audio_output.latency_sample_count = latency_sample_count;
   g_linux_audio_output.latency_microseconds = latency_microseconds;
   g_linux_audio_output.safety_sample_count = safety_sample_count;
@@ -520,7 +520,7 @@ bool linux_init_audio(PlatformAudioConfig *audio_config,
   // ─────────────────────────────────────────────────────────────────────
 
   // Allocate enough for max_samples_per_call
-  uint32 sample_buffer_size =
+  u32 sample_buffer_size =
       audio_config->max_samples_per_call * audio_config->bytes_per_sample;
 
   g_linux_audio_output.sample_buffer =
@@ -623,8 +623,8 @@ bool linux_init_audio(PlatformAudioConfig *audio_config,
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
-uint32 linux_get_samples_to_write(PlatformAudioConfig *audio_config,
-                                  GameAudioOutputBuffer *audio_output) {
+u32 linux_get_samples_to_write(PlatformAudioConfig *audio_config,
+                               GameAudioOutputBuffer *audio_output) {
   (void)audio_output;
 
   if (!audio_config->is_initialized || !g_linux_audio_output.pcm_handle) {
@@ -684,19 +684,19 @@ uint32 linux_get_samples_to_write(PlatformAudioConfig *audio_config,
   // ─────────────────────────────────────────────────────────────────────
 
   // Target: keep (latency + safety) samples in the buffer
-  int32 target_buffered = g_linux_audio_output.latency_sample_count +
-                          g_linux_audio_output.safety_sample_count;
+  i32 target_buffered = g_linux_audio_output.latency_sample_count +
+                        g_linux_audio_output.safety_sample_count;
 
   // Current buffered amount is approximately: buffer_size - avail
-  int32 current_buffered =
-      (int32)g_linux_audio_output.buffer_size - (int32)avail_frames;
+  i32 current_buffered =
+      (i32)g_linux_audio_output.buffer_size - (i32)avail_frames;
 
   // We need to write enough to reach target
-  int32 samples_to_write = target_buffered - current_buffered;
+  i32 samples_to_write = target_buffered - current_buffered;
 
   // Clamp to available space
-  if (samples_to_write > (int32)avail_frames) {
-    samples_to_write = (int32)avail_frames;
+  if (samples_to_write > (i32)avail_frames) {
+    samples_to_write = (i32)avail_frames;
   }
 
   // Don't write negative samples!
@@ -705,8 +705,8 @@ uint32 linux_get_samples_to_write(PlatformAudioConfig *audio_config,
   }
 
   // Clamp to our buffer capacity
-  int32 max_samples = (int32)(g_linux_audio_output.sample_buffer_size /
-                              audio_config->bytes_per_sample);
+  i32 max_samples = (i32)(g_linux_audio_output.sample_buffer_size /
+                          audio_config->bytes_per_sample);
   if (samples_to_write > max_samples) {
     samples_to_write = max_samples;
   }
@@ -728,20 +728,20 @@ uint32 linux_get_samples_to_write(PlatformAudioConfig *audio_config,
 
   LinuxDebugAudioMarker *marker = &g_debug_audio_markers[g_debug_marker_index];
 
-  uint32 buffer_size_bytes =
+  u32 buffer_size_bytes =
       g_linux_audio_output.buffer_size * audio_config->bytes_per_sample;
 
   // Convert running_sample_index to byte position within buffer (wrapped)
   // This is like Casey's ByteToLock calculation
-  uint32 byte_to_lock = (uint32)((audio_config->running_sample_index *
-                                  audio_config->bytes_per_sample) %
-                                 buffer_size_bytes);
+  u32 byte_to_lock = (u32)((audio_config->running_sample_index *
+                            audio_config->bytes_per_sample) %
+                           buffer_size_bytes);
 
   // Calculate play cursor position within buffer
   // play_cursor_bytes = where hardware is currently playing
   // In ALSA: play_pos = (write_pos - delay) wrapped to buffer
-  uint32 delay_bytes = (uint32)delay_frames * audio_config->bytes_per_sample;
-  uint32 play_cursor_bytes;
+  u32 delay_bytes = (u32)delay_frames * audio_config->bytes_per_sample;
+  u32 play_cursor_bytes;
   if (byte_to_lock >= delay_bytes) {
     play_cursor_bytes = byte_to_lock - delay_bytes;
   } else {
@@ -751,22 +751,20 @@ uint32 linux_get_samples_to_write(PlatformAudioConfig *audio_config,
 
   // Write cursor = where we CAN write = play + (buffer - avail)
   // In DirectSound terms: WriteCursor is ahead of PlayCursor
-  uint32 avail_bytes = (uint32)avail_frames * audio_config->bytes_per_sample;
-  uint32 write_cursor_bytes =
+  u32 avail_bytes = (u32)avail_frames * audio_config->bytes_per_sample;
+  u32 write_cursor_bytes =
       (play_cursor_bytes + (buffer_size_bytes - avail_bytes)) %
       buffer_size_bytes;
 
   // Expected flip play cursor = play cursor + one frame of samples
-  int32 samples_per_frame =
+  i32 samples_per_frame =
       audio_config->samples_per_second / audio_config->game_update_hz;
-  uint32 frame_bytes =
-      (uint32)samples_per_frame * audio_config->bytes_per_sample;
-  uint32 expected_flip_cursor =
+  u32 frame_bytes = (u32)samples_per_frame * audio_config->bytes_per_sample;
+  u32 expected_flip_cursor =
       (play_cursor_bytes + frame_bytes) % buffer_size_bytes;
 
   // Bytes we're about to write
-  uint32 bytes_to_write =
-      (uint32)samples_to_write * audio_config->bytes_per_sample;
+  u32 bytes_to_write = (u32)samples_to_write * audio_config->bytes_per_sample;
 
   // Store in marker (all values are now within [0, buffer_size_bytes))
   marker->output_play_cursor = play_cursor_bytes;
@@ -778,8 +776,8 @@ uint32 linux_get_samples_to_write(PlatformAudioConfig *audio_config,
   marker->expected_flip_play_cursor = expected_flip_cursor;
 
   // Safe write cursor (for visualization of target zone)
-  uint32 safety_bytes = (uint32)g_linux_audio_output.safety_sample_count *
-                        audio_config->bytes_per_sample;
+  u32 safety_bytes = (u32)g_linux_audio_output.safety_sample_count *
+                     audio_config->bytes_per_sample;
   marker->output_safe_write_cursor =
       (write_cursor_bytes + safety_bytes) % buffer_size_bytes;
 #endif
@@ -863,8 +861,8 @@ void linux_clear_audio_buffer(PlatformAudioConfig *audio_config) {
                 g_linux_audio_output.sample_buffer_size);
 
   // Calculate how many samples to write (fill the buffer)
-  int32 samples_to_clear = (int32)(g_linux_audio_output.sample_buffer_size /
-                                   audio_config->bytes_per_sample);
+  i32 samples_to_clear = (i32)(g_linux_audio_output.sample_buffer_size /
+                               audio_config->bytes_per_sample);
 
   // Write silence
   SndPcmWritei(g_linux_audio_output.pcm_handle,
@@ -993,7 +991,7 @@ void linux_audio_fps_change_handling(GameAudioOutputBuffer *audio_output,
   }
 
   // Recalculate latency values based on new game_update_hz
-  int32 samples_per_frame =
+  i32 samples_per_frame =
       audio_config->samples_per_second / audio_config->game_update_hz;
 
   g_linux_audio_output.latency_sample_count =
@@ -1039,17 +1037,17 @@ void linux_debug_capture_flip_state(PlatformAudioConfig *audio_config) {
   // Calculate byte positions within buffer (matching Casey's approach)
   // ═══════════════════════════════════════════════════════════════════════
 
-  uint32 buffer_size_bytes =
+  u32 buffer_size_bytes =
       g_linux_audio_output.buffer_size * audio_config->bytes_per_sample;
 
   // Current write position within buffer
-  uint32 current_byte_pos = (uint32)((audio_config->running_sample_index *
-                                      audio_config->bytes_per_sample) %
-                                     buffer_size_bytes);
+  u32 current_byte_pos = (u32)((audio_config->running_sample_index *
+                                audio_config->bytes_per_sample) %
+                               buffer_size_bytes);
 
   // Play cursor = write position - delay (wrapped)
-  uint32 delay_bytes = (uint32)delay_frames * audio_config->bytes_per_sample;
-  uint32 play_cursor_bytes;
+  u32 delay_bytes = (u32)delay_frames * audio_config->bytes_per_sample;
+  u32 play_cursor_bytes;
   if (current_byte_pos >= delay_bytes) {
     play_cursor_bytes = current_byte_pos - delay_bytes;
   } else {
@@ -1057,8 +1055,8 @@ void linux_debug_capture_flip_state(PlatformAudioConfig *audio_config) {
   }
 
   // Write cursor = play + (buffer - avail)
-  uint32 avail_bytes = (uint32)avail_frames * audio_config->bytes_per_sample;
-  uint32 write_cursor_bytes =
+  u32 avail_bytes = (u32)avail_frames * audio_config->bytes_per_sample;
+  u32 write_cursor_bytes =
       (play_cursor_bytes + (buffer_size_bytes - avail_bytes)) %
       buffer_size_bytes;
 
@@ -1103,34 +1101,32 @@ void linux_debug_capture_flip_state(PlatformAudioConfig *audio_config) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 // Helper: Blend a color with the existing pixel (for semi-transparency)
-de100_file_scoped_fn uint32 linux_debug_blend_color(uint32 existing,
-                                                    uint32 color,
-                                                    uint32 alpha) {
+de100_file_scoped_fn u32 linux_debug_blend_color(u32 existing, u32 color,
+                                                 u32 alpha) {
   // alpha: 0 = fully transparent, 255 = fully opaque
-  uint32 inv_alpha = 255 - alpha;
+  u32 inv_alpha = 255 - alpha;
 
-  uint32 r_exist = (existing >> 16) & 0xFF;
-  uint32 g_exist = (existing >> 8) & 0xFF;
-  uint32 b_exist = existing & 0xFF;
+  u32 r_exist = (existing >> 16) & 0xFF;
+  u32 g_exist = (existing >> 8) & 0xFF;
+  u32 b_exist = existing & 0xFF;
 
-  uint32 r_new = (color >> 16) & 0xFF;
-  uint32 g_new = (color >> 8) & 0xFF;
-  uint32 b_new = color & 0xFF;
+  u32 r_new = (color >> 16) & 0xFF;
+  u32 g_new = (color >> 8) & 0xFF;
+  u32 b_new = color & 0xFF;
 
-  uint32 r = (r_new * alpha + r_exist * inv_alpha) / 255;
-  uint32 g = (g_new * alpha + g_exist * inv_alpha) / 255;
-  uint32 b = (b_new * alpha + b_exist * inv_alpha) / 255;
+  u32 r = (r_new * alpha + r_exist * inv_alpha) / 255;
+  u32 g = (g_new * alpha + g_exist * inv_alpha) / 255;
+  u32 b = (b_new * alpha + b_exist * inv_alpha) / 255;
 
   return 0xFF000000 | (r << 16) | (g << 8) | b;
 }
 
 // Helper: Draw a horizontal region (bar) between two X positions
-de100_file_scoped_fn void linux_debug_draw_bar(GameBackBuffer *buffer, int32 x1,
-                                               int32 x2, int32 top,
-                                               int32 bottom, uint32 color,
-                                               uint32 alpha) {
+de100_file_scoped_fn void linux_debug_draw_bar(GameBackBuffer *buffer, i32 x1,
+                                               i32 x2, i32 top, i32 bottom,
+                                               u32 color, u32 alpha) {
   if (x1 > x2) {
-    int32 tmp = x1;
+    i32 tmp = x1;
     x1 = x2;
     x2 = tmp;
   }
@@ -1143,10 +1139,9 @@ de100_file_scoped_fn void linux_debug_draw_bar(GameBackBuffer *buffer, int32 x1,
   if (bottom > buffer->height)
     bottom = buffer->height;
 
-  for (int32 y = top; y < bottom; y++) {
-    uint32 *row_start =
-        (uint32 *)((uint8 *)buffer->memory.base + y * buffer->pitch);
-    for (int32 x = x1; x < x2; x++) {
+  for (i32 y = top; y < bottom; y++) {
+    u32 *row_start = (u32 *)((u8 *)buffer->memory.base + y * buffer->pitch);
+    for (i32 x = x1; x < x2; x++) {
       if (alpha >= 255) {
         row_start[x] = color;
       } else {
@@ -1173,55 +1168,55 @@ void linux_debug_sync_display(GameBackBuffer *buffer,
   }
 
   // Alpha based on display mode
-  uint32 alpha =
+  u32 alpha =
       (g_audio_debug_display_mode == AUDIO_DEBUG_DISPLAY_SEMI_TRANSPARENT)
           ? 128  // ~50% transparent
           : 255; // Fully opaque
 
   // Layout constants (smaller for less intrusive display)
-  int32 pad_x = 8;
-  int32 pad_y = 4;
-  int32 row_height = 3;  // Height of each marker row (smaller)
-  int32 row_spacing = 1; // Gap between rows
+  i32 pad_x = 8;
+  i32 pad_y = 4;
+  i32 row_height = 3;  // Height of each marker row (smaller)
+  i32 row_spacing = 1; // Gap between rows
 
   // ALSA buffer size in frames
-  uint32 buffer_size_frames = g_linux_audio_output.buffer_size;
+  u32 buffer_size_frames = g_linux_audio_output.buffer_size;
   if (buffer_size_frames == 0)
     return;
 
   // Scale: map buffer frames to screen pixels
-  int32 drawable_width = buffer->width - 2 * pad_x;
+  i32 drawable_width = buffer->width - 2 * pad_x;
   f32 scale = (f32)drawable_width / (f32)buffer_size_frames;
 
   // Colors
-  uint32 delay_color = 0xFFFFFFFF;   // White: queued/playing audio
-  uint32 avail_color = 0xFF404040;   // Dark gray: available space (background)
-  uint32 written_color = 0xFF00FF00; // Green: samples we just wrote
-  uint32 target_color = 0xFFFFFF00;  // Yellow: target latency marker
-  uint32 safety_color = 0xFFFF00FF;  // Magenta: safety margin
+  u32 delay_color = 0xFFFFFFFF;   // White: queued/playing audio
+  u32 avail_color = 0xFF404040;   // Dark gray: available space (background)
+  u32 written_color = 0xFF00FF00; // Green: samples we just wrote
+  u32 target_color = 0xFFFFFF00;  // Yellow: target latency marker
+  u32 safety_color = 0xFFFF00FF;  // Magenta: safety margin
 
   // Target latency in frames (for reference line)
-  int32 target_latency_frames = g_linux_audio_output.latency_sample_count;
-  int32 safety_frames = g_linux_audio_output.safety_sample_count;
+  i32 target_latency_frames = g_linux_audio_output.latency_sample_count;
+  i32 safety_frames = g_linux_audio_output.safety_sample_count;
 
   // ═══════════════════════════════════════════════════════════════════════
   // ROW 0: Reference bar showing ideal buffer state
   // ═══════════════════════════════════════════════════════════════════════
   {
-    int32 top = pad_y;
-    int32 bottom = top + row_height;
+    i32 top = pad_y;
+    i32 bottom = top + row_height;
 
     // Draw full buffer as dark background
     linux_debug_draw_bar(buffer, pad_x, pad_x + drawable_width, top, bottom,
                          avail_color, alpha);
 
     // Draw target latency zone (yellow)
-    int32 target_x = pad_x + (int32)(scale * target_latency_frames);
+    i32 target_x = pad_x + (i32)(scale * target_latency_frames);
     linux_debug_draw_bar(buffer, target_x, target_x + 2, top, bottom,
                          target_color, alpha);
 
     // Draw safety margin (magenta)
-    int32 safety_x = pad_x + (int32)(scale * safety_frames);
+    i32 safety_x = pad_x + (i32)(scale * safety_frames);
     linux_debug_draw_bar(buffer, safety_x, safety_x + 2, top, bottom,
                          safety_color, alpha);
   }
@@ -1254,8 +1249,8 @@ void linux_debug_sync_display(GameBackBuffer *buffer,
 
     // Row position: newest at top (row 1), oldest at bottom
     int row_from_top = marker_count - 1 - i;
-    int32 top = pad_y + (row_height + row_spacing) * (1 + row_from_top);
-    int32 bottom = top + row_height;
+    i32 top = pad_y + (row_height + row_spacing) * (1 + row_from_top);
+    i32 bottom = top + row_height;
 
     // Clamp to screen
     if (bottom > buffer->height - pad_y)
@@ -1280,7 +1275,7 @@ void linux_debug_sync_display(GameBackBuffer *buffer,
 
     // Draw queued audio (white bar from left edge to delay position)
     // This represents audio that's buffered and waiting to play
-    int32 delay_x = pad_x + (int32)(scale * delay);
+    i32 delay_x = pad_x + (i32)(scale * delay);
     if (delay_x > pad_x) {
       linux_debug_draw_bar(buffer, pad_x, delay_x, top, bottom, delay_color,
                            alpha);
@@ -1290,12 +1285,11 @@ void linux_debug_sync_display(GameBackBuffer *buffer,
     if (i == marker_count - 1) {
       // Show where we wrote (green line at output_location, but in frames)
       // output_sample_count is in bytes, convert to frames
-      int32 bytes_per_frame = audio_config->bytes_per_sample;
-      int32 written_frames =
-          (int32)marker->output_sample_count / bytes_per_frame;
+      i32 bytes_per_frame = audio_config->bytes_per_sample;
+      i32 written_frames = (i32)marker->output_sample_count / bytes_per_frame;
       if (written_frames > 0) {
-        int32 write_start_x = delay_x; // We write at the end of queued data
-        int32 write_end_x = delay_x + (int32)(scale * written_frames);
+        i32 write_start_x = delay_x; // We write at the end of queued data
+        i32 write_end_x = delay_x + (i32)(scale * written_frames);
         linux_debug_draw_bar(buffer, write_start_x, write_end_x, top, bottom,
                              written_color, alpha);
       }

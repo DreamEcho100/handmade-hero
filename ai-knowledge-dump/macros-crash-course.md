@@ -718,7 +718,7 @@ enum Color {
 
 // Generate value array
 #define X(name, value) value,
-uint32_t color_values[] = {
+u32_t color_values[] = {
     COLORS
 };
 #undef X
@@ -988,7 +988,7 @@ size_t cache_size = KB(64);   // 64 kilobytes
 #define SET_BITS(x, mask)   ((x) |= (mask))
 #define CLEAR_BITS(x, mask) ((x) &= ~(mask))
 
-uint32_t flags = 0;
+u32_t flags = 0;
 SET_BIT(flags, 3);      // Set bit 3
 if (CHECK_BIT(flags, 3)) {
     printf("Bit 3 is set\n");
@@ -1170,10 +1170,10 @@ typedef int16_t   i16;
 typedef int32_t   i32;
 typedef int64_t   i64;
 
-typedef uint8_t   u8;
-typedef uint16_t  u16;
-typedef uint32_t  u32;
-typedef uint64_t  u64;
+typedef u8_t   u8;
+typedef u16_t  u16;
+typedef u32_t  u32;
+typedef u64_t  u64;
 
 typedef float     f32;
 typedef double    f64;
@@ -1186,7 +1186,7 @@ typedef ptrdiff_t isize;
 typedef int32_t   b32;  // 32-bit bool for alignment
 
 // Byte
-typedef uint8_t   byte;
+typedef u8_t   byte;
 
 // Memory sizes
 #define KB(n) ((usize)(n) * 1024)
@@ -1203,10 +1203,10 @@ typedef uint8_t   byte;
 #define I64_MIN INT64_MIN
 #define I64_MAX INT64_MAX
 
-#define U8_MAX  UINT8_MAX
-#define U16_MAX UINT16_MAX
-#define U32_MAX UINT32_MAX
-#define U64_MAX UINT64_MAX
+#define U8_MAX  u8_MAX
+#define U16_MAX u16_MAX
+#define U32_MAX u32_MAX
+#define U64_MAX u64_MAX
 
 #endif // PLATFORM_TYPES_H
 ```
@@ -2298,7 +2298,7 @@ int main(void) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 typedef struct {
-    uint8_t *base;
+    u8_t *base;
     size_t size;
     size_t used;
     size_t peak;
@@ -2307,7 +2307,7 @@ typedef struct {
 // Initialize arena with existing memory
 #define arena_init(arena, memory, mem_size) \
     do { \
-        (arena)->base = (uint8_t *)(memory); \
+        (arena)->base = (u8_t *)(memory); \
         (arena)->size = (mem_size); \
         (arena)->used = 0; \
         (arena)->peak = 0; \
@@ -2393,7 +2393,7 @@ typedef struct {
 
 int main(void) {
     // Create arena with 1MB of memory
-    uint8_t memory[1024 * 1024];
+    u8_t memory[1024 * 1024];
     Arena arena;
     arena_init(&arena, memory, sizeof(memory));
 

@@ -5,17 +5,17 @@
 #include "../../game/config.h"
 
 typedef struct {
-  uint32 frames_sampled;
-  uint32 frames_missed;
+  u32 frames_sampled;
+  u32 frames_missed;
   // Time-based instead of frame-based
   f32 sample_window_seconds;
   f32 miss_threshold;
   f32 recover_threshold;
-  uint32 frames_since_last_change;
-  uint32 cooldown_frames;
+  u32 frames_since_last_change;
+  u32 cooldown_frames;
 
   // Quick recovery tracking
-  uint32 consecutive_good_frames;
+  u32 consecutive_good_frames;
   f32 recent_frame_times[10];
   int recent_frame_index;
   // Track valid samples

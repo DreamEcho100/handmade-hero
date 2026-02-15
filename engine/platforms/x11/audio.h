@@ -123,13 +123,13 @@ typedef struct {
   snd_pcm_t *pcm_handle;
   void *alsa_library;
 
-  uint32 buffer_size;
+  u32 buffer_size;
 
   De100MemoryBlock sample_buffer;
-  uint32 sample_buffer_size;
+  u32 sample_buffer_size;
 
-  int32 latency_sample_count;
-  int32 latency_microseconds;
+  i32 latency_sample_count;
+  i32 latency_microseconds;
 
   // Day 20DirectSound has SafetyBytes:
   // - Accounts for frame timing variance
@@ -140,7 +140,7 @@ typedef struct {
   // - Same purpose
   // - Same calculation (but in samples, not bytes)
   // - Formula: (samples_per_second / game_update_hz) / 3
-  int32 safety_sample_count; // Safety margin (1/3 frame worth of samples)
+  i32 safety_sample_count; // Safety margin (1/3 frame worth of samples)
 } LinuxSoundOutput;
 
 extern LinuxSoundOutput g_linux_audio_output;
@@ -177,23 +177,23 @@ typedef struct {
   // Unlike DirectSound, ALSA doesn't give us cursors directly
   // We calculate them from running_sample_index and delay
 
-  int64 output_play_cursor;  // Virtual play cursor (RSI - delay)
-  int64 output_write_cursor; // This is now the ACTUAL write cursor
-  int64 output_location;     // Where we started writing (RSI)
-  int64 output_sample_count; // How many samples we wrote
+  i64 output_play_cursor;  // Virtual play cursor (RSI - delay)
+  i64 output_write_cursor; // This is now the ACTUAL write cursor
+  i64 output_location;     // Where we started writing (RSI)
+  i64 output_sample_count; // How many samples we wrote
 
   // ══════════════════════════════════════════════════════════
   // PREDICTION
   // ══════════════════════════════════════════════════════════
   // Where we PREDICT the play cursor will be at frame flip
-  int64 expected_flip_play_cursor;
+  i64 expected_flip_play_cursor;
 
   // ══════════════════════════════════════════════════════════
   // CAPTURED AFTER SCREEN FLIP (Flip State)
   // ══════════════════════════════════════════════════════════
   // Actual cursor positions after frame display
-  int64 flip_play_cursor;  // Actual play cursor after flip
-  int64 flip_write_cursor; // Actual write cursor after flip
+  i64 flip_play_cursor;  // Actual play cursor after flip
+  i64 flip_write_cursor; // Actual write cursor after flip
 
   // ══════════════════════════════════════════════════════════
   // ALSA-SPECIFIC DATA (for debugging ALSA behavior)
@@ -204,7 +204,7 @@ typedef struct {
   snd_pcm_sframes_t flip_avail_frames;   // ALSA avail at flip time
                                          //
   // ✅ NEW: Store safe write cursor for reference
-  int64 output_safe_write_cursor; // ← ADD THIS
+  i64 output_safe_write_cursor; // ← ADD THIS
 
 } LinuxDebugAudioMarker;
 
@@ -235,11 +235,11 @@ void linux_debug_sync_display(GameBackBuffer *buffer,
 
 void linux_load_alsa(void);
 
-bool linux_init_audio(PlatformAudioConfig *audio_config,
-                      int32 samples_per_second, int32 game_update_hz);
+bool linux_init_audio(PlatformAudioConfig *audio_config, i32 samples_per_second,
+                      i32 game_update_hz);
 
-uint32 linux_get_samples_to_write(PlatformAudioConfig *audio_config,
-                                  GameAudioOutputBuffer *audio_output);
+u32 linux_get_samples_to_write(PlatformAudioConfig *audio_config,
+                               GameAudioOutputBuffer *audio_output);
 void linux_debug_audio_latency(
     // GameAudioOutputBuffer *audio_output,
     PlatformAudioConfig *audio_config

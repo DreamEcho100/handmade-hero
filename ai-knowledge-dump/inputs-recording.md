@@ -1009,7 +1009,7 @@
 │  ───────────                                                                │
 │                                                                             │
 │  ReplayBuffer *replay_buffer_get(GameMemoryState *state,                    │
-│                                  int32 slot_index);                         │
+│                                  i32 slot_index);                         │
 │                                                                             │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │ Purpose: Get pointer to a specific replay buffer slot               │   │
@@ -1023,7 +1023,7 @@
 │  ───────────                                                                │
 │                                                                             │
 │  bool replay_buffer_save_state(GameMemoryState *state,                      │
-│                                int32 slot_index);                           │
+│                                i32 slot_index);                           │
 │                                                                             │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │ Purpose: Snapshot game memory to replay buffer (FAST!)              │   │
@@ -1040,7 +1040,7 @@
 │  ──────────────                                                             │
 │                                                                             │
 │  bool replay_buffer_restore_state(GameMemoryState *state,                   │
-│                                   int32 slot_index);                        │
+│                                   i32 slot_index);                        │
 │                                                                             │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │ Purpose: Restore game memory from replay buffer (FAST!)             │   │
@@ -1256,9 +1256,9 @@
 │  │     // Game decides whether to reset inputs on playback stop        │   │
 │  │     if (result == INPUT_RECORDING_TOGGLE_STOPPED_PLAYBACK) {        │   │
 │  │         // Reset all controller states to prevent "stuck keys"      │   │
-│  │         for (uint32 c = 0; c < MAX_CONTROLLER_COUNT; c++) {         │   │
+│  │         for (u32 c = 0; c < MAX_CONTROLLER_COUNT; c++) {         │   │
 │  │             GameControllerInput *ctrl = &inputs->controllers[c];    │   │
-│  │             for (uint32 b = 0; b < ArraySize(ctrl->buttons); b++) { │   │
+│  │             for (u32 b = 0; b < ArraySize(ctrl->buttons); b++) { │   │
 │  │                 ctrl->buttons[b].ended_down = false;                │   │
 │  │                 ctrl->buttons[b].half_transition_count = 0;         │   │
 │  │             }                                                       │   │
@@ -1496,9 +1496,9 @@
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │ if (result == INPUT_RECORDING_TOGGLE_STOPPED_PLAYBACK) {            │   │
 │  │     // Reset current inputs                                         │   │
-│  │     for (uint32 c = 0; c < MAX_CONTROLLER_COUNT; c++) {             │   │
+│  │     for (u32 c = 0; c < MAX_CONTROLLER_COUNT; c++) {             │   │
 │  │         GameControllerInput *ctrl = &inputs->controllers[c];        │   │
-│  │         for (uint32 b = 0; b < ArraySize(ctrl->buttons); b++) {     │   │
+│  │         for (u32 b = 0; b < ArraySize(ctrl->buttons); b++) {     │   │
 │  │             ctrl->buttons[b].ended_down = false;                    │   │
 │  │             ctrl->buttons[b].half_transition_count = 0;             │   │
 │  │         }                                                           │   │
@@ -2023,11 +2023,11 @@ de100_file_scoped_fn void prefault_mapped_memory(void *ptr, size_t size) {
 
 // In replay_buffers_init(), after successful mmap:
 ReplayBufferInitResult replay_buffers_init(const char *exe_directory,
-                                           void *game_memory, uint64 total_size,
+                                           void *game_memory, u64 total_size,
                                            ReplayBuffer *out_buffers) {
     // ... existing code ...
 
-    for (int32 slot = 0; slot < MAX_REPLAY_BUFFERS; ++slot) {
+    for (i32 slot = 0; slot < MAX_REPLAY_BUFFERS; ++slot) {
         ReplayBuffer *buffer = &out_buffers[slot];
 
         // ... existing mmap code ...
@@ -2068,7 +2068,7 @@ Linux has a flag that tells the kernel to pre-fault all pages:
 #if defined(__linux__)
 
 de100_file_scoped_fn void *
-platform_mmap_file(int32 fd, uint64 size, ReplayBufferErrorCode *out_error) {
+platform_mmap_file(i32 fd, u64 size, ReplayBufferErrorCode *out_error) {
     *out_error = REPLAY_BUFFER_SUCCESS;
 
     // MAP_POPULATE: Pre-fault all pages during mmap()
@@ -2160,7 +2160,7 @@ Here's the minimal change to make first recording fast on Linux:
 #else // POSIX
 
 de100_file_scoped_fn void *
-platform_mmap_file(int32 fd, uint64 size, ReplayBufferErrorCode *out_error) {
+platform_mmap_file(i32 fd, u64 size, ReplayBufferErrorCode *out_error) {
     *out_error = REPLAY_BUFFER_SUCCESS;
 
     int mmap_flags = MAP_SHARED;
@@ -2336,16 +2336,16 @@ Or even simpler - just embed the single buffer directly:
 ```c:project/engine/game/memory.h
 typedef struct {
     // Memory tracking
-    uint64 total_size;
+    u64 total_size;
     void* game_memory;
 
     // Recording state
-    int32 recording_fd;
-    int32 input_recording_index;
+    i32 recording_fd;
+    i32 input_recording_index;
 
     // Playback state
-    int32 playback_fd;
-    int32 input_playing_index;
+    i32 playback_fd;
+    i32 input_playing_index;
 
     // Single replay buffer (no array needed!)
     ReplayBuffer replay_buffer;
@@ -2358,8 +2358,8 @@ And simplify the API:
 ```c:project/engine/platforms/_common/replay-buffer.h
 // Instead of:
 bool replay_buffers_init(const char *exe_directory, GameMemoryState *state);
-bool replay_buffer_save_state(GameMemoryState *state, int32 slot_index);
-bool replay_buffer_restore_state(GameMemoryState *state, int32 slot_index);
+bool replay_buffer_save_state(GameMemoryState *state, i32 slot_index);
+bool replay_buffer_restore_state(GameMemoryState *state, i32 slot_index);
 
 // Just:
 bool replay_buffer_init(const char *exe_directory, GameMemoryState *state);

@@ -13,8 +13,8 @@ typedef struct {
   // f32 total_ms;
   f32 sleep_seconds;
 #if DE100_INTERNAL
-  uint64 start_cycles;
-  uint64 end_cycles;
+  u64 start_cycles;
+  u64 end_cycles;
 #endif
 } FrameTiming;
 extern FrameTiming g_frame_timing;

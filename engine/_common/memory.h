@@ -79,8 +79,8 @@ typedef struct {
   size_t total_size;           // Total size including guard pages
   De100MemoryFlags flags;      // Flags used for allocation
   De100MemoryError error_code; // Error code (De100_MEMORY_OK if valid)
-  uint32 generation; // Incremented on each realloc to detect stale refs
-  bool is_valid;     // Quick validity check
+  u32 generation; // Incremented on each realloc to detect stale refs
+  bool is_valid;  // Quick validity check
 } De100MemoryBlock;
 
 // ═══════════════════════════════════════════════════════════════════════════

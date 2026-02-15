@@ -43,7 +43,7 @@ typedef enum {
 // ═══════════════════════════════════════════════════════════════════════════
 
 typedef struct {
-  int32 file_fd;      // File descriptor
+  i32 file_fd;        // File descriptor
   void *memory_block; // mmap'd region (or allocated block on Windows)
   size_t mapped_size; // Size of the mapped region
   char filename[REPLAY_BUFFER_FILENAME_MAX]; // Path to backing file
@@ -58,7 +58,7 @@ typedef struct {
 typedef struct {
   bool success;
   ReplayBufferErrorCode error_code;
-  int32 buffers_initialized; // How many buffers were successfully initialized
+  i32 buffers_initialized; // How many buffers were successfully initialized
 } ReplayBufferInitResult;
 
 typedef struct {
@@ -84,7 +84,7 @@ typedef struct {
  * buffers
  */
 ReplayBufferInitResult replay_buffers_init(const char *exe_directory,
-                                           void *game_memory, uint64 total_size,
+                                           void *game_memory, u64 total_size,
                                            ReplayBuffer *out_buffers);
 
 /**
@@ -96,7 +96,7 @@ ReplayBufferInitResult replay_buffers_init(const char *exe_directory,
  * @param buffers     Array of replay buffers to shutdown
  * @param total_size  Size that was mapped (needed for munmap)
  */
-void replay_buffers_shutdown(ReplayBuffer *buffers, uint64 total_size);
+void replay_buffers_shutdown(ReplayBuffer *buffers, u64 total_size);
 
 /**
  * Get a specific replay buffer with bounds checking.
@@ -105,7 +105,7 @@ void replay_buffers_shutdown(ReplayBuffer *buffers, uint64 total_size);
  * @param slot_index  Which slot (0 to MAX_REPLAY_BUFFERS-1)
  * @return            Pointer to buffer, or NULL if invalid index
  */
-ReplayBuffer *replay_buffer_get(ReplayBuffer *buffers, int32 slot_index);
+ReplayBuffer *replay_buffer_get(ReplayBuffer *buffers, i32 slot_index);
 
 /**
  * Save game state to a replay buffer.
@@ -120,7 +120,7 @@ ReplayBuffer *replay_buffer_get(ReplayBuffer *buffers, int32 slot_index);
  */
 ReplayBufferResult replay_buffer_save_state(ReplayBuffer *buffer,
                                             const void *game_memory,
-                                            uint64 total_size);
+                                            u64 total_size);
 
 /**
  * Restore game state from a replay buffer.
@@ -135,7 +135,7 @@ ReplayBufferResult replay_buffer_save_state(ReplayBuffer *buffer,
  */
 ReplayBufferResult replay_buffer_restore_state(const ReplayBuffer *buffer,
                                                void *game_memory,
-                                               uint64 total_size);
+                                               u64 total_size);
 
 /**
  * Check if a replay buffer is valid and ready for use.

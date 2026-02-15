@@ -57,7 +57,7 @@ const char *replay_buffer_strerror(ReplayBufferErrorCode code) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 de100_file_scoped_fn inline void get_state_filename(const char *exe_directory,
-                                                    int32 slot_index,
+                                                    i32 slot_index,
                                                     char *buffer,
                                                     size_t buffer_size) {
   snprintf(buffer, buffer_size, "%sloop_edit_%d_state.hmi", exe_directory,
@@ -79,7 +79,7 @@ make_result(bool success, ReplayBufferErrorCode code) {
  * Windows memory-mapping implementation.
  * Uses CreateFileMapping + MapViewOfFile.
  */
-de100_file_scoped_fn void *de100_mmap_file(int32 fd, uint64 size,
+de100_file_scoped_fn void *de100_mmap_file(i32 fd, u64 size,
                                            ReplayBufferErrorCode *out_error) {
   *out_error = REPLAY_BUFFER_SUCCESS;
 
@@ -121,14 +121,14 @@ de100_file_scoped_fn void *de100_mmap_file(int32 fd, uint64 size,
   return ptr;
 }
 
-de100_file_scoped_fn void de100_munmap_file(void *ptr, uint64 size) {
+de100_file_scoped_fn void de100_munmap_file(void *ptr, u64 size) {
   (void)size; // Windows doesn't need size for unmap
   if (ptr) {
     UnmapViewOfFile(ptr);
   }
 }
 
-de100_file_scoped_fn bool de100_file_resize(int32 fd, uint64 size) {
+de100_file_scoped_fn bool de100_file_resize(i32 fd, u64 size) {
   HANDLE file_handle = (HANDLE)_get_osfhandle(fd);
   if (file_handle == INVALID_HANDLE_VALUE) {
     return false;
@@ -150,7 +150,7 @@ de100_file_scoped_fn bool de100_file_resize(int32 fd, uint64 size) {
  * POSIX memory-mapping implementation.
  * Uses mmap directly.
  */
-de100_file_scoped_fn void *de100_mmap_file(int32 fd, uint64 size,
+de100_file_scoped_fn void *de100_mmap_file(i32 fd, u64 size,
                                            ReplayBufferErrorCode *out_error) {
   *out_error = REPLAY_BUFFER_SUCCESS;
 
@@ -172,13 +172,13 @@ de100_file_scoped_fn void *de100_mmap_file(int32 fd, uint64 size,
   return ptr;
 }
 
-de100_file_scoped_fn void de100_munmap_file(void *ptr, uint64 size) {
+de100_file_scoped_fn void de100_munmap_file(void *ptr, u64 size) {
   if (ptr && ptr != MAP_FAILED) {
     munmap(ptr, (size_t)size);
   }
 }
 
-de100_file_scoped_fn bool de100_file_resize(int32 fd, uint64 size) {
+de100_file_scoped_fn bool de100_file_resize(i32 fd, u64 size) {
   if (ftruncate(fd, (off_t)size) != 0) {
 #if DE100_INTERNAL && DE100_SLOW
     fprintf(stderr, "[REPLAY BUFFER] ftruncate failed: %s\n", strerror(errno));
@@ -195,7 +195,7 @@ de100_file_scoped_fn bool de100_file_resize(int32 fd, uint64 size) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 ReplayBufferInitResult replay_buffers_init(const char *exe_directory,
-                                           void *game_memory, uint64 total_size,
+                                           void *game_memory, u64 total_size,
                                            ReplayBuffer *out_buffers) {
   ReplayBufferInitResult result = {0};
 
@@ -226,7 +226,7 @@ ReplayBufferInitResult replay_buffers_init(const char *exe_directory,
   // Initialize each buffer
   // ─────────────────────────────────────────────────────────────────────
 
-  for (int32 slot = 0; slot < MAX_REPLAY_BUFFERS; ++slot) {
+  for (i32 slot = 0; slot < MAX_REPLAY_BUFFERS; ++slot) {
     ReplayBuffer *buffer = &out_buffers[slot];
 
     // Initialize to invalid state
@@ -329,7 +329,7 @@ ReplayBufferInitResult replay_buffers_init(const char *exe_directory,
 // SHUTDOWN
 // ═══════════════════════════════════════════════════════════════════════════
 
-void replay_buffers_shutdown(ReplayBuffer *buffers, uint64 total_size) {
+void replay_buffers_shutdown(ReplayBuffer *buffers, u64 total_size) {
   if (!buffers) {
     return;
   }
@@ -338,7 +338,7 @@ void replay_buffers_shutdown(ReplayBuffer *buffers, uint64 total_size) {
   printf("[REPLAY BUFFER] Shutting down...\n");
 #endif
 
-  for (int32 slot = 0; slot < MAX_REPLAY_BUFFERS; ++slot) {
+  for (i32 slot = 0; slot < MAX_REPLAY_BUFFERS; ++slot) {
     ReplayBuffer *buffer = &buffers[slot];
 
     // Unmap memory
@@ -366,7 +366,7 @@ void replay_buffers_shutdown(ReplayBuffer *buffers, uint64 total_size) {
 // GET BUFFER
 // ═══════════════════════════════════════════════════════════════════════════
 
-ReplayBuffer *replay_buffer_get(ReplayBuffer *buffers, int32 slot_index) {
+ReplayBuffer *replay_buffer_get(ReplayBuffer *buffers, i32 slot_index) {
   if (!buffers) {
     return NULL;
   }
@@ -388,7 +388,7 @@ ReplayBuffer *replay_buffer_get(ReplayBuffer *buffers, int32 slot_index) {
 
 ReplayBufferResult replay_buffer_save_state(ReplayBuffer *buffer,
                                             const void *game_memory,
-                                            uint64 total_size) {
+                                            u64 total_size) {
   if (!buffer) {
     return make_result(false, REPLAY_BUFFER_ERROR_NULL_STATE);
   }
@@ -427,7 +427,7 @@ ReplayBufferResult replay_buffer_save_state(ReplayBuffer *buffer,
 
 ReplayBufferResult replay_buffer_restore_state(const ReplayBuffer *buffer,
                                                void *game_memory,
-                                               uint64 total_size) {
+                                               u64 total_size) {
   if (!buffer) {
     return make_result(false, REPLAY_BUFFER_ERROR_NULL_STATE);
   }

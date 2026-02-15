@@ -14,7 +14,7 @@
  * Saves game state to replay buffer, opens input file for writing.
  */
 bool input_recording_begin(const char *exe_directory, GameMemoryState *state,
-                           int32 slot_index);
+                           i32 slot_index);
 
 /**
  * Record a single frame of input.
@@ -34,7 +34,7 @@ void input_recording_end(GameMemoryState *state);
  * Restores game state from replay buffer, opens input file for reading.
  */
 bool input_recording_playback_begin(const char *exe_directory,
-                                    GameMemoryState *state, int32 slot_index);
+                                    GameMemoryState *state, i32 slot_index);
 
 /**
  * Play back a single frame of input.

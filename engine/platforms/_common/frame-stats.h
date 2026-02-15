@@ -4,8 +4,8 @@
 #include "../../_common/base.h"
 
 typedef struct {
-  uint32 frame_count;
-  uint32 missed_frames;
+  u32 frame_count;
+  u32 missed_frames;
   f32 min_frame_time_ms;
   f32 max_frame_time_ms;
   f32 total_frame_time_ms;

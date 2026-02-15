@@ -116,7 +116,7 @@ Memory Layout:
 [0x1008] int age = 25
 [0x100C] float score = 95.5
 
-Like: const memory = new Uint8Array(RAM_SIZE);
+Like: const memory = new u8Array(RAM_SIZE);
 ```
 
 ### Pointers are just array indices
@@ -188,7 +188,7 @@ Use these consistently when explaining concepts:
 | Pointer | Reference, but can do math on it |
 | Stack | Call stack in debugger |
 | Heap | Managed heap in V8/Node |
-| Buffer | `ArrayBuffer`/`Uint8Array` |
+| Buffer | `ArrayBuffer`/`u8Array` |
 | Blit | `ctx.putImageData()` |
 | Event loop | `while(!WindowShouldClose())` like `setInterval()` |
 | X11 Display | WebSocket connection |
@@ -2196,7 +2196,7 @@ XDestroyImage(image);  // X11 frees data AND image
 
 // Option 2: Keep data separate
 XImage* image = XCreateImage(...);
-static uint8_t buffer[SIZE];  // Static buffer
+static u8_t buffer[SIZE];  // Static buffer
 image->data = buffer;  // Point to static
 XFree(image);  // Only free XImage, not data
 ```
@@ -2346,9 +2346,9 @@ Even though the platform code differs, preserve these Casey patterns:
 ```c
 // Casey's style - clear and obvious
 void RenderWeirdGradient(game_buffer* buffer) {
-    uint8_t* row = (uint8_t*)buffer->memory;
+    u8_t* row = (u8_t*)buffer->memory;
     for (int y = 0; y < buffer->height; y++) {
-        uint32_t* pixel = (uint32_t*)row;
+        u32_t* pixel = (u32_t*)row;
         for (int x = 0; x < buffer->width; x++) {
             *pixel++ = (x << 16) | (y << 8);  // Clear bit manipulation
         }
@@ -2360,7 +2360,7 @@ void RenderWeirdGradient(game_buffer* buffer) {
 ✅ **Performance-Conscious**
 ```c
 // Preallocate, don't allocate per-frame
-static uint32_t back_buffer[1920 * 1080];  // Static allocation
+static u32_t back_buffer[1920 * 1080];  // Static allocation
 static XImage* image;  // Created once
 
 // NOT this:
@@ -2935,15 +2935,15 @@ Accept that some latency is needed.
 **Solution:**
 ```c
 // ❌ WRONG
-uint32_t* buffer = malloc(width * height);  // Too small!
+u32_t* buffer = malloc(width * height);  // Too small!
 
 // ✅ CORRECT
-uint32_t* buffer = malloc(width * height * sizeof(uint32_t));
+u32_t* buffer = malloc(width * height * sizeof(u32_t));
 
 // Pitch usage:
-uint8_t* row = (uint8_t*)buffer;
+u8_t* row = (u8_t*)buffer;
 for (int y = 0; y < height; y++) {
-    uint32_t* pixel = (uint32_t*)row;
+    u32_t* pixel = (u32_t*)row;
     for (int x = 0; x < width; x++) {
         *pixel++ = color;
     }
@@ -3009,7 +3009,7 @@ for (int y = 0; y < height; y++) {
 
 // After: Cache calculations
 static int last_width = 0;
-static uint32_t* lookup_table = NULL;
+static u32_t* lookup_table = NULL;
 if (width != last_width) {
     // Rebuild lookup table only on resize
 }

@@ -30,7 +30,7 @@
 #if defined(_WIN32)
 
 // Windows: Cache the performance counter frequency
-de100_file_scoped_fn inline int64 win32_get_frequency(void) {
+de100_file_scoped_fn inline i64 win32_get_frequency(void) {
   // Thread-safe on Windows due to static initialization guarantees
   local_persist_var LARGE_INTEGER frequency = {0};
   local_persist_var bool initialized = false;
@@ -47,8 +47,8 @@ de100_file_scoped_fn inline int64 win32_get_frequency(void) {
 
 // macOS: Cache the mach timebase info
 typedef struct {
-  uint32 numer;
-  uint32 denom;
+  u32 numer;
+  u32 denom;
   bool initialized;
 } CachedTimebase;
 
@@ -84,7 +84,7 @@ f64 de100_get_wall_clock(void) {
   LARGE_INTEGER counter;
   QueryPerformanceCounter(&counter);
 
-  int64 frequency = win32_get_frequency();
+  i64 frequency = win32_get_frequency();
 
   return (f64)counter.QuadPart / (f64)frequency;
 
@@ -96,11 +96,11 @@ f64 de100_get_wall_clock(void) {
   // numer/denom converts ticks to nanoseconds.
   // ─────────────────────────────────────────────────────────────────────
 
-  uint64 time = mach_absolute_time();
+  u64 time = mach_absolute_time();
   CachedTimebase tb = macos_get_timebase();
 
   // Convert to nanoseconds, then to seconds
-  uint64 nanos = time * tb.numer / tb.denom;
+  u64 nanos = time * tb.numer / tb.denom;
 
   return (f64)nanos / 1000000000.0;
 
@@ -168,7 +168,7 @@ void de100_sleep_seconds(f64 seconds) {
 #endif
 }
 
-void de100_sleep_ms(uint32 milliseconds) {
+void de100_sleep_ms(u32 milliseconds) {
   if (milliseconds == 0) {
     return;
   }
@@ -192,24 +192,24 @@ void de100_get_timespec(De100TimeSpec *out_time) {
   LARGE_INTEGER counter;
   QueryPerformanceCounter(&counter);
 
-  int64 frequency = win32_get_frequency();
+  i64 frequency = win32_get_frequency();
 
-  out_time->seconds = (int64)(counter.QuadPart / frequency);
-  int64 remainder = counter.QuadPart % frequency;
-  out_time->nanoseconds = (int64)(remainder * 1000000000 / frequency);
+  out_time->seconds = (i64)(counter.QuadPart / frequency);
+  i64 remainder = counter.QuadPart % frequency;
+  out_time->nanoseconds = (i64)(remainder * 1000000000 / frequency);
 
 #elif defined(__APPLE__)
   // ─────────────────────────────────────────────────────────────────────
   // MACOS: Convert mach_absolute_time to seconds + nanoseconds
   // ─────────────────────────────────────────────────────────────────────
 
-  uint64 time = mach_absolute_time();
+  u64 time = mach_absolute_time();
   CachedTimebase tb = macos_get_timebase();
 
-  uint64 nanos = time * tb.numer / tb.denom;
+  u64 nanos = time * tb.numer / tb.denom;
 
-  out_time->seconds = (int64)(nanos / 1000000000ULL);
-  out_time->nanoseconds = (int64)(nanos % 1000000000ULL);
+  out_time->seconds = (i64)(nanos / 1000000000ULL);
+  out_time->nanoseconds = (i64)(nanos % 1000000000ULL);
 
 #elif defined(__linux__) || defined(__FreeBSD__) || defined(__unix__)
   // ─────────────────────────────────────────────────────────────────────
@@ -219,8 +219,8 @@ void de100_get_timespec(De100TimeSpec *out_time) {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
 
-  out_time->seconds = (int64)ts.tv_sec;
-  out_time->nanoseconds = (int64)ts.tv_nsec;
+  out_time->seconds = (i64)ts.tv_sec;
+  out_time->nanoseconds = (i64)ts.tv_nsec;
 
 #else
 #error "de100_get_timespec() not implemented for this platform"
@@ -245,8 +245,8 @@ f64 de100_timespec_diff_seconds(const De100TimeSpec *start,
   }
 
   // Calculate difference with proper handling of nanosecond underflow
-  int64 sec_diff = end->seconds - start->seconds;
-  int64 nsec_diff = end->nanoseconds - start->nanoseconds;
+  i64 sec_diff = end->seconds - start->seconds;
+  i64 nsec_diff = end->nanoseconds - start->nanoseconds;
 
   // Handle nanosecond underflow
   if (nsec_diff < 0) {
@@ -264,13 +264,13 @@ f64 de100_timespec_diff_milliseconds(const De100TimeSpec *start,
   }
 
   // Calculate difference with proper handling of nanosecond underflow
-  int64 ms_diff = end->seconds * 1000 + end->nanoseconds / 1000000 -
-                  start->seconds * 1000 - start->nanoseconds / 1000000;
+  i64 ms_diff = end->seconds * 1000 + end->nanoseconds / 1000000 -
+                start->seconds * 1000 - start->nanoseconds / 1000000;
 
   return (f64)ms_diff;
 }
 
-int32 de100_timespec_compare(const De100TimeSpec *a, const De100TimeSpec *b) {
+i32 de100_timespec_compare(const De100TimeSpec *a, const De100TimeSpec *b) {
   if (!a || !b) {
     // Treat NULL as "zero time" for comparison purposes
     if (!a && !b)

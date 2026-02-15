@@ -118,7 +118,7 @@
  * Generate filename for input events (not state - that's in replay buffer).
  */
 de100_file_scoped_fn inline void get_input_filename(const char *exe_directory,
-                                                    int32 slot_index,
+                                                    i32 slot_index,
                                                     char *buffer,
                                                     size_t buffer_size) {
   // Day 25 naming: loop_edit_N_input.hmi
@@ -131,7 +131,7 @@ de100_file_scoped_fn inline void get_input_filename(const char *exe_directory,
 // ═══════════════════════════════════════════════════════════════════════════
 
 bool input_recording_begin(const char *exe_directory, GameMemoryState *state,
-                           int32 slot_index) {
+                           i32 slot_index) {
   if (!state) {
     fprintf(stderr, "[INPUT RECORDING] ERROR: NULL state\n");
     return false;
@@ -234,7 +234,7 @@ void input_recording_end(GameMemoryState *state) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 bool input_recording_playback_begin(const char *exe_directory,
-                                    GameMemoryState *state, int32 slot_index) {
+                                    GameMemoryState *state, i32 slot_index) {
   if (!state) {
     fprintf(stderr, "[INPUT PLAYBACK] ERROR: NULL state\n");
     return false;
@@ -317,7 +317,7 @@ void input_recording_playback_frame(GameMemoryState *state, GameInput *input) {
   }
 
   // End of input stream - loop back!
-  int32 slot = state->input_playing_index;
+  i32 slot = state->input_playing_index;
   printf("[INPUT PLAYBACK] 🔄 Looping back to start (slot %d)\n", slot);
 
   // Seek back to beginning of input file
@@ -391,7 +391,7 @@ input_recording_toggle(const char *exe_directory, GameMemoryState *state) {
     return INPUT_RECORDING_TOGGLE_STOPPED_PLAYBACK;
   } else if (input_recording_is_recording(state)) {
     printf("[INPUT RECORDING] 📼→▶️ Switching from recording to playback\n");
-    int32 slot = state->input_recording_index;
+    i32 slot = state->input_recording_index;
     input_recording_end(state);
     input_recording_playback_begin(exe_directory, state, slot);
     return INPUT_RECORDING_TOGGLE_SWITCHED_TO_PLAYBACK;

@@ -32,23 +32,25 @@ let g_audioBackend = null;
 export async function loadBackend(modulePath) {
   // This mirrors audio.c:133-200 exactly
   const module = await import(pathToFileURL(modulePath).href);
-  
+
   // JS version of: *(void **)(&SndPcmOpen) = dlsym(...);
   g_audioBackend = {
     init: module.init,
     write: module.write,
     getCursorInfo: module.getCursorInfo,
-    shutdown: module.shutdown
+    shutdown: module.shutdown,
   };
 }
 ```
 
 **Hard Requirements:**
+
 - Use **only plain objects with function properties**—no `class AudioBackend { }`
 - After loading, call `g_audioBackend.init()` directly—**just like calling a function pointer in C**
 - No method binding, no `this` context
 
 **Data-Oriented Test:**
+
 ```typescript
 // backends/alsa-backend.mjs
 export function init(deviceName) {
@@ -67,7 +69,7 @@ export function write(handle, samples, frameCount) {
 Build the same VTable for Web Audio API—but wrap it in a data-oriented interface:
 
 ```typescript
-/** 
+/**
  * @typedef {Object} WebAudioVTable
  * @property {function(): AudioContext} createContext
  * @property {function(AudioContext, AudioNode): void} connectNode
@@ -77,7 +79,7 @@ Build the same VTable for Web Audio API—but wrap it in a data-oriented interfa
 const webAudioVTable = {
   createContext: () => new AudioContext(),
   connectNode: (ctx, node) => node.connect(ctx.destination),
-  getCurrentTime: (ctx) => ctx.currentTime
+  getCurrentTime: (ctx) => ctx.currentTime,
 };
 ```
 
@@ -99,13 +101,14 @@ const cartridgeSlot = {
     if (this.current) this.current.onEject();
     this.current = newCartridge;
     this.current.onLoad();
-  }
+  },
 };
 ```
 
 **Aha Moment:** When you realize `g_audioBackend.write()` is **exactly** the same as `(*SndPcmWritei)(handle, ...)`—no magic, just a function pointer in a struct.
 
 **Connects to:**
+
 - Unit 1-L1.2 (`dlsym` pattern)
 - Unit 1-L1.4 (macro redirection)
 - Unit 5-L5.1 (platform API)
@@ -141,7 +144,7 @@ export function createRingBuffer(sizePowerOfTwo) {
     buffer,
     readIndex: new Int32Array(buffer, 0, 1),
     writeIndex: new Int32Array(buffer, 4, 1),
-    data: new Float32Array(buffer, 8, sizePowerOfTwo)
+    data: new Float32Array(buffer, 8, sizePowerOfTwo),
   };
 }
 
@@ -154,13 +157,13 @@ export function createRingBuffer(sizePowerOfTwo) {
 export function ringBufferWrite(rb, input) {
   const mask = rb.data.length - 1;
   let written = 0;
-  
+
   for (let i = 0; i < input.length; i++) {
     const writePos = Atomics.load(rb.writeIndex, 0) & mask;
     const readPos = Atomics.load(rb.readIndex, 0);
-    
+
     if (writePos === readPos) break; // Buffer full - like snd_pcm_avail() == 0
-    
+
     rb.data[writePos] = input[i];
     Atomics.add(rb.writeIndex, 0, 1);
     written++;
@@ -177,13 +180,13 @@ export function ringBufferWrite(rb, input) {
 export function ringBufferRead(rb, output) {
   const mask = rb.data.length - 1;
   let read = 0;
-  
+
   for (let i = 0; i < output.length; i++) {
     const readPos = Atomics.load(rb.readIndex, 0) & mask;
     const writePos = Atomics.load(rb.writeIndex, 0);
-    
+
     if (readPos === writePos) break; // Buffer empty
-    
+
     output[i] = rb.data[readPos];
     Atomics.add(rb.readIndex, 0, 1);
     read++;
@@ -209,14 +212,14 @@ class RawMemoryProcessor extends AudioWorkletProcessor {
     this.output = new Float32Array(this.buffer);
     this.phase = 0;
   }
-  
+
   process(inputs, outputs, parameters) {
     const sampleRate = 48000;
     for (let i = 0; i < 128; i++) {
-      this.output[i] = Math.sin(2 * Math.PI * 440 * this.phase / sampleRate);
+      this.output[i] = Math.sin((2 * Math.PI * 440 * this.phase) / sampleRate);
       this.phase++;
     }
-    
+
     outputs[0][0].set(this.output);
     return true;
   }
@@ -235,32 +238,32 @@ Build a **memory inspector** that renders the raw `SharedArrayBuffer` as **hex d
 function visualizeRingBuffer(rb, ctx) {
   const width = ctx.canvas.width;
   const height = ctx.canvas.height;
-  
+
   // Top half: hex dump
-  const bytes = new Uint8Array(rb.buffer);
+  const bytes = new u8Array(rb.buffer);
   for (let i = 0; i < Math.min(256, bytes.length); i++) {
     const x = (i % 32) * 20;
     const y = Math.floor(i / 32) * 16;
-    ctx.fillText(bytes[i].toString(16).padStart(2, '0'), x, y);
+    ctx.fillText(bytes[i].toString(16).padStart(2, "0"), x, y);
   }
-  
+
   // Bottom half: waveform
   const readPos = Atomics.load(rb.readIndex, 0);
   const writePos = Atomics.load(rb.writeIndex, 0);
-  
-  ctx.strokeStyle = '#0f0';
+
+  ctx.strokeStyle = "#0f0";
   ctx.beginPath();
   for (let i = 0; i < rb.data.length; i++) {
     const x = (i / rb.data.length) * width;
-    const y = height / 2 + rb.data[i] * height / 4;
+    const y = height / 2 + (rb.data[i] * height) / 4;
     i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
   }
   ctx.stroke();
-  
+
   // Cursor indicators
-  ctx.fillStyle = '#f00';
+  ctx.fillStyle = "#f00";
   ctx.fillRect((readPos / rb.data.length) * width, 0, 2, height);
-  ctx.fillStyle = '#00f';
+  ctx.fillStyle = "#00f";
   ctx.fillRect((writePos / rb.data.length) * width, 0, 2, height);
 }
 ```
@@ -270,6 +273,7 @@ function visualizeRingBuffer(rb, ctx) {
 **Aha Moment:** When you see that **changing `rb.data[writePos]`** is **exactly** like `sample_buffer[write_index] = value`—it's just pointer arithmetic.
 
 **Connects to:**
+
 - Unit 1-L1.4 (ring buffer internals)
 - Unit 1-L1.7 (profiling/visualization)
 - Unit 5-L5.2 (custom debug probes)
@@ -309,10 +313,10 @@ export function* gameLoopSimulator(targetFps) {
   let runningSampleIndex = 0;
   let frameNumber = 0;
   const sampleRate = 48000;
-  
+
   while (true) {
     const samplesThisFrame = Math.floor(sampleRate / targetFps);
-    
+
     const frame = {
       frameNumber,
       deltaTimeMs: 1000 / targetFps,
@@ -321,12 +325,12 @@ export function* gameLoopSimulator(targetFps) {
       writeCursor: runningSampleIndex,
       performanceMetrics: {
         cpuTime: 0,
-        bufferAvailable: 0
-      }
+        bufferAvailable: 0,
+      },
     };
-    
+
     const actualDeltaTime = yield frame;
-    
+
     runningSampleIndex += samplesThisFrame;
     frameNumber++;
   }
@@ -341,18 +345,18 @@ let frame = loop.next().value;
 
 while (playing) {
   const startTime = performance.now();
-  
+
   // Simulate game logic
   processGameLogic(frame);
-  
+
   // Fill audio buffer
   const audioData = new Float32Array(frame.samplesToWrite);
   fillAudioBuffer(audioData, frame.writeCursor);
-  
+
   // Measure performance
   frame.performanceMetrics.cpuTime = performance.now() - startTime;
   frame.performanceMetrics.bufferAvailable = getBufferAvail();
-  
+
   // Get next frame with actual measured delta
   const actualDelta = performance.now() - startTime;
   frame = loop.next(actualDelta).value;
@@ -369,14 +373,14 @@ let lastTimestamp = 0;
 
 function logFrame(timestamp) {
   const deltaTime = timestamp - lastTimestamp;
-  
+
   frames.push({
     timestamp,
     deltaTime,
     fps: deltaTime > 0 ? 1000 / deltaTime : 0,
-    frameNumber: frames.length
+    frameNumber: frames.length,
   });
-  
+
   lastTimestamp = timestamp;
   requestAnimationFrame(logFrame);
 }
@@ -404,20 +408,20 @@ Build a **frame time distribution analyzer**—collect 1000 frames of data, then
  * @returns {FrameStats}
  */
 function analyzeFrameTiming(frames) {
-  const deltaTimes = frames.map(f => f.deltaTimeMs);
+  const deltaTimes = frames.map((f) => f.deltaTimeMs);
   const sum = deltaTimes.reduce((a, b) => a + b, 0);
   const avg = sum / deltaTimes.length;
-  
-  const variance = deltaTimes
-    .map(dt => Math.pow(dt - avg, 2))
-    .reduce((a, b) => a + b, 0) / deltaTimes.length;
-  
+
+  const variance =
+    deltaTimes.map((dt) => Math.pow(dt - avg, 2)).reduce((a, b) => a + b, 0) /
+    deltaTimes.length;
+
   return {
     deltaTimes,
     avgDelta: avg,
     minDelta: Math.min(...deltaTimes),
     maxDelta: Math.max(...deltaTimes),
-    stdDev: Math.sqrt(variance)
+    stdDev: Math.sqrt(variance),
   };
 }
 
@@ -429,22 +433,22 @@ function analyzeFrameTiming(frames) {
 function renderHistogram(stats, ctx) {
   const buckets = new Array(60).fill(0);
   const bucketSize = (stats.maxDelta - stats.minDelta) / buckets.length;
-  
-  stats.deltaTimes.forEach(dt => {
+
+  stats.deltaTimes.forEach((dt) => {
     const bucket = Math.floor((dt - stats.minDelta) / bucketSize);
     buckets[Math.min(bucket, buckets.length - 1)]++;
   });
-  
+
   const maxCount = Math.max(...buckets);
   const width = ctx.canvas.width;
   const height = ctx.canvas.height;
-  
+
   buckets.forEach((count, i) => {
     const barHeight = (count / maxCount) * height;
     const x = (i / buckets.length) * width;
     const barWidth = width / buckets.length;
-    
-    ctx.fillStyle = '#0f0';
+
+    ctx.fillStyle = "#0f0";
     ctx.fillRect(x, height - barHeight, barWidth, barHeight);
   });
 }
@@ -455,6 +459,7 @@ function renderHistogram(stats, ctx) {
 **Aha Moment:** When you realize `yield frame` is **like returning from a game loop iteration**—the generator's internal state is your `runningSampleIndex`, but you **never mutate it directly**.
 
 **Connects to:**
+
 - Unit 1-L1.5 (event loop)
 - Unit 3-L3.1 (game loop anatomy)
 - Unit 8-L8.1 (`perf` profiling)
@@ -482,41 +487,41 @@ function renderHistogram(stats, ctx) {
 /** @type {InitStep[]} */
 const initSteps = [
   {
-    name: 'dlopen_alsa',
+    name: "dlopen_alsa",
     action: () => (Math.random() > 0.05 ? 0 : -1),
     onSuccess: 1,
-    onFailure: 4 // Jump to PulseAudio fallback
+    onFailure: 4, // Jump to PulseAudio fallback
   },
   {
-    name: 'dlsym_snd_pcm_open',
+    name: "dlsym_snd_pcm_open",
     action: () => 0,
     onSuccess: 2,
-    onFailure: -1
+    onFailure: -1,
   },
   {
-    name: 'snd_pcm_open',
+    name: "snd_pcm_open",
     action: () => (Math.random() > 0.1 ? 0 : -2),
     onSuccess: 3,
-    onFailure: 4
+    onFailure: 4,
   },
   {
-    name: 'snd_pcm_set_params',
+    name: "snd_pcm_set_params",
     action: () => 0,
     onSuccess: -2, // Success terminal
-    onFailure: 4
+    onFailure: 4,
   },
   {
-    name: 'try_pulse',
+    name: "try_pulse",
     action: () => 0,
     onSuccess: -2,
-    onFailure: 5
+    onFailure: 5,
   },
   {
-    name: 'fallback_null',
+    name: "fallback_null",
     action: () => 0,
     onSuccess: -2,
-    onFailure: -1
-  }
+    onFailure: -1,
+  },
 ];
 
 /**
@@ -526,29 +531,29 @@ const initSteps = [
 export function runInitMachine() {
   let stepIndex = 0;
   const executedSteps = [];
-  
+
   while (stepIndex >= 0 && stepIndex < initSteps.length) {
     const step = initSteps[stepIndex];
     executedSteps.push(step.name);
-    
+
     const result = step.action();
-    
+
     if (result === 0) {
       stepIndex = step.onSuccess;
     } else {
       console.log(`[INIT] ${step.name} failed with ${result}`);
       stepIndex = step.onFailure;
     }
-    
+
     // Terminal success
     if (stepIndex === -2) {
-      if (executedSteps.includes('snd_pcm_set_params')) return 'alsa';
-      if (executedSteps.includes('try_pulse')) return 'pulse';
-      return 'null';
+      if (executedSteps.includes("snd_pcm_set_params")) return "alsa";
+      if (executedSteps.includes("try_pulse")) return "pulse";
+      return "null";
     }
   }
-  
-  return 'failed';
+
+  return "failed";
 }
 ```
 
@@ -567,25 +572,25 @@ export function runInitMachine() {
 /** @type {FetchStep[]} */
 const fetchSteps = [
   {
-    fn: () => fetch('/api/data'),
+    fn: () => fetch("/api/data"),
     onSuccess: 1,
-    onFailure: 3 // Cached data fallback
+    onFailure: 3, // Cached data fallback
   },
   {
     fn: (response) => response.json(),
     onSuccess: 2,
-    onFailure: 3
+    onFailure: 3,
   },
   {
     fn: (data) => processData(data),
     onSuccess: -2,
-    onFailure: -1
+    onFailure: -1,
   },
   {
     fn: () => getCachedData(),
     onSuccess: 2,
-    onFailure: -1
-  }
+    onFailure: -1,
+  },
 ];
 ```
 
@@ -608,28 +613,28 @@ const story = [
     text: "ALSA library loading...",
     choices: ["Continue"],
     nextNodes: [1],
-    condition: () => (Math.random() > 0.9 ? 3 : 1) // Random failure
+    condition: () => (Math.random() > 0.9 ? 3 : 1), // Random failure
   },
   {
     text: "Successfully loaded ALSA!",
     choices: ["Open device", "Try PulseAudio instead"],
-    nextNodes: [2, 4]
+    nextNodes: [2, 4],
   },
   {
     text: "Device opened. Audio quality: Perfect",
     choices: ["Play sound"],
-    nextNodes: [-2] // Success ending
+    nextNodes: [-2], // Success ending
   },
   {
     text: "ALSA failed! System message: Permission denied",
     choices: ["Retry", "Fallback to PulseAudio"],
-    nextNodes: [1, 4]
+    nextNodes: [1, 4],
   },
   {
     text: "PulseAudio active. Audio quality: Degraded",
     choices: ["Accept degraded audio"],
-    nextNodes: [-2]
-  }
+    nextNodes: [-2],
+  },
 ];
 ```
 
@@ -638,6 +643,7 @@ const story = [
 **Aha Moment:** When you realize **this is how Casey does game state**—no `switch` on enums, just **arrays of function pointers** (or step data).
 
 **Connects to:**
+
 - Unit 1-L1.6 (error handling)
 - Unit 4-L4.3 (init cascade)
 - Unit 2-L2.3 (WASAPI sessions)
@@ -679,8 +685,8 @@ export function createAlsaState(sab) {
     channels: new Int32Array(sab, 4, 1),
     rate: new Int32Array(sab, 8, 1),
     latency_ms: new Int32Array(sab, 12, 1),
-    writeCursor: new BigInt64Array(sab, 16, 1),  // 8-byte aligned
-    runningIndex: new BigInt64Array(sab, 24, 1)
+    writeCursor: new BigInt64Array(sab, 16, 1), // 8-byte aligned
+    runningIndex: new BigInt64Array(sab, 24, 1),
   };
 }
 
@@ -727,7 +733,7 @@ function createBrokenState(sab) {
     rate: new Int32Array(sab, 8, 1),
     // BUG: BigInt64Array at offset 10 (not 8-byte aligned!)
     writeCursor: new BigInt64Array(sab, 10, 1), // CRASHES
-    runningIndex: new BigInt64Array(sab, 18, 1)
+    runningIndex: new BigInt64Array(sab, 18, 1),
   };
 }
 ```
@@ -746,8 +752,8 @@ const rightChannel = new Float32Array(sab, 48000 * 4, 48000);
 
 // Manual interleaving
 for (let i = 0; i < 48000; i++) {
-  leftChannel[i] = Math.sin(2 * Math.PI * 440 * i / 48000);
-  rightChannel[i] = Math.sin(2 * Math.PI * 880 * i / 48000);
+  leftChannel[i] = Math.sin((2 * Math.PI * 440 * i) / 48000);
+  rightChannel[i] = Math.sin((2 * Math.PI * 880 * i) / 48000);
 }
 ```
 
@@ -760,25 +766,37 @@ Build a **struct puzzle game**—you're given a **hex dump** and a **struct defi
 ```typescript
 /**
  * @typedef {Object} PuzzleLevel
- * @property {Uint8Array} hexDump Raw memory
+ * @property {u8Array} hexDump Raw memory
  * @property {string} secretMessage Hidden in struct
  * @property {Object} structHints Wrong offsets - you must fix them
  */
 
 const level1 = {
-  hexDump: new Uint8Array([
-    0x48, 0x65, 0x6C, 0x6C, // "Hell"
-    0x6F, 0x20, 0x00, 0x00, // "o "
-    0x57, 0x6F, 0x72, 0x6C, // "Worl"
-    0x64, 0x21, 0x00, 0x00  // "d!"
+  hexDump: new u8Array([
+    0x48,
+    0x65,
+    0x6c,
+    0x6c, // "Hell"
+    0x6f,
+    0x20,
+    0x00,
+    0x00, // "o "
+    0x57,
+    0x6f,
+    0x72,
+    0x6c, // "Worl"
+    0x64,
+    0x21,
+    0x00,
+    0x00, // "d!"
   ]),
   secretMessage: "Hello World!",
   structHints: {
-    part1Offset: 0,  // Correct
-    part2Offset: 6,  // WRONG! Should be 4
+    part1Offset: 0, // Correct
+    part2Offset: 6, // WRONG! Should be 4
     part3Offset: 10, // WRONG! Should be 8
-    part4Offset: 14  // WRONG! Should be 12
-  }
+    part4Offset: 14, // WRONG! Should be 12
+  },
 };
 
 function solvePuzzle(level) {
@@ -789,6 +807,7 @@ function solvePuzzle(level) {
 **Fix the offsets to decode the secret message** (like reverse engineering a binary format).
 
 **Connects to:**
+
 - Unit 1-L1.2 (X11 structs)
 - Unit 7-L7.2 (cache alignment)
 - Unit 3-L3.2 (ArrayBuffer emulation)
@@ -837,8 +856,8 @@ function solvePuzzle(level) {
  * Ring buffer state
  * @typedef {Object} RingBufferState
  * @property {SharedArrayBuffer} buffer
- * @property {Uint32Array} read_cursor  @offset 0
- * @property {Uint32Array} write_cursor @offset 4
+ * @property {u32Array} read_cursor  @offset 0
+ * @property {u32Array} write_cursor @offset 4
  * @property {Float32Array} data        @offset 8
  * @property {number} size_mask Power-of-2 mask for wrapping
  */
@@ -893,7 +912,7 @@ function solvePuzzle(level) {
 
 ```typescript
 // parse-c-header.mjs
-import { readFileSync } from 'fs';
+import { readFileSync } from "fs";
 
 /**
  * Parse C struct to JSDoc typedef
@@ -901,39 +920,42 @@ import { readFileSync } from 'fs';
  * @returns {string} JSDoc typedef
  */
 export function parseStructToJSDoc(cHeaderPath) {
-  const content = readFileSync(cHeaderPath, 'utf8');
+  const content = readFileSync(cHeaderPath, "utf8");
   const structMatch = content.match(/typedef struct\s+{([^}]+)}\s+(\w+);/);
-  
-  if (!structMatch) return '';
-  
+
+  if (!structMatch) return "";
+
   const [, body, name] = structMatch;
-  const fields = body.split(';').map(field => {
-    const match = field.trim().match(/(\w+)\s+(\w+)/);
-    if (!match) return null;
-    const [, type, fieldName] = match;
-    return { type: mapCTypeToJS(type), fieldName };
-  }).filter(Boolean);
-  
+  const fields = body
+    .split(";")
+    .map((field) => {
+      const match = field.trim().match(/(\w+)\s+(\w+)/);
+      if (!match) return null;
+      const [, type, fieldName] = match;
+      return { type: mapCTypeToJS(type), fieldName };
+    })
+    .filter(Boolean);
+
   let jsdoc = `/**\n * @typedef {Object} ${name}\n`;
   fields.forEach(({ type, fieldName }) => {
     jsdoc += ` * @property {${type}} ${fieldName}\n`;
   });
   jsdoc += ` */\n`;
-  
+
   return jsdoc;
 }
 
 function mapCTypeToJS(cType) {
   const typeMap = {
-    'int': 'number',
-    'float': 'number',
-    'double': 'number',
-    'uint32_t': 'number',
-    'int64_t': 'bigint',
-    'void*': 'number', // Pointer as offset
-    'char*': 'string'
+    int: "number",
+    float: "number",
+    double: "number",
+    u32_t: "number",
+    int64_t: "bigint",
+    "void*": "number", // Pointer as offset
+    "char*": "string",
   };
-  return typeMap[cType] || 'any';
+  return typeMap[cType] || "any";
 }
 ```
 
@@ -946,7 +968,7 @@ function mapCTypeToJS(cType) {
  * @property {Float32Array} position @offset 0, length 3
  * @property {Float32Array} normal   @offset 12, length 3
  * @property {Float32Array} uv       @offset 24, length 2
- * @property {Uint8Array} color      @offset 32, length 4
+ * @property {u8Array} color      @offset 32, length 4
  */
 
 /** Total vertex size: 36 bytes */
@@ -965,6 +987,7 @@ function createVertexBuffer(vertexCount) {
 **Aha Moment:** When VSCode autocompletes `sample.write()` and you **delete it**—because **writing is a function that takes the struct, not a method**.
 
 **Connects to:**
+
 - Unit 1-L1.2 (X11 structs)
 - Unit 2-L2.10 (API evolution)
 - Unit 3-L3.5 (type mapping)
@@ -1005,12 +1028,12 @@ let sampleCount = 0;
  */
 export function recordSample(timestamp, keypressTime, audioTime) {
   if (sampleCount >= MAX_SAMPLES) return;
-  
+
   const offset = sampleCount * SAMPLE_SIZE;
   samples[offset] = timestamp;
   samples[offset + 1] = keypressTime;
   samples[offset + 2] = audioTime;
-  
+
   sampleCount++;
 }
 
@@ -1022,19 +1045,19 @@ export function analyzeSamples() {
   let totalLatency = 0;
   let minLatency = Infinity;
   let maxLatency = -Infinity;
-  
+
   for (let i = 0; i < sampleCount * SAMPLE_SIZE; i += SAMPLE_SIZE) {
     const latency = samples[i + 2] - samples[i + 1];
     totalLatency += latency;
     minLatency = Math.min(minLatency, latency);
     maxLatency = Math.max(maxLatency, latency);
   }
-  
+
   return {
     avgLatency: totalLatency / sampleCount,
     minLatency,
     maxLatency,
-    sampleCount
+    sampleCount,
   };
 }
 
@@ -1045,12 +1068,12 @@ export function analyzeSamples() {
  */
 export function getPercentile(percentile) {
   const latencies = new Float64Array(sampleCount);
-  
+
   for (let i = 0; i < sampleCount; i++) {
     const offset = i * SAMPLE_SIZE;
     latencies[i] = samples[offset + 2] - samples[offset + 1];
   }
-  
+
   latencies.sort();
   const index = Math.floor((percentile / 100) * sampleCount);
   return latencies[index];
@@ -1063,7 +1086,11 @@ export function getPercentile(percentile) {
 
 ```typescript
 // latency-test.mjs
-import { recordSample, analyzeSamples, getPercentile } from './latency-struct-array.mjs';
+import {
+  recordSample,
+  analyzeSamples,
+  getPercentile,
+} from "./latency-struct-array.mjs";
 
 /**
  * Measure keypress → audio latency
@@ -1071,19 +1098,19 @@ import { recordSample, analyzeSamples, getPercentile } from './latency-struct-ar
 export async function runLatencyTest(audioBackend) {
   return new Promise((resolve) => {
     let testCount = 0;
-    
-    document.addEventListener('keydown', async (e) => {
+
+    document.addEventListener("keydown", async (e) => {
       if (testCount >= 1000) return;
-      
+
       const keypressTime = performance.now();
-      
+
       // Simulate audio callback delay
       const timestamp = performance.now();
       const audioTime = await triggerSound(audioBackend);
-      
+
       recordSample(timestamp, keypressTime, audioTime);
       testCount++;
-      
+
       if (testCount >= 1000) {
         const stats = analyzeSamples();
         stats.p50 = getPercentile(50);
@@ -1109,22 +1136,17 @@ export function renderLatencyHeatmap(ctx) {
   const width = ctx.canvas.width;
   const height = ctx.canvas.height;
   const pixelsPerSample = Math.floor(width / sampleCount);
-  
+
   for (let i = 0; i < sampleCount; i++) {
     const offset = i * SAMPLE_SIZE;
     const latency = samples[offset + 2] - samples[offset + 1];
-    
+
     // Color: green (fast) → red (slow)
     const normalizedLatency = (latency - 0) / (50 - 0); // 0-50ms range
     const hue = (1 - normalizedLatency) * 120; // 120=green, 0=red
-    
+
     ctx.fillStyle = `hsl(${hue}, 100%, 50%)`;
-    ctx.fillRect(
-      i * pixelsPerSample,
-      0,
-      pixelsPerSample,
-      height
-    );
+    ctx.fillRect(i * pixelsPerSample, 0, pixelsPerSample, height);
   }
 }
 
@@ -1134,25 +1156,25 @@ export function renderLatencyHeatmap(ctx) {
  */
 export function renderDistributionCurve(ctx) {
   const buckets = new Array(100).fill(0);
-  
+
   for (let i = 0; i < sampleCount; i++) {
     const offset = i * SAMPLE_SIZE;
     const latency = samples[offset + 2] - samples[offset + 1];
     const bucket = Math.floor(latency); // 1ms buckets
     if (bucket < buckets.length) buckets[bucket]++;
   }
-  
+
   const maxCount = Math.max(...buckets);
   const width = ctx.canvas.width;
   const height = ctx.canvas.height;
-  
+
   ctx.beginPath();
   buckets.forEach((count, ms) => {
     const x = (ms / buckets.length) * width;
     const y = height - (count / maxCount) * height;
     ms === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
   });
-  ctx.strokeStyle = '#0f0';
+  ctx.strokeStyle = "#0f0";
   ctx.stroke();
 }
 ```
@@ -1167,11 +1189,11 @@ export function renderDistributionCurve(ctx) {
  */
 export async function compareLatencies() {
   const tests = [
-    { name: 'X11', backend: x11Backend },
-    { name: 'Web Audio', backend: webAudioBackend },
-    { name: 'WebSocket', backend: websocketBackend }
+    { name: "X11", backend: x11Backend },
+    { name: "Web Audio", backend: webAudioBackend },
+    { name: "WebSocket", backend: websocketBackend },
   ];
-  
+
   for (const test of tests) {
     console.log(`Testing ${test.name}...`);
     const stats = await runLatencyTest(test.backend);
@@ -1186,6 +1208,7 @@ export async function compareLatencies() {
 **Aha Moment:** When you see Web Audio's "low latency" mode has the same tradeoffs as X11's buffer size tuning—**the laws of physics don't change**.
 
 **Connects to:**
+
 - Unit 1-L1.7 (profiling)
 - Unit 1-L1.8 (buffer sizing)
 - Unit 7-L7.2 (cache-friendly data)
@@ -1221,28 +1244,68 @@ const STATE = {
   PULSE_SUCCESS: 5,
   TRY_NULL: 6,
   NULL_SUCCESS: 7,
-  FAILED: -1
+  FAILED: -1,
 };
 
 /** @type {Transition[]} */
 const transitions = [
   // From INIT
-  { fromState: STATE.INIT, condition: 0, toState: STATE.TRY_ALSA_DLOPEN, label: 'start' },
-  
+  {
+    fromState: STATE.INIT,
+    condition: 0,
+    toState: STATE.TRY_ALSA_DLOPEN,
+    label: "start",
+  },
+
   // ALSA dlopen attempts
-  { fromState: STATE.TRY_ALSA_DLOPEN, condition: 0, toState: STATE.TRY_ALSA_INIT, label: 'dlopen success' },
-  { fromState: STATE.TRY_ALSA_DLOPEN, condition: -1, toState: STATE.TRY_PULSE, label: 'dlopen failed' },
-  
+  {
+    fromState: STATE.TRY_ALSA_DLOPEN,
+    condition: 0,
+    toState: STATE.TRY_ALSA_INIT,
+    label: "dlopen success",
+  },
+  {
+    fromState: STATE.TRY_ALSA_DLOPEN,
+    condition: -1,
+    toState: STATE.TRY_PULSE,
+    label: "dlopen failed",
+  },
+
   // ALSA init attempts
-  { fromState: STATE.TRY_ALSA_INIT, condition: 0, toState: STATE.ALSA_SUCCESS, label: 'alsa init success' },
-  { fromState: STATE.TRY_ALSA_INIT, condition: -1, toState: STATE.TRY_PULSE, label: 'alsa init failed' },
-  
+  {
+    fromState: STATE.TRY_ALSA_INIT,
+    condition: 0,
+    toState: STATE.ALSA_SUCCESS,
+    label: "alsa init success",
+  },
+  {
+    fromState: STATE.TRY_ALSA_INIT,
+    condition: -1,
+    toState: STATE.TRY_PULSE,
+    label: "alsa init failed",
+  },
+
   // PulseAudio fallback
-  { fromState: STATE.TRY_PULSE, condition: 0, toState: STATE.PULSE_SUCCESS, label: 'pulse success' },
-  { fromState: STATE.TRY_PULSE, condition: -1, toState: STATE.TRY_NULL, label: 'pulse failed' },
-  
+  {
+    fromState: STATE.TRY_PULSE,
+    condition: 0,
+    toState: STATE.PULSE_SUCCESS,
+    label: "pulse success",
+  },
+  {
+    fromState: STATE.TRY_PULSE,
+    condition: -1,
+    toState: STATE.TRY_NULL,
+    label: "pulse failed",
+  },
+
   // Null backend (always succeeds)
-  { fromState: STATE.TRY_NULL, condition: 0, toState: STATE.NULL_SUCCESS, label: 'null backend' }
+  {
+    fromState: STATE.TRY_NULL,
+    condition: 0,
+    toState: STATE.NULL_SUCCESS,
+    label: "null backend",
+  },
 ];
 
 /**
@@ -1254,7 +1317,7 @@ const transitions = [
 function getNextState(currentState, result) {
   const condition = result === 0 ? 0 : -1;
   const transition = transitions.find(
-    t => t.fromState === currentState && t.condition === condition
+    (t) => t.fromState === currentState && t.condition === condition,
   );
   return transition ? transition.toState : STATE.FAILED;
 }
@@ -1264,10 +1327,10 @@ function getNextState(currentState, result) {
  * @type {Map<number, function(): number>}
  */
 const stateActions = new Map([
-  [STATE.TRY_ALSA_DLOPEN, () => Math.random() > 0.1 ? 0 : -1],
-  [STATE.TRY_ALSA_INIT, () => Math.random() > 0.2 ? 0 : -1],
-  [STATE.TRY_PULSE, () => Math.random() > 0.3 ? 0 : -1],
-  [STATE.TRY_NULL, () => 0] // Always succeeds
+  [STATE.TRY_ALSA_DLOPEN, () => (Math.random() > 0.1 ? 0 : -1)],
+  [STATE.TRY_ALSA_INIT, () => (Math.random() > 0.2 ? 0 : -1)],
+  [STATE.TRY_PULSE, () => (Math.random() > 0.3 ? 0 : -1)],
+  [STATE.TRY_NULL, () => 0], // Always succeeds
 ]);
 
 /**
@@ -1278,34 +1341,34 @@ const stateActions = new Map([
 export function runStateMachine(verbose = false) {
   let currentState = STATE.INIT;
   const executionPath = [];
-  
+
   while (true) {
     if (verbose) console.log(`[STATE] ${getStateName(currentState)}`);
     executionPath.push(currentState);
-    
+
     // Terminal states
-    if (currentState === STATE.ALSA_SUCCESS) return 'alsa';
-    if (currentState === STATE.PULSE_SUCCESS) return 'pulse';
-    if (currentState === STATE.NULL_SUCCESS) return 'null';
-    if (currentState === STATE.FAILED) return 'failed';
-    
+    if (currentState === STATE.ALSA_SUCCESS) return "alsa";
+    if (currentState === STATE.PULSE_SUCCESS) return "pulse";
+    if (currentState === STATE.NULL_SUCCESS) return "null";
+    if (currentState === STATE.FAILED) return "failed";
+
     // Execute action
     const action = stateActions.get(currentState);
     const result = action ? action() : 0;
-    
+
     // Transition
     const nextState = getNextState(currentState, result);
-    
+
     if (verbose && result !== 0) {
       console.log(`  [ERROR] Action failed with code ${result}`);
     }
-    
+
     currentState = nextState;
   }
 }
 
 function getStateName(state) {
-  return Object.keys(STATE).find(key => STATE[key] === state) || 'UNKNOWN';
+  return Object.keys(STATE).find((key) => STATE[key] === state) || "UNKNOWN";
 }
 ```
 
@@ -1320,28 +1383,28 @@ function getStateName(state) {
  */
 export function runWithFailure(failureMode) {
   const forcedActions = new Map([
-    [STATE.TRY_ALSA_DLOPEN, () => failureMode === 'alsa_dlopen' ? -1 : 0],
-    [STATE.TRY_ALSA_INIT, () => failureMode === 'alsa_init' ? -1 : 0],
-    [STATE.TRY_PULSE, () => failureMode === 'pulse' ? -1 : 0],
-    [STATE.TRY_NULL, () => 0]
+    [STATE.TRY_ALSA_DLOPEN, () => (failureMode === "alsa_dlopen" ? -1 : 0)],
+    [STATE.TRY_ALSA_INIT, () => (failureMode === "alsa_init" ? -1 : 0)],
+    [STATE.TRY_PULSE, () => (failureMode === "pulse" ? -1 : 0)],
+    [STATE.TRY_NULL, () => 0],
   ]);
-  
+
   // Temporarily replace actions
   const originalActions = stateActions;
   Object.setPrototypeOf(stateActions, forcedActions);
-  
+
   const result = runStateMachine(true);
-  
+
   // Restore
   Object.setPrototypeOf(stateActions, originalActions);
-  
+
   return result;
 }
 
 // Test all failure paths
-console.log('ALSA dlopen fails:', runWithFailure('alsa_dlopen'));
-console.log('ALSA init fails:', runWithFailure('alsa_init'));
-console.log('Pulse fails:', runWithFailure('pulse'));
+console.log("ALSA dlopen fails:", runWithFailure("alsa_dlopen"));
+console.log("ALSA init fails:", runWithFailure("alsa_init"));
+console.log("Pulse fails:", runWithFailure("pulse"));
 ```
 
 **Creative Coding: API Request RPG**
@@ -1355,50 +1418,77 @@ console.log('Pulse fails:', runWithFailure('pulse'));
  */
 
 const apiQuestStates = new Map([
-  [0, {
-    description: "Fetch user data from primary server",
-    action: () => fetch('/api/user').then(r => r.ok ? 0 : -1),
-    transitions: new Map([[0, 1], [-1, 3]])
-  }],
-  [1, {
-    description: "Parse JSON response",
-    action: async () => {
-      try {
-        await response.json();
-        return 0;
-      } catch {
-        return -1;
-      }
+  [
+    0,
+    {
+      description: "Fetch user data from primary server",
+      action: () => fetch("/api/user").then((r) => (r.ok ? 0 : -1)),
+      transitions: new Map([
+        [0, 1],
+        [-1, 3],
+      ]),
     },
-    transitions: new Map([[0, 2], [-1, 3]])
-  }],
-  [2, {
-    description: "Quest complete! User data retrieved.",
-    action: () => Promise.resolve(0),
-    transitions: new Map()
-  }],
-  [3, {
-    description: "Primary server failed. Trying cache...",
-    action: () => getCachedData().then(() => 0).catch(() => -1),
-    transitions: new Map([[0, 2], [-1, 4]])
-  }],
-  [4, {
-    description: "Quest failed. No data available.",
-    action: () => Promise.resolve(-1),
-    transitions: new Map()
-  }]
+  ],
+  [
+    1,
+    {
+      description: "Parse JSON response",
+      action: async () => {
+        try {
+          await response.json();
+          return 0;
+        } catch {
+          return -1;
+        }
+      },
+      transitions: new Map([
+        [0, 2],
+        [-1, 3],
+      ]),
+    },
+  ],
+  [
+    2,
+    {
+      description: "Quest complete! User data retrieved.",
+      action: () => Promise.resolve(0),
+      transitions: new Map(),
+    },
+  ],
+  [
+    3,
+    {
+      description: "Primary server failed. Trying cache...",
+      action: () =>
+        getCachedData()
+          .then(() => 0)
+          .catch(() => -1),
+      transitions: new Map([
+        [0, 2],
+        [-1, 4],
+      ]),
+    },
+  ],
+  [
+    4,
+    {
+      description: "Quest failed. No data available.",
+      action: () => Promise.resolve(-1),
+      transitions: new Map(),
+    },
+  ],
 ]);
 
 async function runAPIQuest() {
   let state = 0;
-  
+
   while (apiQuestStates.has(state)) {
     const quest = apiQuestStates.get(state);
     console.log(`[QUEST] ${quest.description}`);
-    
+
     const result = await quest.action();
     const nextState = quest.transitions.get(result);
-    
+
     if (nextState === undefined) break;
     state = nextState;
   }
@@ -1408,6 +1498,7 @@ async function runAPIQuest() {
 **Each step is a quest. Network failure = quest failed**, fallback to cached data (like your audio stubs).
 
 **Connects to:**
+
 - Unit 1-L1.6 (error handling)
 - Unit 2-L2.3 (WASAPI sessions)
 - Unit 4-L4.3 (init cascade)
@@ -1418,7 +1509,7 @@ async function runAPIQuest() {
 
 ## Lesson 9: WASM Memory as Raw Byte Array
 
-**Core Concept:** **Manually allocate** WASM memory for audio—no Emscripten helpers. Treat WASM linear memory as a giant `Uint8Array`.
+**Core Concept:** **Manually allocate** WASM memory for audio—no Emscripten helpers. Treat WASM linear memory as a giant `u8Array`.
 
 ### Project: Manual WASM Audio Processor
 
@@ -1449,7 +1540,7 @@ export function wasmWrite(instance, ptr, jsArray) {
   const wasmMemory = new Float32Array(
     instance.exports.memory.buffer,
     ptr,
-    jsArray.length
+    jsArray.length,
   );
   wasmMemory.set(jsArray);
 }
@@ -1462,11 +1553,7 @@ export function wasmWrite(instance, ptr, jsArray) {
  * @returns {Float32Array}
  */
 export function wasmRead(instance, ptr, length) {
-  return new Float32Array(
-    instance.exports.memory.buffer,
-    ptr,
-    length
-  );
+  return new Float32Array(instance.exports.memory.buffer, ptr, length);
 }
 
 /**
@@ -1519,28 +1606,28 @@ void generate_sine(float* output, int count, float frequency, float sample_rate)
 ```typescript
 // Load and use WASM module
 async function initWASMAudio() {
-  const response = await fetch('audio-processor.wasm');
+  const response = await fetch("audio-processor.wasm");
   const buffer = await response.arrayBuffer();
   const module = await WebAssembly.instantiate(buffer);
   const instance = module.instance;
-  
+
   // Allocate memory for 1024 samples
   const ptr = wasmAlloc(instance, 1024);
-  
+
   // Generate sine wave in WASM
   instance.exports.generate_sine(ptr, 1024, 440, 48000);
-  
+
   // Read result back to JS
   const samples = wasmRead(instance, ptr, 1024);
-  console.log('Generated samples:', samples);
-  
+  console.log("Generated samples:", samples);
+
   // Process audio (volume control)
   instance.exports.process_audio(ptr, 1024, 0.5);
-  
+
   // Read processed result
   const processed = wasmRead(instance, ptr, 1024);
-  console.log('Processed samples:', processed);
-  
+  console.log("Processed samples:", processed);
+
   // Free memory
   wasmFree(instance, ptr);
 }
@@ -1562,14 +1649,14 @@ class WASMAllocTracker {
     this.allocations = new Map(); // ptr → size
     this.totalAllocated = 0;
   }
-  
+
   malloc(size) {
     const ptr = this.instance.exports.malloc(size);
     this.allocations.set(ptr, size);
     this.totalAllocated += size;
     return ptr;
   }
-  
+
   free(ptr) {
     const size = this.allocations.get(ptr);
     if (size) {
@@ -1578,7 +1665,7 @@ class WASMAllocTracker {
       this.totalAllocated -= size;
     }
   }
-  
+
   /**
    * Render memory layout
    * @param {CanvasRenderingContext2D} ctx
@@ -1587,37 +1674,38 @@ class WASMAllocTracker {
     const width = ctx.canvas.width;
     const height = ctx.canvas.height;
     const memorySize = this.instance.exports.memory.buffer.byteLength;
-    
+
     // Draw free space
-    ctx.fillStyle = '#222';
+    ctx.fillStyle = "#222";
     ctx.fillRect(0, 0, width, height);
-    
+
     // Draw allocations
     let currentY = 0;
-    const sortedAllocs = Array.from(this.allocations.entries())
-      .sort((a, b) => a[0] - b[0]);
-    
+    const sortedAllocs = Array.from(this.allocations.entries()).sort(
+      (a, b) => a[0] - b[0],
+    );
+
     for (const [ptr, size] of sortedAllocs) {
       const blockHeight = (size / memorySize) * height;
-      const hue = (ptr % 360);
-      
+      const hue = ptr % 360;
+
       ctx.fillStyle = `hsl(${hue}, 70%, 50%)`;
       ctx.fillRect(0, currentY, width, blockHeight);
-      
+
       // Label
-      ctx.fillStyle = '#fff';
-      ctx.font = '10px monospace';
+      ctx.fillStyle = "#fff";
+      ctx.font = "10px monospace";
       ctx.fillText(`${ptr}: ${size}B`, 5, currentY + 12);
-      
+
       currentY += blockHeight;
     }
-    
+
     // Stats
-    ctx.fillStyle = '#fff';
+    ctx.fillStyle = "#fff";
     ctx.fillText(
       `Total: ${this.totalAllocated}/${memorySize} bytes`,
       5,
-      height - 10
+      height - 10,
     );
   }
 }
@@ -1634,47 +1722,48 @@ class WASMWorkletProcessor extends AudioWorkletProcessor {
     super();
     this.wasmInstance = null;
     this.samplePtr = null;
-    
+
     this.port.onmessage = (e) => {
-      if (e.data.type === 'init') {
+      if (e.data.type === "init") {
         this.initWASM(e.data.wasmModule);
       }
     };
   }
-  
+
   async initWASM(wasmModule) {
     const instance = await WebAssembly.instantiate(wasmModule);
     this.wasmInstance = instance.instance;
     this.samplePtr = wasmAlloc(this.wasmInstance, 128);
   }
-  
+
   process(inputs, outputs, parameters) {
     if (!this.wasmInstance) return true;
-    
+
     const output = outputs[0][0];
-    
+
     // Generate in WASM
     this.wasmInstance.exports.generate_sine(
       this.samplePtr,
       128,
       440,
-      sampleRate
+      sampleRate,
     );
-    
+
     // Copy to output
     const wasmSamples = wasmRead(this.wasmInstance, this.samplePtr, 128);
     output.set(wasmSamples);
-    
+
     return true;
   }
 }
 
-registerProcessor('wasm-processor', WASMWorkletProcessor);
+registerProcessor("wasm-processor", WASMWorkletProcessor);
 ```
 
-**Aha Moment:** When you realize WASM's linear memory is just a giant `Uint8Array` that maps to C's heap—**it's the same memory model**.
+**Aha Moment:** When you realize WASM's linear memory is just a giant `u8Array` that maps to C's heap—**it's the same memory model**.
 
 **Connects to:**
+
 - Unit 1-L1.10 (unit tests)
 - Unit 3-L3.8 (WASM integration)
 - Lesson 3 (worklets)
@@ -1702,7 +1791,7 @@ const soundPositionsZ = new Float32Array(MAX_SOUNDS);
 const soundPriorities = new Int32Array(MAX_SOUNDS);
 const soundSampleOffsets = new Int32Array(MAX_SOUNDS);
 const soundVolumes = new Float32Array(MAX_SOUNDS);
-const soundIsActive = new Uint8Array(MAX_SOUNDS);
+const soundIsActive = new u8Array(MAX_SOUNDS);
 
 /** Sample data storage - like your sample_buffer */
 const soundSampleData = new Array(MAX_SOUNDS);
@@ -1724,16 +1813,16 @@ export function spawnSound(sampleData, x, y, z, priority) {
     // Evict lowest priority sound
     let lowestPriority = Infinity;
     let lowestIndex = -1;
-    
+
     for (let i = 0; i < activeSoundCount; i++) {
       if (soundPriorities[i] < lowestPriority) {
         lowestPriority = soundPriorities[i];
         lowestIndex = i;
       }
     }
-    
+
     if (priority <= lowestPriority) return -1; // Can't evict
-    
+
     // Evict and reuse slot
     const id = lowestIndex;
     soundSampleData[id] = sampleData;
@@ -1744,10 +1833,10 @@ export function spawnSound(sampleData, x, y, z, priority) {
     soundSampleOffsets[id] = 0;
     soundVolumes[id] = 1.0;
     soundIsActive[id] = 1;
-    
+
     return id;
   }
-  
+
   // New sound
   const id = activeSoundCount++;
   soundSampleData[id] = sampleData;
@@ -1758,7 +1847,7 @@ export function spawnSound(sampleData, x, y, z, priority) {
   soundSampleOffsets[id] = 0;
   soundVolumes[id] = 1.0;
   soundIsActive[id] = 1;
-  
+
   return id;
 }
 
@@ -1772,36 +1861,40 @@ export function spawnSound(sampleData, x, y, z, priority) {
 export function mixSounds(outputMix, listenerX, listenerY, listenerZ) {
   // Clear output
   outputMix.fill(0);
-  
+
   // Mix all active sounds - data-oriented loop
   for (let i = 0; i < activeSoundCount; i++) {
     if (!soundIsActive[i]) continue;
-    
+
     const sampleData = soundSampleData[i];
     if (!sampleData) continue;
-    
+
     // Calculate 3D volume based on distance
     const dx = soundPositionsX[i] - listenerX;
     const dy = soundPositionsY[i] - listenerY;
     const dz = soundPositionsZ[i] - listenerZ;
-    const distance = Math.sqrt(dx*dx + dy*dy + dz*dz);
+    const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
     const volume = soundVolumes[i] / (1 + distance * 0.1);
-    
+
     // Mix samples
     let offset = soundSampleOffsets[i];
-    for (let j = 0; j < outputMix.length && offset < sampleData.length; j++, offset++) {
+    for (
+      let j = 0;
+      j < outputMix.length && offset < sampleData.length;
+      j++, offset++
+    ) {
       outputMix[j] += sampleData[offset] * volume;
     }
-    
+
     // Update offset
     soundSampleOffsets[i] = offset;
-    
+
     // Deactivate if finished
     if (offset >= sampleData.length) {
       soundIsActive[i] = 0;
     }
   }
-  
+
   // Compact active sounds (remove finished ones)
   compactSounds();
 }
@@ -1811,7 +1904,7 @@ export function mixSounds(outputMix, listenerX, listenerY, listenerZ) {
  */
 function compactSounds() {
   let writeIndex = 0;
-  
+
   for (let readIndex = 0; readIndex < activeSoundCount; readIndex++) {
     if (soundIsActive[readIndex]) {
       if (writeIndex !== readIndex) {
@@ -1828,7 +1921,7 @@ function compactSounds() {
       writeIndex++;
     }
   }
-  
+
   activeSoundCount = writeIndex;
 }
 
@@ -1860,17 +1953,17 @@ import { ringBufferWrite } from './ring-buffer-raw.mjs';
 export function runGame() {
   const loop = gameLoopSimulator(60);
   const outputBuffer = new Float32Array(800); // ~60fps at 48kHz
-  
+
   let playerX = 0;
   let playerY = 0;
   let playerZ = 0;
-  
+
   function gameFrame() {
     const frame = loop.next().value;
-    
+
     // Game logic
     playerX += 0.1;
-    
+
     // Spawn sound on keypress
     document.addEventListener('keydown', (e) => {
       if (e.key === ' ') {
@@ -1878,16 +1971,16 @@ export function runGame() {
         spawn Sound(gunshot, playerX + 1, playerY, playerZ, 10);
       }
     });
-    
+
     // Mix audio
     mixSounds(outputBuffer, playerX, playerY, playerZ);
-    
+
     // Write to audio backend
     ringBufferWrite(audioRingBuffer, outputBuffer);
-    
+
     requestAnimationFrame(gameFrame);
   }
-  
+
   gameFrame();
 }
 ```
@@ -1903,35 +1996,35 @@ export function visualizeECSLayout(ctx) {
   const width = ctx.canvas.width;
   const height = ctx.canvas.height;
   const barHeight = height / 8;
-  
+
   const arrays = [
-    { name: 'posX', data: soundPositionsX, color: '#f00' },
-    { name: 'posY', data: soundPositionsY, color: '#0f0' },
-    { name: 'posZ', data: soundPositionsZ, color: '#00f' },
-    { name: 'priority', data: soundPriorities, color: '#ff0' },
-    { name: 'offset', data: soundSampleOffsets, color: '#f0f' },
-    { name: 'volume', data: soundVolumes, color: '#0ff' },
-    { name: 'active', data: soundIsActive, color: '#fff' }
+    { name: "posX", data: soundPositionsX, color: "#f00" },
+    { name: "posY", data: soundPositionsY, color: "#0f0" },
+    { name: "posZ", data: soundPositionsZ, color: "#00f" },
+    { name: "priority", data: soundPriorities, color: "#ff0" },
+    { name: "offset", data: soundSampleOffsets, color: "#f0f" },
+    { name: "volume", data: soundVolumes, color: "#0ff" },
+    { name: "active", data: soundIsActive, color: "#fff" },
   ];
-  
+
   arrays.forEach((arr, idx) => {
     const y = idx * barHeight;
-    
+
     // Draw bar background
-    ctx.fillStyle = '#222';
+    ctx.fillStyle = "#222";
     ctx.fillRect(0, y, width, barHeight);
-    
+
     // Draw label
     ctx.fillStyle = arr.color;
-    ctx.font = '12px monospace';
+    ctx.font = "12px monospace";
     ctx.fillText(arr.name, 5, y + 15);
-    
+
     // Draw data cells
     for (let i = 0; i < activeSoundCount; i++) {
-      const x = 100 + (i * 20);
+      const x = 100 + i * 20;
       const value = arr.data[i];
-      const normalizedValue = typeof value === 'number' ? value / 255 : 0;
-      
+      const normalizedValue = typeof value === "number" ? value / 255 : 0;
+
       ctx.fillStyle = arr.color;
       ctx.globalAlpha = 0.3 + normalizedValue * 0.7;
       ctx.fillRect(x, y + 20, 18, barHeight - 25);
@@ -1952,8 +2045,8 @@ Instead of `new AudioBuffer()`, store **all audio data in one giant `Float32Arra
 ```typescript
 // One big buffer, offset-based addressing
 const audioHeap = new Float32Array(48000 * 60); // 1 minute of audio
-const soundOffsets = new Uint32Array(256); // Each sound's offset in heap
-const soundLengths = new Uint32Array(256);
+const soundOffsets = new u32Array(256); // Each sound's offset in heap
+const soundLengths = new u32Array(256);
 
 /**
  * Load sound into heap
@@ -1963,13 +2056,13 @@ const soundLengths = new Uint32Array(256);
 function loadSoundToHeap(sampleData) {
   const id = nextSoundID++;
   const offset = currentHeapOffset;
-  
+
   audioHeap.set(sampleData, offset);
   soundOffsets[id] = offset;
   soundLengths[id] = sampleData.length;
-  
+
   currentHeapOffset += sampleData.length;
-  
+
   return id;
 }
 ```
@@ -1977,6 +2070,7 @@ function loadSoundToHeap(sampleData) {
 **This is exactly how Unity's Burst compiler lays out data**—you're learning professional game dev patterns that bridge to low-level C.
 
 **Connects to:**
+
 - EVERYTHING—this is the synthesis project
 - Unit 3-L3.2 (Pull System)
 - Unit 6-L6.2 (3D positioning)
@@ -1994,31 +2088,31 @@ function loadSoundToHeap(sampleData) {
 
 ```typescript
 // websocket-audio-server.mjs
-import { WebSocketServer } from 'ws';
-import { createRingBuffer, ringBufferRead } from './ring-buffer-raw.mjs';
+import { WebSocketServer } from "ws";
+import { createRingBuffer, ringBufferRead } from "./ring-buffer-raw.mjs";
 
 const audioRingBuffer = createRingBuffer(4096);
 const wss = new WebSocketServer({ port: 8080 });
 
-wss.on('connection', (ws) => {
-  console.log('[WS] Client connected');
-  
+wss.on("connection", (ws) => {
+  console.log("[WS] Client connected");
+
   // Stream audio at ~60fps
   const streamInterval = setInterval(() => {
     const samples = new Float32Array(800);
     const framesRead = ringBufferRead(audioRingBuffer, samples);
-    
+
     if (framesRead > 0) {
       // Send as binary
       ws.send(samples.buffer);
     }
   }, 16.666); // ~60fps
-  
-  ws.on('close', () => {
+
+  ws.on("close", () => {
     clearInterval(streamInterval);
-    console.log('[WS] Client disconnected');
+    console.log("[WS] Client disconnected");
   });
-  
+
   // Disable Nagle's algorithm - like Unit 1-L1.6
   ws._socket.setNoDelay(true);
 });
@@ -2028,31 +2122,31 @@ wss.on('connection', (ws) => {
 
 ```typescript
 // websocket-audio-client.mjs
-const ws = new WebSocket('ws://localhost:8080');
+const ws = new WebSocket("ws://localhost:8080");
 const audioContext = new AudioContext();
 let scriptNode;
 
-ws.binaryType = 'arraybuffer';
+ws.binaryType = "arraybuffer";
 
 ws.onopen = () => {
-  console.log('[WS] Connected to audio server');
-  
+  console.log("[WS] Connected to audio server");
+
   scriptNode = audioContext.createScriptProcessor(1024, 0, 2);
   let pendingBuffer = [];
-  
+
   ws.onmessage = (event) => {
     const samples = new Float32Array(event.data);
     pendingBuffer.push(...samples);
   };
-  
+
   scriptNode.onaudioprocess = (e) => {
     const output = e.outputBuffer.getChannelData(0);
-    
+
     for (let i = 0; i < output.length; i++) {
       output[i] = pendingBuffer.shift() || 0;
     }
   };
-  
+
   scriptNode.connect(audioContext.destination);
 };
 ```
@@ -2067,26 +2161,27 @@ ws.onopen = () => {
  */
 function measureWebSocketLatency(ws) {
   const latencies = [];
-  
+
   for (let i = 0; i < 100; i++) {
     const sendTime = performance.now();
-    
-    ws.send(JSON.stringify({ type: 'ping', timestamp: sendTime }));
-    
-    ws.once('message', (data) => {
+
+    ws.send(JSON.stringify({ type: "ping", timestamp: sendTime }));
+
+    ws.once("message", (data) => {
       const msg = JSON.parse(data);
-      if (msg.type === 'pong') {
+      if (msg.type === "pong") {
         const latency = performance.now() - msg.timestamp;
         latencies.push(latency);
       }
     });
   }
-  
+
   return latencies;
 }
 ```
 
 **Connects to:**
+
 - Unit 1-L1.1 (pipeline)
 - Unit 1-L1.6 (non-blocking I/O)
 - Lesson 1 (function tables)
@@ -2104,12 +2199,12 @@ function measureWebSocketLatency(ws) {
 
 ```typescript
 // game-audio-manager.mjs
-import { loadBackend } from './function-table.mjs';
-import { createRingBuffer, ringBufferWrite } from './ring-buffer-raw.mjs';
-import { gameLoopSimulator } from './game-loop-data.mjs';
-import { runStateMachine } from './state-machine-table.mjs';
-import { spawnSound, mixSounds } from './ecs-audio.mjs';
-import { recordSample, analyzeSamples } from './latency-struct-array.mjs';
+import { loadBackend } from "./function-table.mjs";
+import { createRingBuffer, ringBufferWrite } from "./ring-buffer-raw.mjs";
+import { gameLoopSimulator } from "./game-loop-data.mjs";
+import { runStateMachine } from "./state-machine-table.mjs";
+import { spawnSound, mixSounds } from "./ecs-audio.mjs";
+import { recordSample, analyzeSamples } from "./latency-struct-array.mjs";
 
 /**
  * @typedef {Object} AudioManagerConfig
@@ -2127,86 +2222,84 @@ export class GameAudioManager {
   constructor() {
     /** @type {AudioBackendVTable|null} */
     this.backend = null;
-    
+
     /** @type {RingBuffer|null} */
     this.ringBuffer = null;
-    
+
     /** @type {Generator|null} */
     this.gameLoop = null;
-    
+
     this.listenerPosition = { x: 0, y: 0, z: 0 };
   }
-  
+
   /**
    * Initialize audio system with fallbacks
    * @param {AudioManagerConfig} config
    * @returns {Promise<string>} Backend used
    */
   async init(config) {
-    console.log('[AudioManager] Initializing...');
-    
+    console.log("[AudioManager] Initializing...");
+
     // Run state machine to select backend
-    const backendName = config.enableFallbacks
-      ? runStateMachine(true)
-      : 'alsa';
-    
+    const backendName = config.enableFallbacks ? runStateMachine(true) : "alsa";
+
     console.log(`[AudioManager] Selected backend: ${backendName}`);
-    
+
     // Load backend function table
     await loadBackend(`./backends/${backendName}-backend.mjs`);
     this.backend = g_audioBackend;
-    
+
     // Initialize backend
-    const handle = this.backend.init('default');
+    const handle = this.backend.init("default");
     if (handle < 0) {
-      throw new Error('Backend init failed');
+      throw new Error("Backend init failed");
     }
-    
+
     // Create ring buffer
     this.ringBuffer = createRingBuffer(config.bufferSize);
-    
+
     // Start game loop
     this.gameLoop = gameLoopSimulator(config.targetFps);
-    
+
     return backendName;
   }
-  
+
   /**
    * Main audio frame - call this every game frame
    */
   processFrame() {
     if (!this.gameLoop || !this.backend || !this.ringBuffer) return;
-    
+
     const frame = this.gameLoop.next().value;
     const startTime = performance.now();
-    
+
     // Allocate output buffer
     const outputMix = new Float32Array(frame.samplesToWrite);
-    
+
     // Mix all active sounds (ECS)
     mixSounds(
       outputMix,
       this.listenerPosition.x,
       this.listenerPosition.y,
-      this.listenerPosition.z
+      this.listenerPosition.z,
     );
-    
+
     // Write to ring buffer
     const written = ringBufferWrite(this.ringBuffer, outputMix);
-    
+
     // Record latency sample
     const audioTime = performance.now();
     recordSample(performance.now(), startTime, audioTime);
-    
+
     // Update metrics
     frame.performanceMetrics.cpuTime = performance.now() - startTime;
     frame.performanceMetrics.bufferAvailable = written;
-    
+
     // Get next frame
     const actualDelta = performance.now() - startTime;
     this.gameLoop.next(actualDelta);
   }
-  
+
   /**
    * Play sound at position
    * @param {Float32Array} sampleData
@@ -2218,7 +2311,7 @@ export class GameAudioManager {
   playSound(sampleData, x, y, z, priority = 5) {
     return spawnSound(sampleData, x, y, z, priority);
   }
-  
+
   /**
    * Update listener (camera) position
    * @param {number} x
@@ -2228,14 +2321,14 @@ export class GameAudioManager {
   setListenerPosition(x, y, z) {
     this.listenerPosition = { x, y, z };
   }
-  
+
   /**
    * Get performance stats
    */
   getStats() {
     return analyzeSamples();
   }
-  
+
   /**
    * Shutdown
    */
@@ -2258,7 +2351,7 @@ await audioManager.init({
   channels: 2,
   bufferSize: 4096,
   targetFps: 60,
-  enableFallbacks: true
+  enableFallbacks: true,
 });
 
 // Game loop
@@ -2266,19 +2359,19 @@ function gameLoop() {
   // Update player
   player.x += player.velocityX;
   player.y += player.velocityY;
-  
+
   // Update audio listener
   audioManager.setListenerPosition(player.x, player.y, 0);
-  
+
   // Handle input
-  if (input.isKeyPressed('SPACE')) {
-    const gunshot = loadSound('gunshot.wav');
+  if (input.isKeyPressed("SPACE")) {
+    const gunshot = loadSound("gunshot.wav");
     audioManager.playSound(gunshot, player.x + 1, player.y, 0, 10);
   }
-  
+
   // Process audio frame
   audioManager.processFrame();
-  
+
   requestAnimationFrame(gameLoop);
 }
 
@@ -2286,6 +2379,7 @@ gameLoop();
 ```
 
 **Success Metrics:**
+
 - ✅ Works in browser (WebSocket), Node.js (direct), Electron (hybrid)
 - ✅ Spatial audio with 3D positioning
 - ✅ Dynamic mixing with priority channels

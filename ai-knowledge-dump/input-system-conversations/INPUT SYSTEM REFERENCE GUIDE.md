@@ -220,7 +220,7 @@ Best for: Full game engine with complex input needs
 3. Input Recording/Playback System
    ├── 3.1 Create engine/input/input_recorder.h
    │   ├── Define InputFrame struct
-   │   │   ├── uint64_t frame_number
+   │   │   ├── u64_t frame_number
    │   │   ├── PhysicalInputState state
    │   │   └── real64 timestamp
    │   │
@@ -874,12 +874,12 @@ Platform APIs:
 │ ┌──────────────────────────────────────────────────────────────────────┐    │
 │ │ // Record input BY FRAME NUMBER, not by timestamp                    │    │
 │ │ typedef struct {                                                     │    │
-│ │     uint64_t frame_number;     // THE KEY: frame, not time!          │    │
+│ │     u64_t frame_number;     // THE KEY: frame, not time!          │    │
 │ │     PhysicalInputState input;  // Complete input state               │    │
 │ │ } InputRecordFrame;                                                  │    │
 │ │                                                                      │    │
 │ │ // During recording:                                                 │    │
-│ │ void record_frame(InputRecording* rec, uint64_t frame,               │    │
+│ │ void record_frame(InputRecording* rec, u64_t frame,               │    │
 │ │                   PhysicalInputState* input) {                       │    │
 │ │     InputRecordFrame* f = &rec->frames[rec->count++];                │    │
 │ │     f->frame_number = frame;                                         │    │
@@ -888,7 +888,7 @@ Platform APIs:
 │ │                                                                      │    │
 │ │ // During playback:                                                  │    │
 │ │ PhysicalInputState* get_playback_input(InputRecording* rec,          │    │
-│ │                                         uint64_t frame) {            │    │
+│ │                                         u64_t frame) {            │    │
 │ │     // Binary search for frame (recordings may skip unchanged frames)│    │
 │ │     int idx = find_frame(rec, frame);                                │    │
 │ │     if (idx >= 0) {                                                  │    │
@@ -900,13 +900,13 @@ Platform APIs:
 │ │                                                                      │    │
 │ │ // CRITICAL: Seed RNG at recording start, save seed                  │    │
 │ │ typedef struct {                                                     │    │
-│ │     uint32_t rng_seed;        // MUST save this!                     │    │
+│ │     u32_t rng_seed;        // MUST save this!                     │    │
 │ │     InputRecordFrame* frames;                                        │    │
 │ │     int count;                                                       │    │
 │ │ } InputRecording;                                                    │    │
 │ │                                                                      │    │
 │ │ void start_recording(InputRecording* rec) {                          │    │
-│ │     rec->rng_seed = (uint32_t)time(NULL);                            │    │
+│ │     rec->rng_seed = (u32_t)time(NULL);                            │    │
 │ │     srand(rec->rng_seed);     // Seed now                            │    │
 │ │     rec->count = 0;                                                  │    │
 │ │ }                                                                    │    │

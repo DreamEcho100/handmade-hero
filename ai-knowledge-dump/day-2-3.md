@@ -61,10 +61,10 @@ Memory (1D array):
 
 ```c
 // ❌ WRONG: Random garbage in memory
-uint8_t *buffer = malloc(width * height * 4);
+u8_t *buffer = malloc(width * height * 4);
 
 // ✅ CORRECT: Zero-initialized memory
-uint8_t *buffer = calloc(width * height, 4);
+u8_t *buffer = calloc(width * height, 4);
 // 8× FASTER than malloc + memset! (OS uses copy-on-write zero pages)
 ```
 
@@ -160,7 +160,7 @@ void resize_back_buffer() {
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 const imageData = ctx.getImageData(0, 0, width, height);
-const pixels = imageData.data; // Uint8ClampedArray (RGBA)
+const pixels = imageData.data; // u8ClampedArray (RGBA)
 
 // Draw diagonal line
 for (let i = 0; i < Math.min(width, height); i++) {
@@ -217,7 +217,6 @@ void* buffer = calloc(count, element_size);  // OS tricks!
 ### Files Changed
 
 - `project/src/platform/x11_backend.c`:
-
   - Implemented `resize_back_buffer()` (Wave 2 resource management)
   - Added `update_window()` (XPutImage blitting)
   - Added diagonal line drawing test (temporary, for learning)
@@ -248,7 +247,7 @@ When you get a segfault in graphics code:
 2. ✅ Is the offset calculation correct? (offset = y \* width + x)
 3. ✅ Is there bounds checking? (offset < total_pixels)
 4. ✅ Are x and y within range? (x < width, y < height)
-5. ✅ Is the pixel format correct? (uint32_t for ARGB, not uint8_t)
+5. ✅ Is the pixel format correct? (u32_t for ARGB, not u8_t)
 
 ---
 

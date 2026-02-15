@@ -470,7 +470,7 @@ De100FileResult de100_file_copy(const char *src, const char *dst);
 De100PathResult de100_path_join(const char *dir, const char *file);
 
 f64 de100_time_get_wall_clock(void);
-void de100_time_sleep_ms(uint32 ms);
+void de100_time_sleep_ms(u32 ms);
 ```
 
 ---
@@ -507,18 +507,18 @@ void render_gradient(De100GameBackBuffer *buffer, int offset_x, int offset_y);
 
 ```c
 // Local variables
-int32 frame_counter = 0;
+i32 frame_counter = 0;
 f32 delta_time = 0.016f;
 bool is_running = true;
 
 // Globals (g_ prefix)
 file_scoped_global_var bool g_is_running = true;
-file_scoped_global_var int32 g_frame_counter = 0;
+file_scoped_global_var i32 g_frame_counter = 0;
 
 // Struct members
 typedef struct {
-    int32 sample_rate;
-    int32 buffer_size;
+    i32 sample_rate;
+    i32 buffer_size;
     bool is_initialized;
 } AudioConfig;
 ```
@@ -673,7 +673,7 @@ void update_player(PlayerState *state);
 // ❌ DON'T
 typedef struct { ... } memoryBlock;     // Wrong: camelCase type
 void De100MemoryAlloc(...);             // Wrong: PascalCase function
-int32 frameCounter = 0;                 // Wrong: camelCase variable
+i32 frameCounter = 0;                 // Wrong: camelCase variable
 ```
 
 ---

@@ -435,8 +435,8 @@ The pattern will look like this:
 
 ```c
 struct world_position {
-    int32 TileX;
-    int32 TileY;
+    i32 TileX;
+    i32 TileY;
     float OffsetX; // meters
     float OffsetY; // meters
 };
@@ -1172,7 +1172,7 @@ typedef float real32;
 
 struct GameWorld {
     real32 tileSideMeters;   // For all physics / movement
-    uint32 tileSidePixels;   // For rendering only
+    u32 tileSidePixels;   // For rendering only
 };
 
 // Player position in world units
@@ -1289,9 +1289,9 @@ typedef float real32;
 
 struct EngineConfig {
     real32 tileSideMeters;   // default size of a tile in meters
-    uint32 defaultTilePixels; // default rendering size of a tile in pixels
-    uint32 screenWidth;
-    uint32 screenHeight;
+    u32 defaultTilePixels; // default rendering size of a tile in pixels
+    u32 screenWidth;
+    u32 screenHeight;
 };
 
 EngineConfig engineDefaultConfig(void) {
@@ -1524,9 +1524,9 @@ typedef float real32;
 // Engine Configuration
 typedef struct EngineConfig {
     real32 tileSideMeters;   // canonical tile size in meters
-    uint32_t tileSidePixels; // how big to render on screen
-    uint32_t screenWidth;
-    uint32_t screenHeight;
+    u32_t tileSidePixels; // how big to render on screen
+    u32_t screenWidth;
+    u32_t screenHeight;
 } EngineConfig;
 
 // Engine defaults

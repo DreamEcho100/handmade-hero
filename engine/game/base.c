@@ -7,5 +7,5 @@ bool g_reload_requested = false;
 
 f64 g_initial_game_time_ms = 0.0;
 
-uint32 g_frame_counter = 0;
-uint32 g_fps = 0;
+u32 g_frame_counter = 0;
+u32 g_fps = 0;

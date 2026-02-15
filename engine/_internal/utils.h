@@ -3,6 +3,6 @@
 
 #include "../_common/base.h"
 
-uint32 get_monitor_refresh_hz(void);
+u32 get_monitor_refresh_hz(void);
 
 #endif // DE100__INTERNAL_UTILS_H

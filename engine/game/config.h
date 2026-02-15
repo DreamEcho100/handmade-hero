@@ -18,11 +18,11 @@ typedef struct {
 
   /** Size of memory reserved for persistent storage (game state, resources) in
    * bytes */
-  uint64 permanent_storage_size;
+  u64 permanent_storage_size;
 
   /** Size of memory reserved for transient storage (temporary working memory)
    * in bytes */
-  uint64 transient_storage_size;
+  u64 transient_storage_size;
 
   /* =========================
      GAME / BUILD FLAGS
@@ -31,17 +31,17 @@ typedef struct {
   /** Flags describing game-specific behavior or policies.
    * Example: developer mode, fixed timestep, headless mode.
    */
-  uint32 game_flags;
+  u32 game_flags;
 
   /* =========================
      WINDOW / DISPLAY PREFERENCES
      ========================= */
 
   /** Desired initial window width in pixels */
-  uint32 window_width;
+  u32 window_width;
 
   /** Desired initial window height in pixels */
-  uint32 window_height;
+  u32 window_height;
 
   /** Desired target refresh rate in Hz (used to compute default
    * target_seconds_per_frame)
@@ -49,8 +49,8 @@ typedef struct {
    * @note This is a **hint only**, not a guarantee of actual monitor refresh
    * rate.
    */
-  uint32 target_refresh_rate_hz;
-  uint32 max_allowed_refresh_rate_hz;
+  u32 target_refresh_rate_hz;
+  u32 max_allowed_refresh_rate_hz;
 
   /** Request VSync be enabled if possible */
   bool prefer_vsync;
@@ -69,20 +69,20 @@ typedef struct {
      ========================= */
 
   /** Maximum number of controllers the game intends to support */
-  uint32 max_controllers;
+  u32 max_controllers;
 
   /* =========================
      AUDIO REQUIREMENTS
      ========================= */
 
   /** Desired audio sample rate (Hz) */
-  uint32 initial_audio_sample_rate;
+  u32 initial_audio_sample_rate;
 
   /** Desired audio buffer size in frames */
-  uint32 audio_buffer_size_frames;
+  u32 audio_buffer_size_frames;
 
   /** Game update rate for audio calculations (Hz) */
-  uint32 audio_game_update_hz;
+  u32 audio_game_update_hz;
 
   /* =========================
      TIMING INTENT

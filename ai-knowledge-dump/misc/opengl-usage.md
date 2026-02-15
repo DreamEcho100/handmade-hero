@@ -1455,7 +1455,7 @@ Create a checkerboard pattern in CPU memory and display it.
 
 ```c
 // Create a simple checkerboard pattern
-void generate_checkerboard(uint8_t *pixels, int width, int height) {
+void generate_checkerboard(u8_t *pixels, int width, int height) {
     int tile_size = 32;  // 32x32 pixel tiles
 
     for (int y = 0; y < height; y++) {
@@ -1485,7 +1485,7 @@ void generate_checkerboard(uint8_t *pixels, int width, int height) {
 Animate the gradient from Handmade Hero:
 
 ```c
-void render_animated_gradient(uint8_t *pixels, int width, int height, int frame) {
+void render_animated_gradient(u8_t *pixels, int width, int height, int frame) {
     int x_offset = frame * 2;  // Move 2 pixels per frame
     int y_offset = frame;
 
@@ -1494,8 +1494,8 @@ void render_animated_gradient(uint8_t *pixels, int width, int height, int frame)
             int idx = (y * width + x) * 4;
 
             // Animated gradient
-            pixels[idx + 0] = (uint8_t)(x + x_offset);  // R
-            pixels[idx + 1] = (uint8_t)(y + y_offset);  // G
+            pixels[idx + 0] = (u8_t)(x + x_offset);  // R
+            pixels[idx + 1] = (u8_t)(y + y_offset);  // G
             pixels[idx + 2] = 128;                       // B
             pixels[idx + 3] = 255;                       // A
         }

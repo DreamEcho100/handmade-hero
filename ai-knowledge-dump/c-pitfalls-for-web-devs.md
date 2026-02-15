@@ -47,7 +47,7 @@ Each pitfall includes:
 
 ```c
 // You wrote this thinking "give me the first non-zero value"
-uint32 fps = config.initial_fps || config.target_fps;
+u32 fps = config.initial_fps || config.target_fps;
 
 // What you EXPECTED (JavaScript behavior):
 // fps = 60 (the first truthy value)
@@ -90,19 +90,19 @@ const fps = config.initialFps || config.targetFps || 60;
 
 ```c
 // Option 1: Ternary operator (most common)
-uint32 fps = (config.initial_fps != 0)
+u32 fps = (config.initial_fps != 0)
     ? config.initial_fps
     : config.target_fps;
 
 // Option 2: Explicit if statement (clearer)
-uint32 fps = config.target_fps;
+u32 fps = config.target_fps;
 if (config.initial_fps != 0) {
     fps = config.initial_fps;
 }
 
 // Option 3: Helper macro (if you do this a lot)
 #define FIRST_NONZERO(a, b) ((a) != 0 ? (a) : (b))
-uint32 fps = FIRST_NONZERO(config.initial_fps, config.target_fps);
+u32 fps = FIRST_NONZERO(config.initial_fps, config.target_fps);
 ```
 
 ### 📋 QUICK REFERENCE
@@ -335,8 +335,8 @@ This trap is especially common in **game development** when handling positions:
 ```c
 // Player position stored as unsigned (seems logical - pixels are positive!)
 typedef struct {
-    uint32 x;  // ← THE TRAP!
-    uint32 y;
+    u32 x;  // ← THE TRAP!
+    u32 y;
 } PlayerState;
 
 // Player at position (5, 10), moving up by 15 pixels
@@ -345,14 +345,14 @@ player.y = player.y - 15;
 // You expect: player.y = -5 (to be wrapped later)
 // Reality:    player.y = 4294967291 (HUGE positive number!)
 //
-// Why? uint32 can't represent -5, so it wraps around:
+// Why? u32 can't represent -5, so it wraps around:
 // 10 - 15 = -5  →  0xFFFFFFFB  →  4294967291
 ```
 
 **The Visual Bug:**
 
 ```
-Before (y=10):     After with uint32 (y=4294967291):
+Before (y=10):     After with u32 (y=4294967291):
 ┌───────────┐      Player "teleports" to bottom of screen
 │  █ player │      or causes out-of-bounds memory access!
 │           │
@@ -371,11 +371,11 @@ Before (y=10):     After with uint32 (y=4294967291):
 
 ```c
 // Wrapping function expects SIGNED input
-int32 wrap_y(int32 y, int32 height) {
+i32 wrap_y(i32 y, i32 height) {
     return ((y % height) + height) % height;
 }
 
-// With signed int32: wrap_y(-5, 720) = 715 ✓
+// With signed i32: wrap_y(-5, 720) = 715 ✓
 // With unsigned:     The -5 never existed! You passed 4294967291
 //                    4294967291 % 720 = 611 (WRONG!)
 ```
@@ -385,26 +385,26 @@ int32 wrap_y(int32 y, int32 height) {
 ```c
 // GOOD: Use signed integers for anything that might go negative
 typedef struct {
-    int32 x;  // Can handle negative during calculations
-    int32 y;
+    i32 x;  // Can handle negative during calculations
+    i32 y;
 } PlayerState;
 
 // Now subtraction works correctly
 player.y = player.y - 15;  // If y=10, result is -5 (correct!)
 
 // And wrapping works
-int32 wrapped_y = wrap_y(player.y, height);  // -5 → 715 ✓
+i32 wrapped_y = wrap_y(player.y, height);  // -5 → 715 ✓
 ```
 
 ### 📋 WHEN TO USE UNSIGNED vs SIGNED
 
 | Use Case              | Type        | Why                              |
 | --------------------- | ----------- | -------------------------------- |
-| Positions/coordinates | `int32`     | Can go negative during math      |
-| Velocities            | `int32`     | Can be negative (moving left/up) |
+| Positions/coordinates | `i32`       | Can go negative during math      |
+| Velocities            | `i32`       | Can be negative (moving left/up) |
 | Array indices         | `size_t`    | But careful with subtraction!    |
-| Bit flags             | `uint32`    | Pure bit manipulation            |
-| Colors (RGBA)         | `uint32`    | Always 0-255 per channel         |
+| Bit flags             | `u32`       | Pure bit manipulation            |
+| Colors (RGBA)         | `u32`       | Always 0-255 per channel         |
 | Byte counts/sizes     | `size_t`    | Can't have negative bytes        |
 | Memory addresses      | `uintptr_t` | Addresses are unsigned           |
 
@@ -477,15 +477,15 @@ int i = f;         // Reality: UNDEFINED BEHAVIOR (overflow)
 int frame = (int)floorf(time_seconds * 60.0f);  // Explicit truncation
 
 // Fix 3: Use types that match your data
-uint8_t byte_value = 200;  // unsigned char, holds 0-255
+u8_t byte_value = 200;  // unsigned char, holds 0-255
 int16_t audio_sample;      // signed 16-bit for audio
-uint32_t color_rgba;       // unsigned 32-bit for colors
+u32_t color_rgba;       // unsigned 32-bit for colors
 
 // Fix 4: Range check before assignment
 float volume = get_volume();  // Could be any float
 if (volume < 0.0f) volume = 0.0f;
 if (volume > 1.0f) volume = 1.0f;
-uint8_t volume_byte = (uint8_t)(volume * 255.0f);  // Safe now
+u8_t volume_byte = (u8_t)(volume * 255.0f);  // Safe now
 ```
 
 ---
@@ -1008,8 +1008,8 @@ This trap is especially common in **graphics/pixel manipulation**:
 
 ```c
 // You have a pixel buffer and want to write a 32-bit RGBA color
-uint8 *pixel_pos = buffer + offset;  // Points to correct byte
-uint32 color = 0xFFFFFFFF;           // White (RGBA)
+u8 *pixel_pos = buffer + offset;  // Points to correct byte
+u32 color = 0xFFFFFFFF;           // White (RGBA)
 
 // THE TRAP: Dereferencing through wrong pointer type!
 *pixel_pos = color;  // ❌ WRONG! Only writes 1 byte!
@@ -1029,23 +1029,23 @@ uint32 color = 0xFFFFFFFF;           // White (RGBA)
 │                                                                         │
 │  color = 0xFF00FF00 (Green in RGBA)                                    │
 │                                                                         │
-│  WRONG: *pixel_pos = color; (pixel_pos is uint8*)                      │
+│  WRONG: *pixel_pos = color; (pixel_pos is u8*)                      │
 │  ┌────────────────────────────────────────┐                            │
 │  │ Before: [??][??][??][??]               │                            │
 │  │ After:  [00][??][??][??]  ← Only 1 byte written (truncated!)       │
 │  └────────────────────────────────────────┘                            │
 │                                                                         │
-│  RIGHT: *(uint32*)pixel_pos = color;                                   │
+│  RIGHT: *(u32*)pixel_pos = color;                                   │
 │  ┌────────────────────────────────────────┐                            │
 │  │ Before: [??][??][??][??]               │                            │
 │  │ After:  [00][FF][00][FF]  ← All 4 bytes written correctly          │
 │  └────────────────────────────────────────┘                            │
 │                                                                         │
 │  The POINTER TYPE tells C how many bytes to read/write!                │
-│  uint8*  → 1 byte                                                      │
-│  uint16* → 2 bytes                                                     │
-│  uint32* → 4 bytes                                                     │
-│  uint64* → 8 bytes                                                     │
+│  u8*  → 1 byte                                                      │
+│  u16* → 2 bytes                                                     │
+│  u32* → 4 bytes                                                     │
+│  u64* → 8 bytes                                                     │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -1054,17 +1054,17 @@ uint32 color = 0xFFFFFFFF;           // White (RGBA)
 
 ```c
 // Method 1: Cast when dereferencing (most common in pixel loops)
-uint8 *pixel_pos = buffer + (y * pitch) + (x * bytes_per_pixel);
-*(uint32 *)pixel_pos = color;  // Cast to uint32* THEN dereference
+u8 *pixel_pos = buffer + (y * pitch) + (x * bytes_per_pixel);
+*(u32 *)pixel_pos = color;  // Cast to u32* THEN dereference
 
 // Method 2: Use the correct pointer type from the start
-uint32 *pixels = (uint32 *)buffer;
+u32 *pixels = (u32 *)buffer;
 pixels[y * width + x] = color;  // Direct 32-bit access
 
 // Method 3: For row-by-row iteration (Handmade Hero style)
-uint8 *row = (uint8 *)buffer;
+u8 *row = (u8 *)buffer;
 for (int y = 0; y < height; ++y) {
-    uint32 *pixel = (uint32 *)row;  // Cast row to uint32*
+    u32 *pixel = (u32 *)row;  // Cast row to u32*
     for (int x = 0; x < width; ++x) {
         *pixel++ = color;  // Write 4 bytes, advance by 4
     }
@@ -1077,11 +1077,11 @@ for (int y = 0; y < height; ++y) {
 ```javascript
 // JavaScript: TypedArrays enforce the view size
 const buffer = new ArrayBuffer(16);
-const uint8View = new Uint8Array(buffer);
-const uint32View = new Uint32Array(buffer);
+const u8View = new u8Array(buffer);
+const u32View = new u32Array(buffer);
 
-uint8View[0] = 0xffffffff; // Truncated to 0xFF (1 byte)
-uint32View[0] = 0xffffffff; // Full 4 bytes written
+u8View[0] = 0xffffffff; // Truncated to 0xFF (1 byte)
+u32View[0] = 0xffffffff; // Full 4 bytes written
 
 // In C, you must EXPLICITLY cast to get the right behavior
 // There's no separate "view" - the pointer type IS the view
@@ -1091,9 +1091,9 @@ uint32View[0] = 0xffffffff; // Full 4 bytes written
 
 | Pointer Type | Dereference Writes | Use Case                |
 | ------------ | ------------------ | ----------------------- |
-| `uint8 *`    | 1 byte             | Raw byte manipulation   |
-| `int16 *`    | 2 bytes            | Audio samples (16-bit)  |
-| `uint32 *`   | 4 bytes            | Pixels (RGBA), colors   |
+| `u8 *`       | 1 byte             | Raw byte manipulation   |
+| `i16 *`      | 2 bytes            | Audio samples (16-bit)  |
+| `u32 *`      | 4 bytes            | Pixels (RGBA), colors   |
 | `float *`    | 4 bytes            | Single-precision floats |
 | `double *`   | 8 bytes            | Double-precision floats |
 
@@ -2077,7 +2077,7 @@ const char* path = "folder\\file.txt";  // Windows-only!
 #include <stdint.h>
 int32_t x = 0x12345678;    // Always 32 bits
 int64_t y = 0xDEADBEEF12345678LL;  // Always 64 bits
-uint8_t byte = 200;        // Always unsigned 8 bits
+u8_t byte = 200;        // Always unsigned 8 bits
 
 // Fix 2: Use correct format specifiers
 #include <inttypes.h>
@@ -2093,8 +2093,8 @@ intptr_t addr = (intptr_t)ptr;     // Integer that can hold pointer
 
 // Fix 4: Handle endianness explicitly
 #include <arpa/inet.h>  // POSIX
-uint32_t network_order = htonl(host_value);  // Host to network
-uint32_t host_order = ntohl(network_value);  // Network to host
+u32_t network_order = htonl(host_value);  // Host to network
+u32_t host_order = ntohl(network_value);  // Network to host
 
 // Fix 5: Use explicit signedness
 signed char sc = -50;      // Explicitly signed

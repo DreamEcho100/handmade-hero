@@ -129,7 +129,7 @@ de100_file_scoped_fn inline void win32_set_error_detail(const char *operation,
 #else // POSIX
 
 de100_file_scoped_fn inline De100FileErrorCode
-errno_to_de100_file_error(int32 err) {
+errno_to_de100_file_error(i32 err) {
   switch (err) {
   case 0:
     return DE100_FILE_SUCCESS;
@@ -176,7 +176,7 @@ errno_to_de100_file_error(int32 err) {
 
 // #if DE100_INTERNAL && DE100_SLOW
 de100_file_scoped_fn inline void
-posix_set_error_detail(const char *operation, const char *path, int32 err) {
+posix_set_error_detail(const char *operation, const char *path, i32 err) {
   SET_ERROR_DETAIL("[%s] '%s' failed: %s (errno %d)", operation,
                    path ? path : "(null)", strerror(err), err);
 }
@@ -237,8 +237,8 @@ De100FileTimeResult de100_file_get_mod_time(const char *filename) {
   ull.LowPart = de100_file_info.ftLastWriteTime.dwLowDateTime;
   ull.HighPart = de100_file_info.ftLastWriteTime.dwHighDateTime;
 
-  result.value.seconds = (int64)(ull.QuadPart / 10000000ULL);
-  result.value.nanoseconds = (int64)((ull.QuadPart % 10000000ULL) * 100);
+  result.value.seconds = (i64)(ull.QuadPart / 10000000ULL);
+  result.value.nanoseconds = (i64)((ull.QuadPart % 10000000ULL) * 100);
   result.success = true;
   result.error_code = DE100_FILE_SUCCESS;
 
@@ -251,7 +251,7 @@ De100FileTimeResult de100_file_get_mod_time(const char *filename) {
   struct stat de100_file_stat;
 
   if (stat(filename, &de100_file_stat) != 0) {
-    int32 err = errno;
+    i32 err = errno;
     result.error_code = errno_to_de100_file_error(err);
 
 #if DE100_INTERNAL && DE100_SLOW
@@ -260,8 +260,8 @@ De100FileTimeResult de100_file_get_mod_time(const char *filename) {
     return result;
   }
 
-  result.value.seconds = (int64)de100_file_stat.st_mtime;
-  result.value.nanoseconds = (int64)de100_file_stat.st_mtimespec.tv_nsec;
+  result.value.seconds = (i64)de100_file_stat.st_mtime;
+  result.value.nanoseconds = (i64)de100_file_stat.st_mtimespec.tv_nsec;
   result.success = true;
   result.error_code = DE100_FILE_SUCCESS;
 
@@ -274,7 +274,7 @@ De100FileTimeResult de100_file_get_mod_time(const char *filename) {
   struct stat de100_file_stat;
 
   if (stat(filename, &de100_file_stat) != 0) {
-    int32 err = errno;
+    i32 err = errno;
     result.error_code = errno_to_de100_file_error(err);
 
 #if DE100_INTERNAL && DE100_SLOW
@@ -283,8 +283,8 @@ De100FileTimeResult de100_file_get_mod_time(const char *filename) {
     return result;
   }
 
-  result.value.seconds = (int64)de100_file_stat.st_mtime;
-  result.value.nanoseconds = (int64)de100_file_stat.st_mtim.tv_nsec;
+  result.value.seconds = (i64)de100_file_stat.st_mtime;
+  result.value.nanoseconds = (i64)de100_file_stat.st_mtim.tv_nsec;
   result.success = true;
   result.error_code = DE100_FILE_SUCCESS;
 
@@ -346,13 +346,13 @@ De100FileResult de100_file_copy(const char *source, const char *dest) {
   // ─────────────────────────────────────────────────────────────────────
   // POSIX - Manual copy with read/write
   // ─────────────────────────────────────────────────────────────────────
-  int32 source_fd = -1;
-  int32 dest_fd = -1;
+  i32 source_fd = -1;
+  i32 dest_fd = -1;
 
   // Open source file
   source_fd = open(source, O_RDONLY);
   if (source_fd < 0) {
-    int32 err = errno;
+    i32 err = errno;
 #if DE100_INTERNAL && DE100_SLOW
     posix_set_error_detail("de100_file_copy:open_source", source, err);
 #endif
@@ -362,7 +362,7 @@ De100FileResult de100_file_copy(const char *source, const char *dest) {
   // Get source file info
   struct stat source_stat;
   if (fstat(source_fd, &source_stat) < 0) {
-    int32 err = errno;
+    i32 err = errno;
     close(source_fd);
 #if DE100_INTERNAL && DE100_SLOW
     posix_set_error_detail("de100_file_copy:fstat", source, err);
@@ -387,7 +387,7 @@ De100FileResult de100_file_copy(const char *source, const char *dest) {
   // Create destination file with same permissions
   dest_fd = open(dest, O_WRONLY | O_CREAT | O_TRUNC, source_stat.st_mode);
   if (dest_fd < 0) {
-    int32 err = errno;
+    i32 err = errno;
     close(source_fd);
 #if DE100_INTERNAL && DE100_SLOW
     posix_set_error_detail("de100_file_copy:open_dest", dest, err);
@@ -411,7 +411,7 @@ De100FileResult de100_file_copy(const char *source, const char *dest) {
     ssize_t bytes_written = write(dest_fd, buffer, (size_t)bytes_read);
 
     if (bytes_written != bytes_read) {
-      int32 err = errno;
+      i32 err = errno;
       close(source_fd);
       close(dest_fd);
 
@@ -428,7 +428,7 @@ De100FileResult de100_file_copy(const char *source, const char *dest) {
 
   // Check for read error
   if (bytes_read < 0) {
-    int32 err = errno;
+    i32 err = errno;
     close(source_fd);
     close(dest_fd);
 
@@ -534,7 +534,7 @@ De100FileExistsResult de100_file_exists(const char *filename) {
 #endif
     }
   } else {
-    int32 err = errno;
+    i32 err = errno;
 
     // "Not found" is a valid answer, not an error
     if (err == ENOENT || err == ENOTDIR) {
@@ -596,7 +596,7 @@ De100FileSizeResult de100_file_get_size(const char *filename) {
   size.HighPart = (LONG)de100_file_info.nDe100FileSizeHigh;
   size.LowPart = de100_file_info.nDe100FileSizeLow;
 
-  result.value = (int64)size.QuadPart;
+  result.value = (i64)size.QuadPart;
   result.success = true;
   result.error_code = DE100_FILE_SUCCESS;
   CLEAR_ERROR_DETAIL();
@@ -608,7 +608,7 @@ De100FileSizeResult de100_file_get_size(const char *filename) {
   struct stat de100_file_stat;
 
   if (stat(filename, &de100_file_stat) != 0) {
-    int32 err = errno;
+    i32 err = errno;
     result.error_code = errno_to_de100_file_error(err);
 #if DE100_INTERNAL && DE100_SLOW
     posix_set_error_detail("de100_file_get_size", filename, err);
@@ -622,7 +622,7 @@ De100FileSizeResult de100_file_get_size(const char *filename) {
     return result;
   }
 
-  result.value = (int64)de100_file_stat.st_size;
+  result.value = (i64)de100_file_stat.st_size;
   result.success = true;
   result.error_code = DE100_FILE_SUCCESS;
   CLEAR_ERROR_DETAIL();
@@ -667,7 +667,7 @@ De100FileResult de100_file_delete(const char *filename) {
   // POSIX
   // ─────────────────────────────────────────────────────────────────────
   if (unlink(filename) != 0) {
-    int32 err = errno;
+    i32 err = errno;
 
     // Idempotent: already deleted = success
     if (err == ENOENT) {
@@ -738,7 +738,7 @@ De100FileOpenResult de100_file_open(const char *filename,
 
 #else
   // POSIX implementation
-  int32 posix_flags = 0;
+  i32 posix_flags = 0;
 
   if ((flags & DE100_FILE_READ) && (flags & DE100_FILE_WRITE)) {
     posix_flags = O_RDWR;
@@ -758,7 +758,7 @@ De100FileOpenResult de100_file_open(const char *filename,
   // 0644 = rw-r--r-- permissions for new files
   result.fd = open(filename, posix_flags, 0644);
   if (result.fd < 0) {
-    int32 err = errno;
+    i32 err = errno;
     result.error_code = errno_to_de100_file_error(err);
 #if DE100_INTERNAL && DE100_SLOW
     posix_set_error_detail("de100_file_open", filename, err);
@@ -777,7 +777,7 @@ De100FileOpenResult de100_file_open(const char *filename,
 // FILE CLOSE
 // ═══════════════════════════════════════════════════════════════════════════
 
-De100FileResult de100_file_close(int32 fd) {
+De100FileResult de100_file_close(i32 fd) {
   if (fd < 0) {
     SET_ERROR_DETAIL("[de100_file_close] Invalid file descriptor: %d", fd);
     return make_error(DE100_FILE_ERROR_INVALID_FD);
@@ -789,7 +789,7 @@ De100FileResult de100_file_close(int32 fd) {
   }
 #else
   if (close(fd) != 0) {
-    int32 err = errno;
+    i32 err = errno;
 #if DE100_INTERNAL && DE100_SLOW
     SET_ERROR_DETAIL("[de100_file_close] close() failed: %s", strerror(err));
 #endif
@@ -804,7 +804,7 @@ De100FileResult de100_file_close(int32 fd) {
 // READ ALL BYTES
 // ═══════════════════════════════════════════════════════════════════════════
 
-De100FileIOResult de100_file_read_all(int32 fd, void *buffer, size_t size) {
+De100FileIOResult de100_file_read_all(i32 fd, void *buffer, size_t size) {
   De100FileIOResult result = {.bytes_processed = 0, .success = false};
 
   if (fd < 0) {
@@ -820,21 +820,21 @@ De100FileIOResult de100_file_read_all(int32 fd, void *buffer, size_t size) {
     return result;
   }
 
-  uint8 *ptr = (uint8 *)buffer;
+  u8 *ptr = (u8 *)buffer;
   size_t remaining = size;
 
   while (remaining > 0) {
 #if defined(_WIN32)
-    int32 bytes_read = _read(fd, ptr, (uint32)remaining);
+    i32 bytes_read = _read(fd, ptr, (u32)remaining);
 #else
     ssize_t bytes_read = read(fd, ptr, remaining);
 #endif
 
     if (bytes_read < 0) {
 #if defined(_WIN32)
-      int32 err = errno;
+      i32 err = errno;
 #else
-      int32 err = errno;
+      i32 err = errno;
       if (err == EINTR) {
         // Interrupted by signal, retry
         continue;
@@ -890,7 +890,7 @@ De100FileIOResult de100_file_read_all(int32 fd, void *buffer, size_t size) {
 // RETURNS: De100FileIOResult with bytes_processed set to total bytes written.
 // ═════════════════════════════════════════════════════════════════════════
 
-De100FileIOResult de100_file_write_all(int32 fd, const void *buffer,
+De100FileIOResult de100_file_write_all(i32 fd, const void *buffer,
                                        size_t size) {
   De100FileIOResult result = {.bytes_processed = 0, .success = false};
 
@@ -906,21 +906,21 @@ De100FileIOResult de100_file_write_all(int32 fd, const void *buffer,
     return result;
   }
 
-  const uint8 *ptr = (const uint8 *)buffer;
+  const u8 *ptr = (const u8 *)buffer;
   size_t remaining = size;
 
   while (remaining > 0) {
 #if defined(_WIN32)
-    int32 bytes_written = _write(fd, ptr, (uint32)remaining);
+    i32 bytes_written = _write(fd, ptr, (u32)remaining);
 #else
     ssize_t bytes_written = write(fd, ptr, remaining);
 #endif
 
     if (bytes_written < 0) {
 #if defined(_WIN32)
-      int32 err = errno;
+      i32 err = errno;
 #else
-      int32 err = errno;
+      i32 err = errno;
       if (err == EINTR) {
         // Interrupted by signal, retry
         continue;
@@ -949,7 +949,7 @@ De100FileIOResult de100_file_write_all(int32 fd, const void *buffer,
 // FILE SEEK
 // ═══════════════════════════════════════════════════════════════════════════
 
-De100FileSizeResult de100_file_seek(int32 fd, int64 offset,
+De100FileSizeResult de100_file_seek(i32 fd, i64 offset,
                                     De100FileSeekOrigin origin) {
   De100FileSizeResult result = {.value = -1, .success = false};
 
@@ -959,7 +959,7 @@ De100FileSizeResult de100_file_seek(int32 fd, int64 offset,
     return result;
   }
 
-  int32 whence;
+  i32 whence;
   switch (origin) {
   case DE100_SEEK_SET:
     whence = SEEK_SET;
@@ -977,13 +977,13 @@ De100FileSizeResult de100_file_seek(int32 fd, int64 offset,
   }
 
 #if defined(_WIN32)
-  int64 new_pos = _lseeki64(fd, offset, whence);
+  i64 new_pos = _lseeki64(fd, offset, whence);
 #else
   off_t new_pos = lseek(fd, (off_t)offset, whence);
 #endif
 
   if (new_pos < 0) {
-    int32 err = errno;
+    i32 err = errno;
     result.error_code = DE100_FILE_ERROR_SEEK_FAILED;
 #if DE100_INTERNAL && DE100_SLOW
     SET_ERROR_DETAIL("[de100_file_seek] lseek() failed: %s", strerror(err));
@@ -991,7 +991,7 @@ De100FileSizeResult de100_file_seek(int32 fd, int64 offset,
     return result;
   }
 
-  result.value = (int64)new_pos;
+  result.value = (i64)new_pos;
   result.success = true;
   result.error_code = DE100_FILE_SUCCESS;
   CLEAR_ERROR_DETAIL();

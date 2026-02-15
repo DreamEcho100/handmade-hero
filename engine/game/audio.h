@@ -41,11 +41,11 @@ typedef struct {
 // ═══════════════════════════════════════════════════════════════════════════
 
 typedef struct {
-  int32 samples_per_second; // Sample rate (e.g., 48000)
-  int32 sample_count;       // How many samples to generate THIS call
+  i32 samples_per_second; // Sample rate (e.g., 48000)
+  i32 sample_count;       // How many samples to generate THIS call
 
   // Two ways to access the buffer (platform chooses which to use):
-  // int16 *samples;            // Simple pointer (preferred for game code)
+  // i16 *samples;            // Simple pointer (preferred for game code)
   void *samples; // Simple pointer (preferred for game code)
 } GameAudioOutputBuffer;
 

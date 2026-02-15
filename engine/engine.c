@@ -78,7 +78,7 @@ int engine_init(EngineState *engine) {
   // game_startup(&game->config);
   // #endif
 
-  uint32 max_allowed_refresh_rate_hz =
+  u32 max_allowed_refresh_rate_hz =
       game->config.max_allowed_refresh_rate_hz != 0
           ? game->config.max_allowed_refresh_rate_hz
           : game->config.target_refresh_rate_hz;
@@ -104,7 +104,7 @@ int engine_init(EngineState *engine) {
   void *base_address = NULL;
 #endif
 
-  uint64 total_size =
+  u64 total_size =
       game->config.permanent_storage_size + game->config.transient_storage_size;
 
   allocations->game_state =
@@ -118,8 +118,8 @@ int engine_init(EngineState *engine) {
   }
 
   game->memory.permanent_storage = allocations->game_state.base;
-  game->memory.transient_storage = (uint8 *)allocations->game_state.base +
-                                   game->config.permanent_storage_size;
+  game->memory.transient_storage =
+      (u8 *)allocations->game_state.base + game->config.permanent_storage_size;
   game->memory.permanent_storage_size = game->config.permanent_storage_size;
   game->memory.transient_storage_size = game->config.transient_storage_size;
   game->memory.is_initialized = false;
@@ -172,7 +172,7 @@ int engine_init(EngineState *engine) {
   // ALLOCATE AUDIO BUFFER
   // ─────────────────────────────────────────────────────────────────────
 
-  int bytes_per_sample = sizeof(int16) * 2;
+  int bytes_per_sample = sizeof(i16) * 2;
   // TODO: should it be on the `game->audio` instead?
   platform->config.audio.bytes_per_sample = bytes_per_sample;
   int samples_per_frame = game->config.initial_audio_sample_rate /

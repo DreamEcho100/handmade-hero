@@ -831,9 +831,9 @@ Sometimes your game can't maintain 60 FPS consistently:
 typedef struct AdaptiveFPS {
     int target_fps;           // Current target (60, 30, 20, or 15)
     int monitor_hz;           // Monitor refresh rate (max target)
-    uint32_t frames_sampled;  // Frames counted in current window
-    uint32_t frames_missed;   // Frames that exceeded target time
-    uint32_t sample_window;   // Evaluate every N frames (300 = 5 sec)
+    u32_t frames_sampled;  // Frames counted in current window
+    u32_t frames_missed;   // Frames that exceeded target time
+    u32_t sample_window;   // Evaluate every N frames (300 = 5 sec)
     real32 miss_threshold;    // Reduce if > this % miss (0.05 = 5%)
     real32 recover_threshold; // Increase if < this % miss (0.01 = 1%)
 } AdaptiveFPS;
@@ -957,9 +957,9 @@ Controls automatic frame rate adjustment. Used in the **main game loop** (Sectio
 typedef struct AdaptiveFPS {
     int target_fps;           // 60, 30, 20, or 15
     int monitor_hz;           // Max target (from XRandR)
-    uint32_t frames_sampled;  // Counter for current evaluation window
-    uint32_t frames_missed;   // Frames that took >target + 2ms
-    uint32_t sample_window;   // Frames per evaluation (300)
+    u32_t frames_sampled;  // Counter for current evaluation window
+    u32_t frames_missed;   // Frames that took >target + 2ms
+    u32_t sample_window;   // Frames per evaluation (300)
     real32 miss_threshold;    // 0.05 = 5%
     real32 recover_threshold; // 0.01 = 1%
 } AdaptiveFPS;
@@ -1001,8 +1001,8 @@ Debug statistics for performance monitoring. Used for **end-of-run reporting** o
 
 ```c
 typedef struct FrameStats {
-    uint32_t frame_count;        // Total frames rendered
-    uint32_t missed_frames;      // Frames that exceeded target
+    u32_t frame_count;        // Total frames rendered
+    u32_t missed_frames;      // Frames that exceeded target
     real32 min_frame_time_ms;    // Best frame time
     real32 max_frame_time_ms;    // Worst frame time
     real32 avg_frame_time_ms;    // Running average (summed, divide at end)

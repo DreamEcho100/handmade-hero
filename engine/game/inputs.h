@@ -1,7 +1,7 @@
 #ifndef DE100_GAME_INPUT_H
 #define DE100_GAME_INPUT_H
 
-#include "../_common/memory.h"
+#include "../_common/base.h"
 #include "./inputs-base.h"
 
 #define BASE_JOYSTICK_DEADZONE 0.4
@@ -113,9 +113,9 @@ typedef struct {
   */
   // Mouse input
   GameButtonState mouse_buttons[5]; // LMB, MMB, RMB, XButton1, XButton2
-  int32 mouse_x;
-  int32 mouse_y;
-  int32 mouse_z; // Mouse wheel (future)
+  i32 mouse_x;
+  i32 mouse_y;
+  i32 mouse_z; // Mouse wheel (future)
 } GameInput;
 
 //

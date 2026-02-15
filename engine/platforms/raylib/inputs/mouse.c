@@ -8,11 +8,11 @@ void raylib_poll_mouse(GameInput *input) {
   // MOUSE POSITION
   // ─────────────────────────────────────────────────────────────────
   Vector2 mouse_pos = GetMousePosition();
-  input->mouse_x = (int32)mouse_pos.x;
-  input->mouse_y = (int32)mouse_pos.y;
+  input->mouse_x = (i32)mouse_pos.x;
+  input->mouse_y = (i32)mouse_pos.y;
 
   // Mouse wheel (Raylib returns float, we store as int)
-  input->mouse_z = (int32)GetMouseWheelMove();
+  input->mouse_z = (i32)GetMouseWheelMove();
 
   // ─────────────────────────────────────────────────────────────────
   // MOUSE BUTTONS

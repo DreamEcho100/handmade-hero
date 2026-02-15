@@ -331,7 +331,7 @@ De100MemoryBlock de100_memory_alloc(void *base_hint, size_t size,
   }
 
   // Commit usable region (skip first guard page)
-  void *usable = (uint8 *)reserved + page_size;
+  void *usable = (u8 *)reserved + page_size;
   DWORD protect = win32_protection_flags(flags);
 
   void *committed = VirtualAlloc(usable, aligned_size, MEM_COMMIT, protect);
@@ -367,7 +367,7 @@ De100MemoryBlock de100_memory_alloc(void *base_hint, size_t size,
   }
 
   // Set protection on usable region (skip first guard page)
-  void *usable = (uint8 *)reserved + page_size;
+  void *usable = (u8 *)reserved + page_size;
   int prot = posix_protection_flags(flags);
 
   if (mprotect(usable, aligned_size, prot) != 0) {
@@ -382,7 +382,7 @@ De100MemoryBlock de100_memory_alloc(void *base_hint, size_t size,
 #if DE100_INTERNAL && DE100_SLOW
   // Verify zero-initialization in dev builds
   if (flags & De100_MEMORY_FLAG_ZEROED) {
-    uint8 *p = (uint8 *)usable;
+    u8 *p = (u8 *)usable;
     size_t check_offsets[] = {0, aligned_size / 4, aligned_size / 2,
                               3 * aligned_size / 4, aligned_size - 1};
     for (size_t i = 0; i < ArraySize(check_offsets); i++) {
@@ -513,14 +513,14 @@ De100MemoryError de100_memory_realloc(De100MemoryBlock *block, size_t new_size,
 
     // Zero extra space if we grew
     if (new_block.size > old_size) {
-      de100_mem_set((uint8 *)new_block.base + old_size, 0,
+      de100_mem_set((u8 *)new_block.base + old_size, 0,
                     new_block.size - old_size);
     }
   }
 
   // Free old memory (calculate original reserved base)
   size_t guard_page_size = de100_memory_page_size();
-  void *old_reserved_base = (uint8 *)old_base - guard_page_size;
+  void *old_reserved_base = (u8 *)old_base - guard_page_size;
 
 #if defined(_WIN32)
   VirtualFree(old_reserved_base, 0, MEM_RELEASE);
@@ -574,7 +574,7 @@ De100MemoryError de100_memory_free(De100MemoryBlock *block) {
     return De100_MEMORY_ERR_PAGE_SIZE_FAILED;
   }
 
-  void *reserved_base = (uint8 *)block->base - page_size;
+  void *reserved_base = (u8 *)block->base - page_size;
 
 #if defined(_WIN32)
   if (!VirtualFree(reserved_base, 0, MEM_RELEASE)) {
@@ -644,7 +644,7 @@ void *de100_mem_zero_secure(void *dest, size_t size) {
     (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 25))
   explicit_bzero(dest, size);
 #else
-  volatile uint8 *p = (volatile uint8 *)dest;
+  volatile u8 *p = (volatile u8 *)dest;
   while (size--)
     *p++ = 0;
 #endif

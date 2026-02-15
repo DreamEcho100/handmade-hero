@@ -87,15 +87,15 @@ const char *debug_de100_file_get_last_error_detail(void) {
 // SAFE TRUNCATION
 // ═══════════════════════════════════════════════════════════════════════════
 
-uint32 safe_truncate_uint64(int64 value) {
+u32 safe_truncate_u64(i64 value) {
   // Negative values indicate an error (e.g., ftell() returns -1 on error)
   DEV_ASSERT(value >= 0);
 
   // Check for overflow - file too large for 32-bit size
-  // UINT32_MAX = 4,294,967,295 = ~4GB
-  DEV_ASSERT(value <= (int64)0xFFFFFFFF);
+  // U32_MAX = 4,294,967,295 = ~4GB
+  DEV_ASSERT(value <= (i64)0xFFFFFFFF);
 
-  return (uint32)value;
+  return (u32)value;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -175,7 +175,7 @@ de100_debug_read_entire_file(ThreadContext *thread_context,
   }
 
   // Check for 32-bit overflow (debug I/O limited to 4GB)
-  if (size_result.value > (int64)0xFFFFFFFF) {
+  if (size_result.value > (i64)0xFFFFFFFF) {
     SET_ERROR_DETAIL("[debug_read] File too large: '%s' (%lld bytes, max 4GB)",
                      filename, (long long)size_result.value);
     return make_read_error(DEBUG_DE100_FILE_ERROR_TOO_LARGE);
@@ -227,7 +227,7 @@ de100_debug_read_entire_file(ThreadContext *thread_context,
   // ─────────────────────────────────────────────────────────────────────
   // Success
   // ─────────────────────────────────────────────────────────────────────
-  result.size = safe_truncate_uint64((int64)de100_file_size);
+  result.size = safe_truncate_u64((i64)de100_file_size);
   result.error_code = DEBUG_FILE_SUCCESS;
   CLEAR_ERROR_DETAIL();
 
@@ -267,7 +267,7 @@ void de100_debug_free_de100_file_memory(ThreadContext *thread_context,
 
 De100DebugFileWriteResult
 de100_debug_write_entire_file(ThreadContext *thread_context,
-                              const char *filename, uint32 size,
+                              const char *filename, u32 size,
                               const void *data) {
   (void)thread_context;
   // ─────────────────────────────────────────────────────────────────────

@@ -4,7 +4,7 @@
 #include "../_common/base.h"
 
 typedef struct {
-  int32 placeholder;
+  i32 placeholder;
 } ThreadContext;
 
 #endif // DE100_GAME_DE100_THREAD_H

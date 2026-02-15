@@ -46,7 +46,7 @@ void prepare_input_frame(GameInput *old_input, GameInput *new_input) {
     // ─────────────────────────────────────────────────────────────────
     // ADD: Preserve mouse button states
     // ─────────────────────────────────────────────────────────────────
-    for (uint32 b = 0; b < ArraySize(new_input->mouse_buttons); b++) {
+    for (u32 b = 0; b < ArraySize(new_input->mouse_buttons); b++) {
       new_input->mouse_buttons[b].ended_down =
           old_input->mouse_buttons[b].ended_down;
       new_input->mouse_buttons[b].half_transition_count = 0;

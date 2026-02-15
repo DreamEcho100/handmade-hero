@@ -4,6 +4,16 @@
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
 #endif
+#if (__STDC_VERSION__ >= 202311L)
+#define HAS_C23 1
+#define HAS_C17 1
+#define HAS_C11 1
+#elif (__STDC_VERSION__ >= 201710L)
+#define HAS_C17 1
+#define HAS_C11 1
+#elif (__STDC_VERSION__ >= 201112L)
+#define HAS_C11 1
+#endif
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -12,14 +22,6 @@
 // #if !defined(__STDC_VERSION__) || (__STDC_VERSION__ < 201112L)
 // #error "C11 or newer required."
 // #endif
-
-#if (__STDC_VERSION__ >= 202311L)
-#define HAS_C23 1
-#elif (__STDC_VERSION__ >= 201710L)
-#define HAS_C17 1
-#elif (__STDC_VERSION__ >= 201112L)
-#define HAS_C11 1
-#endif
 
 #ifndef DE100_IS_GENERIC_POSIX
 #if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) ||        \
@@ -148,14 +150,14 @@ typedef double f64;
 
 typedef int32_t bool32;
 
-typedef int8_t int8;
-typedef int16_t int16;
-typedef int32_t int32;
-typedef int64_t int64;
+typedef int8_t i8;
+typedef int16_t i16;
+typedef int32_t i32;
+typedef int64_t i64;
 
-typedef uint8_t uint8;
-typedef uint16_t uint16;
-typedef uint32_t uint32;
-typedef uint64_t uint64;
+typedef uint8_t u8;
+typedef uint16_t u16;
+typedef uint32_t u32;
+typedef uint64_t u64;
 
 #endif /* DE100_COMMON_BASE_H */

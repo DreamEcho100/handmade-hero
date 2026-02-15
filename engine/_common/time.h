@@ -12,8 +12,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 typedef struct {
-  int64 seconds;
-  int64 nanoseconds;
+  i64 seconds;
+  i64 nanoseconds;
 } De100TimeSpec;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -66,7 +66,7 @@ void de100_sleep_seconds(f64 seconds);
  *
  * Convenience wrapper around de100_sleep_seconds().
  */
-void de100_sleep_ms(uint32 milliseconds);
+void de100_sleep_ms(u32 milliseconds);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // LOW-LEVEL TIMESPEC FUNCTIONS
@@ -113,6 +113,6 @@ f64 de100_timespec_diff_milliseconds(const De100TimeSpec *start,
  * @param b Second time
  * @return -1 if a < b, 0 if a == b, 1 if a > b
  */
-int32 de100_timespec_compare(const De100TimeSpec *a, const De100TimeSpec *b);
+i32 de100_timespec_compare(const De100TimeSpec *a, const De100TimeSpec *b);
 
 #endif // DE100_COMMON_TIME_H

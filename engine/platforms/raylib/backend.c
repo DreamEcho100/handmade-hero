@@ -106,7 +106,7 @@ update_window_from_backbuffer(GameBackBuffer *backbuffer) {
 
 de100_file_scoped_fn inline void
 audio_generate_and_send(EnginePlatformState *platform, EngineGameState *game) {
-  uint32 samples_to_generate =
+  u32 samples_to_generate =
       raylib_get_samples_to_write(&platform->config.audio, &game->audio);
 
 #if DE100_INTERNAL
@@ -124,7 +124,7 @@ audio_generate_and_send(EnginePlatformState *platform, EngineGameState *game) {
     GameAudioOutputBuffer audio_buffer = {
         .samples_per_second = game->audio.samples_per_second,
         .sample_count = samples_to_generate,
-        .samples = (int16 *)game->audio.samples};
+        .samples = (i16 *)game->audio.samples};
 
     platform->code.get_audio_samples(&game->memory, &audio_buffer);
     raylib_send_samples(&platform->config.audio, &audio_buffer);
