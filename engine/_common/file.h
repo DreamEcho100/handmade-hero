@@ -103,7 +103,7 @@ De100FileTimeResult de100_file_get_mod_time(const char *filename);
 /**
  * Compare two file modification times.
  */
-real64 de100_file_time_diff(const De100TimeSpec *a, const De100TimeSpec *b);
+f64 de100_file_time_diff(const De100TimeSpec *a, const De100TimeSpec *b);
 
 /**
  * Copy a file from source to destination.

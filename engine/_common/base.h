@@ -1,11 +1,25 @@
 #ifndef DE100_COMMON_BASE_H
 #define DE100_COMMON_BASE_H
 
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
+
+// #if !defined(__STDC_VERSION__) || (__STDC_VERSION__ < 201112L)
+// #error "C11 or newer required."
+// #endif
+
+#if (__STDC_VERSION__ >= 202311L)
+#define HAS_C23 1
+#elif (__STDC_VERSION__ >= 201710L)
+#define HAS_C17 1
+#elif (__STDC_VERSION__ >= 201112L)
+#define HAS_C11 1
+#endif
 
 #ifndef DE100_IS_GENERIC_POSIX
 #if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) ||        \
@@ -38,7 +52,8 @@
 
 /* ========================= ASSERTS ========================= */
 
-#if !defined(NDEBUG)
+#if !defined(DE100_NO_ASSERTS)
+#include <stdio.h>
 
 #define ASSERT(expr)                                                           \
   do {                                                                         \
@@ -47,8 +62,9 @@
               "ASSERTION FAILED\n"                                             \
               "  Expression: %s\n"                                             \
               "  File: %s\n"                                                   \
-              "  Line: %d\n",                                                  \
-              #expr, __FILE__, __LINE__);                                      \
+              "  Line: %d\n"                                                   \
+              "  File:Line: %s:%d\n",                                          \
+              #expr, __FILE__, __LINE__, __FILE__, __LINE__);                  \
       fflush(stderr);                                                          \
       DEBUG_BREAK();                                                           \
     }                                                                          \
@@ -64,7 +80,7 @@
               "  File: %s\n"                                                   \
               "  Line: %d\n"                                                   \
               "  File:Line: %s:%d\n",                                          \
-              #expr, ##__VA_ARGS__, __FILE__, __LINE__, __FILE__, __LINE__);   \
+              #expr, __VA_ARGS__, __FILE__, __LINE__, __FILE__, __LINE__);     \
       fflush(stderr);                                                          \
       DEBUG_BREAK();                                                           \
     }                                                                          \
@@ -80,7 +96,7 @@
 #if DE100_SLOW
 #define DEV_DEBUG_BREAK() DEBUG_BREAK()
 #define DEV_ASSERT(expr) ASSERT(expr)
-#define DEV_ASSERT_MSG(expr, fmt, ...) ASSERT_MSG(expr, fmt, ##__VA_ARGS__)
+#define DEV_ASSERT_MSG(expr, fmt, ...) ASSERT_MSG(expr, fmt, __VA_ARGS__)
 #else
 #define DEV_DEBUG_BREAK() ((void)0)
 #define DEV_ASSERT(expr) ((void)0)
@@ -127,8 +143,8 @@
 #define local_persist_var static
 #define de100_file_scoped_global_var static
 
-typedef float real32;
-typedef double real64;
+typedef float f32;
+typedef double f64;
 
 typedef int32_t bool32;
 

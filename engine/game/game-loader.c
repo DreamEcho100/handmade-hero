@@ -5,6 +5,7 @@
 
 #include "../_common/dll.h"
 #include "../_common/file.h"
+#include "base.h"
 #include "game-loader.h"
 
 // ═══════════════════════════════════════════════════════════════════════════

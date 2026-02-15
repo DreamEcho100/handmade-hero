@@ -1,11 +1,10 @@
 #include "engine.h"
 #include "./platforms/_common/hooks/utils.h"
 
-#include "./platforms/_common/inputs-recording.h"
-#include "_common/file.h"
 #include "_common/memory.h"
 #include "_common/path.h"
 #include "_common/time.h"
+#include "game/base.h"
 #include "platforms/_common/replay-buffer.h"
 
 // ═══════════════════════════════════════════════════════════════════════════

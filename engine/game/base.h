@@ -12,7 +12,7 @@ extern bool g_game_is_paused;
 // extern bool g_window_is_active;
 extern bool g_reload_requested;
 
-extern real64 g_initial_game_time_ms;
+extern f64 g_initial_game_time_ms;
 
 extern uint32 g_frame_counter;
 extern uint32 g_fps;

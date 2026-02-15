@@ -1,3 +1,6 @@
+// Feature test macros must come first
+#include "base.h"
+
 #include "path.h"
 
 #include <stdio.h>
@@ -10,6 +13,7 @@
 #if defined(__linux__)
 #include <errno.h>
 #include <limits.h>
+#include <sys/types.h>
 #include <unistd.h>
 #elif defined(__APPLE__)
 #include <errno.h>
@@ -204,7 +208,7 @@ De100PathResult de100_path_get_executable(void) {
   // MACOS: Use _NSGetExecutablePath
   // ─────────────────────────────────────────────────────────────────────
 
-  uint32_t size = sizeof(result.path);
+  uint32 size = sizeof(result.path);
 
   if (_NSGetExecutablePath(result.path, &size) != 0) {
     result.error_code = DE100_PATH_ERROR_BUFFER_TOO_SMALL;

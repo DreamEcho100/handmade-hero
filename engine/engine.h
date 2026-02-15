@@ -6,14 +6,11 @@
 #include "game/audio.h"
 #include "game/backbuffer.h"
 #include "game/config.h"
-#include "game/thread.h"
 #include "game/game-loader.h"
 #include "game/inputs.h"
 #include "game/memory.h"
-#include "platforms/_common/adaptive-fps.h"
+#include "game/thread.h"
 #include "platforms/_common/config.h"
-#include "platforms/_common/frame-stats.h"
-#include "platforms/_common/frame-timing.h"
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ENGINE STATE

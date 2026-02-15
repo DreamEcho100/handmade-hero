@@ -26,6 +26,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -309,6 +310,7 @@ de100_file_scoped_fn inline int x11_init(EngineState *engine) {
   g_last_window_width = engine->game.config.window_width;
   g_last_window_height = engine->game.config.window_height;
 
+  // TODO: remove the use of `callloc`
   X11PlatformState *x11 = calloc(1, sizeof(X11PlatformState));
   if (!x11) {
     fprintf(stderr, "❌ Failed to allocate X11 state\n");
@@ -388,7 +390,7 @@ de100_file_scoped_fn inline int x11_init(EngineState *engine) {
   printf("══════���════════════════════════════════════════════════════\n");
   printf("Initial target:  %dHz (%.2fms/frame)\n",
          engine->game.config.max_allowed_refresh_rate_hz,
-         1000.0f / (real32)engine->game.config.max_allowed_refresh_rate_hz);
+         1000.0f / (f32)engine->game.config.max_allowed_refresh_rate_hz);
   printf("═══════════════════════════════════════════════════════════\n\n");
 #endif
   return 0;
@@ -423,7 +425,7 @@ de100_file_scoped_fn inline void x11_shutdown(EngineState *engine) {
 // Main Platform Entry Point
 // ═══════════════════════════════════════════════════════════════════════════
 
-int platform_main() {
+int platform_main(void) {
   EngineState engine = {0};
   engine.platform.code = (GameCode){0};
 
@@ -503,8 +505,8 @@ int platform_main() {
         engine.game.config.target_seconds_per_frame);
     frame_timing_end();
 
-    real32 frame_time_ms = frame_timing_get_ms();
-    real32 target_frame_time_ms =
+    f32 frame_time_ms = frame_timing_get_ms();
+    f32 target_frame_time_ms =
         engine.game.config.target_seconds_per_frame * 1000.0f;
 
     if (frame_time_ms > (target_frame_time_ms + 5.0f)) {

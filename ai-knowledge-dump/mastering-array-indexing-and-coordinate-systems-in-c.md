@@ -353,11 +353,11 @@ typedef struct {
     int32 col;
 } TileCoord;
 
-TileCoord screen_to_tile(real32 screen_x, real32 screen_y, TileState* tiles) {
+TileCoord screen_to_tile(f32 screen_x, f32 screen_y, TileState* tiles) {
     TileCoord result;
-    result.col = floor_real32_to_int32(
+    result.col = floor_f32_to_int32(
         (screen_x - tiles->upper_left_x) / tiles->width);
-    result.row = floor_real32_to_int32(
+    result.row = floor_f32_to_int32(
         (screen_y - tiles->upper_left_y) / tiles->height);
     return result;
 }
@@ -387,10 +387,10 @@ typedef struct {
     // Access: map[tile_y][tile_x]
     uint32 map[MAP_ROW_COUNT][MAP_COL_COUNT];
 
-    real32 upper_left_x;  // Screen X of tile [0][0]'s left edge
-    real32 upper_left_y;  // Screen Y of tile [0][0]'s top edge
-    real32 width;         // Width of each tile in pixels
-    real32 height;        // Height of each tile in pixels
+    f32 upper_left_x;  // Screen X of tile [0][0]'s left edge
+    f32 upper_left_y;  // Screen Y of tile [0][0]'s top edge
+    f32 width;         // Width of each tile in pixels
+    f32 height;        // Height of each tile in pixels
 } TileState;
 ```
 
@@ -403,12 +403,12 @@ typedef struct {
 When tile collision isn't working, add comprehensive logging:
 
 ```c
-void debug_tile_check(real32 screen_x, real32 screen_y, TileState* tiles) {
-    real32 relative_x = screen_x - tiles->upper_left_x;
-    real32 relative_y = screen_y - tiles->upper_left_y;
+void debug_tile_check(f32 screen_x, f32 screen_y, TileState* tiles) {
+    f32 relative_x = screen_x - tiles->upper_left_x;
+    f32 relative_y = screen_y - tiles->upper_left_y;
 
-    int32 tile_col = floor_real32_to_int32(relative_x / tiles->width);
-    int32 tile_row = floor_real32_to_int32(relative_y / tiles->height);
+    int32 tile_col = floor_f32_to_int32(relative_x / tiles->width);
+    int32 tile_row = floor_f32_to_int32(relative_y / tiles->height);
 
     printf("═══════════════════════════════════════\n");
     printf("TILE DEBUG:\n");
@@ -436,18 +436,18 @@ Draw the tile grid and highlight the player's current tile:
 
 ```c
 void draw_debug_overlay(GameBackBuffer* buffer, TileState* tiles,
-                        real32 player_x, real32 player_y) {
+                        f32 player_x, f32 player_y) {
     // Calculate player's tile
-    int32 player_col = floor_real32_to_int32(
+    int32 player_col = floor_f32_to_int32(
         (player_x - tiles->upper_left_x) / tiles->width);
-    int32 player_row = floor_real32_to_int32(
+    int32 player_row = floor_f32_to_int32(
         (player_y - tiles->upper_left_y) / tiles->height);
 
     // Draw all tiles with their coordinates
     for (int32 row = 0; row < MAP_ROW_COUNT; ++row) {
         for (int32 col = 0; col < MAP_COL_COUNT; ++col) {
-            real32 min_x = tiles->upper_left_x + col * tiles->width;
-            real32 min_y = tiles->upper_left_y + row * tiles->height;
+            f32 min_x = tiles->upper_left_x + col * tiles->width;
+            f32 min_y = tiles->upper_left_y + row * tiles->height;
 
             // Highlight player's tile in a different color
             if (row == player_row && col == player_col) {
@@ -504,10 +504,10 @@ void test_tile_coordinates(TileState* tiles) {
 
     // Test: Upper-left corner of tile [0][0]
     {
-        real32 test_x = tiles->upper_left_x + 1;  // Just inside
-        real32 test_y = tiles->upper_left_y + 1;
-        int32 col = floor_real32_to_int32((test_x - tiles->upper_left_x) / tiles->width);
-        int32 row = floor_real32_to_int32((test_y - tiles->upper_left_y) / tiles->height);
+        f32 test_x = tiles->upper_left_x + 1;  // Just inside
+        f32 test_y = tiles->upper_left_y + 1;
+        int32 col = floor_f32_to_int32((test_x - tiles->upper_left_x) / tiles->width);
+        int32 row = floor_f32_to_int32((test_y - tiles->upper_left_y) / tiles->height);
         printf("Test 1: pos(%.1f, %.1f) -> tile[%d][%d] (expected [0][0]): %s\n",
                test_x, test_y, row, col,
                (row == 0 && col == 0) ? "PASS" : "FAIL");
@@ -515,10 +515,10 @@ void test_tile_coordinates(TileState* tiles) {
 
     // Test: Upper-left corner of tile [1][2]
     {
-        real32 test_x = tiles->upper_left_x + 2 * tiles->width + 1;
-        real32 test_y = tiles->upper_left_y + 1 * tiles->height + 1;
-        int32 col = floor_real32_to_int32((test_x - tiles->upper_left_x) / tiles->width);
-        int32 row = floor_real32_to_int32((test_y - tiles->upper_left_y) / tiles->height);
+        f32 test_x = tiles->upper_left_x + 2 * tiles->width + 1;
+        f32 test_y = tiles->upper_left_y + 1 * tiles->height + 1;
+        int32 col = floor_f32_to_int32((test_x - tiles->upper_left_x) / tiles->width);
+        int32 row = floor_f32_to_int32((test_y - tiles->upper_left_y) / tiles->height);
         printf("Test 2: pos(%.1f, %.1f) -> tile[%d][%d] (expected [1][2]): %s\n",
                test_x, test_y, row, col,
                (row == 1 && col == 2) ? "PASS" : "FAIL");
@@ -526,10 +526,10 @@ void test_tile_coordinates(TileState* tiles) {
 
     // Test: Last valid tile
     {
-        real32 test_x = tiles->upper_left_x + (MAP_COL_COUNT - 1) * tiles->width + 1;
-        real32 test_y = tiles->upper_left_y + (MAP_ROW_COUNT - 1) * tiles->height + 1;
-        int32 col = floor_real32_to_int32((test_x - tiles->upper_left_x) / tiles->width);
-        int32 row = floor_real32_to_int32((test_y - tiles->upper_left_y) / tiles->height);
+        f32 test_x = tiles->upper_left_x + (MAP_COL_COUNT - 1) * tiles->width + 1;
+        f32 test_y = tiles->upper_left_y + (MAP_ROW_COUNT - 1) * tiles->height + 1;
+        int32 col = floor_f32_to_int32((test_x - tiles->upper_left_x) / tiles->width);
+        int32 row = floor_f32_to_int32((test_y - tiles->upper_left_y) / tiles->height);
         printf("Test 3: pos(%.1f, %.1f) -> tile[%d][%d] (expected [%d][%d]): %s\n",
                test_x, test_y, row, col,
                MAP_ROW_COUNT - 1, MAP_COL_COUNT - 1,
@@ -805,12 +805,12 @@ int32 tile_row = (int32)(relative_y / tile_height);
 
 // Later: world coordinates may go negative
 // Use floor for correct tile boundaries:
-de100_file_scoped_fn inline int32 floor_real32_to_int32(real32 value) {
+de100_file_scoped_fn inline int32 floor_f32_to_int32(f32 value) {
     return (int32)floorf(value);
 }
 
-int32 tile_col = floor_real32_to_int32(relative_x / tile_width);
-int32 tile_row = floor_real32_to_int32(relative_y / tile_height);
+int32 tile_col = floor_f32_to_int32(relative_x / tile_width);
+int32 tile_row = floor_f32_to_int32(relative_y / tile_height);
 ```
 
 **Summary Table:**
@@ -916,10 +916,10 @@ Never access the map array directly. Always go through a function:
 // tile_map.h
 typedef struct {
     uint32 data[MAP_ROW_COUNT][MAP_COL_COUNT];
-    real32 origin_x;
-    real32 origin_y;
-    real32 tile_width;
-    real32 tile_height;
+    f32 origin_x;
+    f32 origin_y;
+    f32 tile_width;
+    f32 tile_height;
 } TileMap;
 
 // Get tile value with bounds checking
@@ -929,7 +929,7 @@ uint32 tilemap_get(TileMap* map, int32 row, int32 col);
 bool32 tilemap_is_walkable(TileMap* map, int32 row, int32 col);
 
 // Convert screen position to tile coordinates
-void tilemap_screen_to_tile(TileMap* map, real32 screen_x, real32 screen_y,
+void tilemap_screen_to_tile(TileMap* map, f32 screen_x, f32 screen_y,
                             int32* out_row, int32* out_col);
 
 // tile_map.c
@@ -947,7 +947,7 @@ bool32 tilemap_is_walkable(TileMap* map, int32 row, int32 col) {
     return map->data[row][col] == 0;
 }
 
-void tilemap_screen_to_tile(TileMap* map, real32 screen_x, real32 screen_y,
+void tilemap_screen_to_tile(TileMap* map, f32 screen_x, f32 screen_y,
                             int32* out_row, int32* out_col) {
     *out_col = (int32)floorf((screen_x - map->origin_x) / map->tile_width);
     *out_row = (int32)floorf((screen_y - map->origin_y) / map->tile_height);
@@ -977,8 +977,8 @@ typedef struct {
 } TileCoord;
 
 typedef struct {
-    real32 x;
-    real32 y;
+    f32 x;
+    f32 y;
 } ScreenPos;
 
 // Functions use these types - can't mix them up!
@@ -1049,12 +1049,12 @@ void handle_controls(...) {
 void render_debug_overlay(GameBackBuffer* buffer, TileState* tiles) {
 #if DEBUG_TILE_COLLISION
     // Highlight the last checked tile
-    real32 min_x = tiles->origin_x + g_debug.last_checked_col * tiles->tile_width;
-    real32 min_y = tiles->origin_y + g_debug.last_checked_row * tiles->tile_height;
+    f32 min_x = tiles->origin_x + g_debug.last_checked_col * tiles->tile_width;
+    f32 min_y = tiles->origin_y + g_debug.last_checked_row * tiles->tile_height;
 
     // Green = walkable, Red = blocked
-    real32 r = g_debug.last_check_result ? 0.0f : 1.0f;
-    real32 g = g_debug.last_check_result ? 1.0f : 0.0f;
+    f32 r = g_debug.last_check_result ? 0.0f : 1.0f;
+    f32 g = g_debug.last_check_result ? 1.0f : 0.0f;
 
     draw_rect_outline(buffer, min_x, min_y,
                       min_x + tiles->tile_width,
@@ -1085,7 +1085,7 @@ void run_tile_coordinate_tests(void) {
     };
 
     typedef struct {
-        real32 screen_x, screen_y;
+        f32 screen_x, screen_y;
         int32 expected_row, expected_col;
     } TestCase;
 
@@ -1147,7 +1147,7 @@ uint32 map[TILE_ROWS][TILE_COLS] = {
     {1, 1, 1, 1, 1, 1, 1, 1},
 };
 
-void check_collision(real32 player_x, real32 player_y) {
+void check_collision(f32 player_x, f32 player_y) {
     int32 tile_x = (int32)(player_x / 32.0f);
     int32 tile_y = (int32)(player_y / 32.0f);
 
@@ -1213,7 +1213,7 @@ map[tile_y][tile_x]  // [row][col]
 **Fixed Code:**
 
 ```c
-void check_collision(real32 player_x, real32 player_y) {
+void check_collision(f32 player_x, f32 player_y) {
     int32 tile_col = (int32)(player_x / 32.0f);
     int32 tile_row = (int32)(player_y / 32.0f);
 
@@ -1243,13 +1243,13 @@ The player sometimes teleports when walking near the left edge of the map. Find 
 #define MAP_OFFSET_Y 0.0f
 #define TILE_SIZE 32.0f
 
-int32 get_tile_col(real32 screen_x) {
-    real32 relative_x = screen_x - MAP_OFFSET_X;
+int32 get_tile_col(f32 screen_x) {
+    f32 relative_x = screen_x - MAP_OFFSET_X;
     return (int32)(relative_x / TILE_SIZE);
 }
 
-void update_player(Player* player, real32 dx) {
-    real32 new_x = player->x + dx;
+void update_player(Player* player, f32 dx) {
+    f32 new_x = player->x + dx;
     int32 tile_col = get_tile_col(new_x);
 
     // Check if tile is valid
@@ -1321,8 +1321,8 @@ floorf(-0.1875) = -1   ✅ Correct tile index
 **Fixed Code:**
 
 ```c
-int32 get_tile_col(real32 screen_x) {
-    real32 relative_x = screen_x - MAP_OFFSET_X;
+int32 get_tile_col(f32 screen_x) {
+    f32 relative_x = screen_x - MAP_OFFSET_X;
     return (int32)floorf(relative_x / TILE_SIZE);  // Use floor for negative coords!
 }
 ```
@@ -1490,7 +1490,7 @@ The game crashes when the player reaches the bottom-right corner of the map. Fin
 #define MAP_COLS 17
 uint32 map[MAP_ROWS][MAP_COLS];
 
-bool32 can_move_to(real32 x, real32 y) {
+bool32 can_move_to(f32 x, f32 y) {
     int32 col = (int32)floorf(x / TILE_SIZE);
     int32 row = (int32)floorf(y / TILE_SIZE);
 
@@ -1587,7 +1587,7 @@ The check passes, then `map[9][17]` causes a buffer overflow!
 **Fixed Code:**
 
 ```c
-bool32 can_move_to(real32 x, real32 y) {
+bool32 can_move_to(f32 x, f32 y) {
     int32 col = (int32)floorf(x / TILE_SIZE);
     int32 row = (int32)floorf(y / TILE_SIZE);
 
@@ -1628,16 +1628,16 @@ The player gets blocked in the middle of empty tiles. The blocking seems to happ
 #define TILE_SIZE 64
 
 typedef struct {
-    real32 x, y;           // Center position
-    real32 width, height;  // Player is 48x48
+    f32 x, y;           // Center position
+    f32 width, height;  // Player is 48x48
 } Player;
 
 bool32 is_blocked(Player* p, TileMap* map) {
     // Check all four corners of the player
-    real32 left = p->x - p->width / 2;
-    real32 right = p->x + p->width / 2;
-    real32 top = p->y - p->height / 2;
-    real32 bottom = p->y + p->height / 2;
+    f32 left = p->x - p->width / 2;
+    f32 right = p->x + p->width / 2;
+    f32 top = p->y - p->height / 2;
+    f32 bottom = p->y + p->height / 2;
 
     // Convert to tile coordinates
     int32 left_col = (int32)(left / TILE_SIZE);
@@ -1792,10 +1792,10 @@ The player's rightmost pixel is AT x=128, which is the START of tile 2. But the 
 
 ```c
 bool32 is_blocked(Player* p, TileMap* map) {
-    real32 left = p->x - p->width / 2;
-    real32 right = p->x + p->width / 2 - 0.001f;  // Subtract epsilon
-    real32 top = p->y - p->height / 2;
-    real32 bottom = p->y + p->height / 2 - 0.001f;  // Subtract epsilon
+    f32 left = p->x - p->width / 2;
+    f32 right = p->x + p->width / 2 - 0.001f;  // Subtract epsilon
+    f32 top = p->y - p->height / 2;
+    f32 bottom = p->y + p->height / 2 - 0.001f;  // Subtract epsilon
 
     // Use floor for negative coordinate safety
     int32 left_col = (int32)floorf(left / TILE_SIZE);
@@ -1811,7 +1811,7 @@ bool32 is_blocked(Player* p, TileMap* map) {
 
 ```c
 // Define player bounds as [min, max) - max is exclusive
-real32 right = p->x + p->width / 2;  // This pixel is NOT part of player
+f32 right = p->x + p->width / 2;  // This pixel is NOT part of player
 
 // When checking tiles, the rightmost tile is:
 int32 right_col = (int32)floorf((right - 0.001f) / TILE_SIZE);
@@ -1841,16 +1841,16 @@ Complete this helper function to safely get a tile value:
 
 typedef struct {
     uint32 data[MAP_ROWS][MAP_COLS];
-    real32 origin_x;
-    real32 origin_y;
-    real32 tile_size;
+    f32 origin_x;
+    f32 origin_y;
+    f32 tile_size;
 } TileMap;
 
 // TODO: Complete this function
 // - Convert screen position to tile coordinates
 // - Return TILE_SOLID if out of bounds
 // - Return the tile value if in bounds
-uint32 get_tile_at_position(TileMap* map, real32 screen_x, real32 screen_y) {
+uint32 get_tile_at_position(TileMap* map, f32 screen_x, f32 screen_y) {
     // Your code here
 }
 ```
@@ -1880,10 +1880,10 @@ Check bounds BEFORE accessing the array. Remember: `row < MAP_ROWS` and `col < M
 <summary>🔓 Complete Solution</summary>
 
 ```c
-uint32 get_tile_at_position(TileMap* map, real32 screen_x, real32 screen_y) {
+uint32 get_tile_at_position(TileMap* map, f32 screen_x, f32 screen_y) {
     // Step 1: Calculate relative position
-    real32 relative_x = screen_x - map->origin_x;
-    real32 relative_y = screen_y - map->origin_y;
+    f32 relative_x = screen_x - map->origin_x;
+    f32 relative_y = screen_y - map->origin_y;
 
     // Step 2: Convert to tile coordinates using floor (handles negatives)
     int32 col = (int32)floorf(relative_x / map->tile_size);
@@ -1936,8 +1936,8 @@ void render_map(void) {
         for (int y = 0; y < MAP_ROWS; y++) {
             uint32 tile = map[x][y];
 
-            real32 screen_x = x * TILE_SIZE;
-            real32 screen_y = y * TILE_SIZE;
+            f32 screen_x = x * TILE_SIZE;
+            f32 screen_y = y * TILE_SIZE;
 
             draw_tile(screen_x, screen_y, tile);
         }
@@ -1975,8 +1975,8 @@ void render_map(void) {
         for (int row = 0; row < MAP_ROWS; row++) {
             uint32 tile = map[row][col];  // [row][col] order
 
-            real32 screen_x = col * TILE_SIZE;  // col determines X
-            real32 screen_y = row * TILE_SIZE;  // row determines Y
+            f32 screen_x = col * TILE_SIZE;  // col determines X
+            f32 screen_y = row * TILE_SIZE;  // row determines Y
 
             draw_tile(screen_x, screen_y, tile);
         }
@@ -1992,8 +1992,8 @@ void render_map(void) {
         for (int col = 0; col < MAP_COLS; col++) {
             uint32 tile = map[row][col];
 
-            real32 screen_x = col * TILE_SIZE;
-            real32 screen_y = row * TILE_SIZE;
+            f32 screen_x = col * TILE_SIZE;
+            f32 screen_y = row * TILE_SIZE;
 
             draw_tile(screen_x, screen_y, tile);
         }
@@ -2234,8 +2234,8 @@ The conversion function should:
 // ═══════════════════════════════════════════════════════════════════════════
 
 typedef struct {
-    real32 x;
-    real32 y;
+    f32 x;
+    f32 y;
 } ScreenPos;
 
 typedef struct {
@@ -2253,12 +2253,12 @@ typedef struct {
     uint32 data[MAP_ROW_COUNT][MAP_COL_COUNT];
 
     // Screen position of tile [0][0]'s top-left corner
-    real32 origin_x;
-    real32 origin_y;
+    f32 origin_x;
+    f32 origin_y;
 
     // Size of each tile in pixels
-    real32 tile_width;
-    real32 tile_height;
+    f32 tile_width;
+    f32 tile_height;
 } TileMap;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2269,8 +2269,8 @@ TileCoord screen_to_tile(ScreenPos pos, TileMap* map) {
     TileCoord result;
 
     // Calculate position relative to map origin
-    real32 relative_x = pos.x - map->origin_x;
-    real32 relative_y = pos.y - map->origin_y;
+    f32 relative_x = pos.x - map->origin_x;
+    f32 relative_y = pos.y - map->origin_y;
 
     // Convert to tile indices using floor (handles negatives correctly)
     result.col = (int32)floorf(relative_x / map->tile_width);
@@ -2283,8 +2283,8 @@ ScreenPos tile_to_screen(TileCoord coord, TileMap* map) {
     ScreenPos result;
 
     // Calculate top-left corner of the tile in screen space
-    result.x = map->origin_x + (real32)coord.col * map->tile_width;
-    result.y = map->origin_y + (real32)coord.row * map->tile_height;
+    result.x = map->origin_x + (f32)coord.col * map->tile_width;
+    result.y = map->origin_y + (f32)coord.row * map->tile_height;
 
     return result;
 }
@@ -2292,8 +2292,8 @@ ScreenPos tile_to_screen(TileCoord coord, TileMap* map) {
 ScreenPos tile_center_to_screen(TileCoord coord, TileMap* map) {
     ScreenPos result;
 
-    result.x = map->origin_x + ((real32)coord.col + 0.5f) * map->tile_width;
-    result.y = map->origin_y + ((real32)coord.row + 0.5f) * map->tile_height;
+    result.x = map->origin_x + ((f32)coord.col + 0.5f) * map->tile_width;
+    result.y = map->origin_y + ((f32)coord.row + 0.5f) * map->tile_height;
 
     return result;
 }
@@ -2502,8 +2502,8 @@ Before committing any tile-related code, verify:
 │    uint32 tile = map[row][col];  // [row][col] = [y][x]                │
 │                                                                         │
 │  TILE TO SCREEN:                                                        │
-│    real32 screen_x = origin_x + col * tile_width;                      │
-│    real32 screen_y = origin_y + row * tile_height;                     │
+│    f32 screen_x = origin_x + col * tile_width;                      │
+│    f32 screen_y = origin_y + row * tile_height;                     │
 │                                                                         │
 │  MEMORY LAYOUT:                                                         │
 │    Row 0: [0][0] [0][1] [0][2] ... [0][16]  ← First in memory          │
@@ -2567,10 +2567,10 @@ Here's exactly what you need to change:
 typedef struct {
   // Array is [rows][cols] - matches C convention
   uint32 map[TILE_MAP_ROW_COUNT][TILE_MAP_COL_COUNT];
-  real32 upper_left_x;
-  real32 upper_left_y;
-  real32 width;   // Width of each tile in pixels
-  real32 height;  // Height of each tile in pixels
+  f32 upper_left_x;
+  f32 upper_left_y;
+  f32 width;   // Width of each tile in pixels
+  f32 height;  // Height of each tile in pixels
 } TileState;
 ```
 
@@ -2598,11 +2598,11 @@ uint32 temp_map[TILE_MAP_ROW_COUNT][TILE_MAP_COL_COUNT] = {
 // In handle_controls():
 
 // Calculate tile coordinates - use CLEAR variable names
-int32 player_tile_col = truncate_real32_to_int32(
+int32 player_tile_col = truncate_f32_to_int32(
     (new_player_state_x - game_state->tile_state.upper_left_x) /
     game_state->tile_state.width);
 
-int32 player_tile_row = truncate_real32_to_int32(
+int32 player_tile_row = truncate_f32_to_int32(
     (new_player_state_y - game_state->tile_state.upper_left_y) /
     game_state->tile_state.height);
 
@@ -2639,13 +2639,13 @@ for (uint32 row = 0; row < TILE_MAP_ROW_COUNT; ++row) {
     for (uint32 col = 0; col < TILE_MAP_COL_COUNT; ++col) {
         // Access array as [row][col]
         uint32 tile_id = tile_state->map[row][col];
-        real32 gray = tile_id == 1 ? 1.0f : 0.5f;
+        f32 gray = tile_id == 1 ? 1.0f : 0.5f;
 
         // Screen position: col determines X, row determines Y
-        real32 min_x = tile_state->upper_left_x + (real32)col * tile_state->width;
-        real32 min_y = tile_state->upper_left_y + (real32)row * tile_state->height;
-        real32 max_x = min_x + tile_state->width;
-        real32 max_y = min_y + tile_state->height;
+        f32 min_x = tile_state->upper_left_x + (f32)col * tile_state->width;
+        f32 min_y = tile_state->upper_left_y + (f32)row * tile_state->height;
+        f32 max_x = min_x + tile_state->width;
+        f32 max_y = min_y + tile_state->height;
 
         draw_rect(buffer, min_x, min_y, max_x, max_y, gray, gray, gray, 1.0f);
     }
@@ -2684,24 +2684,24 @@ typedef struct {
   uint32 map[TILE_MAP_ROW_COUNT][TILE_MAP_COL_COUNT];
 
   // Screen position of tile [0][0]'s top-left corner
-  real32 upper_left_x;
-  real32 upper_left_y;
+  f32 upper_left_x;
+  f32 upper_left_y;
 
   // Size of each tile in pixels
-  real32 width;
-  real32 height;
+  f32 width;
+  f32 height;
 } TileState;
 
 typedef struct {
   int32 x;
   int32 y;
-  real32 width;
-  real32 height;
-  real32 t_jump;
-  real32 color_r;
-  real32 color_g;
-  real32 color_b;
-  real32 color_a;
+  f32 width;
+  f32 height;
+  f32 t_jump;
+  f32 color_r;
+  f32 color_g;
+  f32 color_b;
+  f32 color_a;
 } PlayerState;
 
 typedef struct {
@@ -2811,13 +2811,13 @@ GAME_INIT(game_init) {
 // ... (includes and helper functions remain the same)
 
 void handle_controls(GameControllerInput *inputs,
-                     HandMadeHeroGameState *game_state, real32 frame_time) {
+                     HandMadeHeroGameState *game_state, f32 frame_time) {
   if (inputs->is_analog) {
     // NOTE: Analog movement (currently disabled)
   } else {
     // NOTE: Use digital movement tuning
-    real32 d_player_x = 0.0f;
-    real32 d_player_y = 0.0f;
+    f32 d_player_x = 0.0f;
+    f32 d_player_y = 0.0f;
 
     if (inputs->move_up.ended_down) {
       d_player_y = -1.0f;
@@ -2850,9 +2850,9 @@ void handle_controls(GameControllerInput *inputs,
 
     // Calculate tile coordinates
     // Note: Using truncate for now, should use floor for negative coords
-    int32 player_tile_col = truncate_real32_to_int32(
+    int32 player_tile_col = truncate_f32_to_int32(
         (new_player_x - tiles->upper_left_x) / tiles->width);
-    int32 player_tile_row = truncate_real32_to_int32(
+    int32 player_tile_row = truncate_f32_to_int32(
         (new_player_y - tiles->upper_left_y) / tiles->height);
 
     bool32 is_valid_player_pos = false;
@@ -2889,11 +2889,11 @@ GAME_UPDATE_AND_RENDER(game_update_and_render) {
 
   // ... (controller selection code remains the same)
 
-  real32 frame_time = de100_get_frame_time();
+  f32 frame_time = de100_get_frame_time();
   handle_controls(active_controller, game_state, frame_time);
 
   // Clear background
-  draw_rect(buffer, 0.0f, 0.0f, (real32)buffer->width, (real32)buffer->height,
+  draw_rect(buffer, 0.0f, 0.0f, (f32)buffer->width, (f32)buffer->height,
             1.0f, 0.0f, 1.0f, 1.0f);
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -2910,21 +2910,21 @@ GAME_UPDATE_AND_RENDER(game_update_and_render) {
     for (uint32 col = 0; col < TILE_MAP_COL_COUNT; ++col) {
       // Array access: [row][col]
       uint32 tile_id = tile_state->map[row][col];
-      real32 gray = tile_id == 1 ? 1.0f : 0.5f;
+      f32 gray = tile_id == 1 ? 1.0f : 0.5f;
 
       // Screen position: col determines X, row determines Y
-      real32 min_x = tile_state->upper_left_x + (real32)col * tile_state->width;
-      real32 min_y = tile_state->upper_left_y + (real32)row * tile_state->height;
-      real32 max_x = min_x + tile_state->width;
-      real32 max_y = min_y + tile_state->height;
+      f32 min_x = tile_state->upper_left_x + (f32)col * tile_state->width;
+      f32 min_y = tile_state->upper_left_y + (f32)row * tile_state->height;
+      f32 max_x = min_x + tile_state->width;
+      f32 max_y = min_y + tile_state->height;
 
       draw_rect(buffer, min_x, min_y, max_x, max_y, gray, gray, gray, 1.0f);
     }
   }
 
   // Render player
-  real32 player_left = game_state->player_state.x - game_state->player_state.width * 0.5f;
-  real32 player_top = game_state->player_state.y - game_state->player_state.height * 0.5f;
+  f32 player_left = game_state->player_state.x - game_state->player_state.width * 0.5f;
+  f32 player_top = game_state->player_state.y - game_state->player_state.height * 0.5f;
 
   draw_rect(buffer, player_left, player_top,
             player_left + game_state->player_state.width,
@@ -3041,19 +3041,19 @@ de100_file_scoped_fn void debug_draw_player_tile(
     int32 player_y) {
 
     // Calculate which tile the player center is in
-    int32 col = truncate_real32_to_int32(
+    int32 col = truncate_f32_to_int32(
         (player_x - tile_state->upper_left_x) / tile_state->width);
-    int32 row = truncate_real32_to_int32(
+    int32 row = truncate_f32_to_int32(
         (player_y - tile_state->upper_left_y) / tile_state->height);
 
     // Only draw if in bounds
     if (col >= 0 && col < TILE_MAP_COL_COUNT &&
         row >= 0 && row < TILE_MAP_ROW_COUNT) {
 
-        real32 min_x = tile_state->upper_left_x + (real32)col * tile_state->width;
-        real32 min_y = tile_state->upper_left_y + (real32)row * tile_state->height;
-        real32 max_x = min_x + tile_state->width;
-        real32 max_y = min_y + tile_state->height;
+        f32 min_x = tile_state->upper_left_x + (f32)col * tile_state->width;
+        f32 min_y = tile_state->upper_left_y + (f32)row * tile_state->height;
+        f32 max_x = min_x + tile_state->width;
+        f32 max_y = min_y + tile_state->height;
 
         // Draw a semi-transparent overlay on the current tile
         // Using a different color to distinguish from regular tiles

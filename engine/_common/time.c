@@ -72,7 +72,7 @@ de100_file_scoped_fn inline CachedTimebase macos_get_timebase(void) {
 // GET WALL CLOCK TIME
 // ═══════════════════════════════════════════════════════════════════════════
 
-real64 de100_get_wall_clock(void) {
+f64 de100_get_wall_clock(void) {
 #if defined(_WIN32)
   // ─────────────────────────────────────────────────────────────────────
   // WINDOWS: QueryPerformanceCounter
@@ -86,7 +86,7 @@ real64 de100_get_wall_clock(void) {
 
   int64 frequency = win32_get_frequency();
 
-  return (real64)counter.QuadPart / (real64)frequency;
+  return (f64)counter.QuadPart / (f64)frequency;
 
 #elif defined(__APPLE__)
   // ─────────────────────────────────────────────────────────────────────
@@ -102,7 +102,7 @@ real64 de100_get_wall_clock(void) {
   // Convert to nanoseconds, then to seconds
   uint64 nanos = time * tb.numer / tb.denom;
 
-  return (real64)nanos / 1000000000.0;
+  return (f64)nanos / 1000000000.0;
 
 #elif defined(__linux__) || defined(__FreeBSD__) || defined(__unix__)
   // ─────────────────────────────────────────────────────────────────────
@@ -116,7 +116,7 @@ real64 de100_get_wall_clock(void) {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
 
-  return (real64)ts.tv_sec + (real64)ts.tv_nsec / 1000000000.0;
+  return (f64)ts.tv_sec + (f64)ts.tv_nsec / 1000000000.0;
 
 #endif
 }
@@ -125,7 +125,7 @@ real64 de100_get_wall_clock(void) {
 // SLEEP FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════════
 
-void de100_sleep_seconds(real64 seconds) {
+void de100_sleep_seconds(f64 seconds) {
   if (seconds <= 0.0) {
     return;
   }
@@ -155,7 +155,7 @@ void de100_sleep_seconds(real64 seconds) {
 
   struct timespec req;
   req.tv_sec = (time_t)seconds;
-  req.tv_nsec = (long)((seconds - (real64)req.tv_sec) * 1000000000.0);
+  req.tv_nsec = (long)((seconds - (f64)req.tv_sec) * 1000000000.0);
 
   // Handle signal interruption
   while (nanosleep(&req, &req) == -1 && errno == EINTR) {
@@ -172,7 +172,7 @@ void de100_sleep_ms(uint32 milliseconds) {
   if (milliseconds == 0) {
     return;
   }
-  de100_sleep_seconds((real64)milliseconds / 1000.0);
+  de100_sleep_seconds((f64)milliseconds / 1000.0);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -231,15 +231,15 @@ void de100_get_timespec(De100TimeSpec *out_time) {
 // TIMESPEC UTILITIES
 // ═══════════════════════════════════════════════════════════════════════════
 
-real64 de100_timespec_to_seconds(const De100TimeSpec *time) {
+f64 de100_timespec_to_seconds(const De100TimeSpec *time) {
   if (!time) {
     return 0.0;
   }
-  return (real64)time->seconds + (real64)time->nanoseconds / 1000000000.0;
+  return (f64)time->seconds + (f64)time->nanoseconds / 1000000000.0;
 }
 
-real64 de100_timespec_diff_seconds(const De100TimeSpec *start,
-                                   const De100TimeSpec *end) {
+f64 de100_timespec_diff_seconds(const De100TimeSpec *start,
+                                const De100TimeSpec *end) {
   if (!start || !end) {
     return 0.0;
   }
@@ -254,11 +254,11 @@ real64 de100_timespec_diff_seconds(const De100TimeSpec *start,
     nsec_diff += 1000000000;
   }
 
-  return (real64)sec_diff + (real64)nsec_diff / 1000000000.0;
+  return (f64)sec_diff + (f64)nsec_diff / 1000000000.0;
 }
 
-real64 de100_timespec_diff_milliseconds(const De100TimeSpec *start,
-                                        const De100TimeSpec *end) {
+f64 de100_timespec_diff_milliseconds(const De100TimeSpec *start,
+                                     const De100TimeSpec *end) {
   if (!start || !end) {
     return 0.0;
   }
@@ -267,7 +267,7 @@ real64 de100_timespec_diff_milliseconds(const De100TimeSpec *start,
   int64 ms_diff = end->seconds * 1000 + end->nanoseconds / 1000000 -
                   start->seconds * 1000 - start->nanoseconds / 1000000;
 
-  return (real64)ms_diff;
+  return (f64)ms_diff;
 }
 
 int32 de100_timespec_compare(const De100TimeSpec *a, const De100TimeSpec *b) {

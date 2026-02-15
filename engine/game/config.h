@@ -100,6 +100,6 @@ typedef struct {
  *
  * These defaults are intended for rapid startup or debugging purposes.
  */
-GameConfig get_default_game_config();
+GameConfig get_default_game_config(void);
 
 #endif /* DE100_GAME_CONFIG_H */

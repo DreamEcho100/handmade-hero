@@ -43,12 +43,12 @@ typedef enum {
 // ═══════════════════════════════════════════════════════════════════════════
 
 typedef struct {
-  int32 file_fd;                              // File descriptor
-  void *memory_block;                         // mmap'd region (or allocated block on Windows)
-  size_t mapped_size;                         // Size of the mapped region
-  char filename[REPLAY_BUFFER_FILENAME_MAX];  // Path to backing file
-  bool is_valid;                              // Ready for use?
-  ReplayBufferErrorCode last_error;           // Last error for this buffer
+  int32 file_fd;      // File descriptor
+  void *memory_block; // mmap'd region (or allocated block on Windows)
+  size_t mapped_size; // Size of the mapped region
+  char filename[REPLAY_BUFFER_FILENAME_MAX]; // Path to backing file
+  bool is_valid;                             // Ready for use?
+  ReplayBufferErrorCode last_error;          // Last error for this buffer
 } ReplayBuffer;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -58,7 +58,7 @@ typedef struct {
 typedef struct {
   bool success;
   ReplayBufferErrorCode error_code;
-  int32 buffers_initialized;  // How many buffers were successfully initialized
+  int32 buffers_initialized; // How many buffers were successfully initialized
 } ReplayBufferInitResult;
 
 typedef struct {
@@ -80,11 +80,11 @@ typedef struct {
  * @param game_memory    Pointer to the game memory block
  * @param total_size     Total size of game memory (permanent + transient)
  * @param out_buffers    Array of MAX_REPLAY_BUFFERS to initialize
- * @return               Result with success status and count of initialized buffers
+ * @return               Result with success status and count of initialized
+ * buffers
  */
 ReplayBufferInitResult replay_buffers_init(const char *exe_directory,
-                                           void *game_memory,
-                                           uint64 total_size,
+                                           void *game_memory, uint64 total_size,
                                            ReplayBuffer *out_buffers);
 
 /**

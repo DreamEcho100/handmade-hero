@@ -28,7 +28,7 @@ typedef struct {
  *
  * @return Current time in seconds with high precision (typically ~1ns)
  */
-real64 de100_get_wall_clock(void);
+f64 de100_get_wall_clock(void);
 
 /**
  * Calculate elapsed time between two wall clock readings.
@@ -39,8 +39,7 @@ real64 de100_get_wall_clock(void);
  *
  * Note: This is a trivial subtraction, provided for API symmetry.
  */
-de100_file_scoped_fn inline real64 de100_get_seconds_elapsed(real64 start,
-                                                             real64 end) {
+de100_file_scoped_fn inline f64 de100_get_seconds_elapsed(f64 start, f64 end) {
   return end - start;
 }
 
@@ -58,7 +57,7 @@ de100_file_scoped_fn inline real64 de100_get_seconds_elapsed(real64 start,
  *   1. Sleep for most of the time (coarse)
  *   2. Spin-wait for the remainder (precise)
  */
-void de100_sleep_seconds(real64 seconds);
+void de100_sleep_seconds(f64 seconds);
 
 /**
  * Sleep for approximately the specified number of milliseconds.
@@ -88,9 +87,9 @@ void de100_get_timespec(De100TimeSpec *out_time);
  * Convert De100TimeSpec to seconds.
  *
  * @param time Pointer to time structure (NULL returns 0.0)
- * @return Time in seconds as real64
+ * @return Time in seconds as f64
  */
-real64 de100_timespec_to_seconds(const De100TimeSpec *time);
+f64 de100_timespec_to_seconds(const De100TimeSpec *time);
 
 /**
  * Calculate difference between two De100TimeSpec values.
@@ -101,11 +100,11 @@ real64 de100_timespec_to_seconds(const De100TimeSpec *time);
  *
  * Note: Returns 0.0 if either pointer is NULL.
  */
-real64 de100_timespec_diff_seconds(const De100TimeSpec *start,
-                                   const De100TimeSpec *end);
+f64 de100_timespec_diff_seconds(const De100TimeSpec *start,
+                                const De100TimeSpec *end);
 
-real64 de100_timespec_diff_milliseconds(const De100TimeSpec *start,
-                                        const De100TimeSpec *end);
+f64 de100_timespec_diff_milliseconds(const De100TimeSpec *start,
+                                     const De100TimeSpec *end);
 
 /**
  * Compare two De100TimeSpec values.

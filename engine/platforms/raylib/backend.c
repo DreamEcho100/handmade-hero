@@ -5,6 +5,7 @@
 #include "../../game/base.h"
 #include "../../game/game-loader.h"
 #include "../../game/inputs.h"
+#include "../_common/adaptive-fps.h"
 #include "../_common/inputs-recording.h"
 #include "./audio.h"
 #include "./hooks/inputs/joystick.h"
@@ -168,7 +169,7 @@ de100_file_scoped_fn inline int raylib_init(EngineState *engine) {
 // Main Loop
 // ═══════════════════════════════════════════════════════════════════════════
 
-int platform_main() {
+int platform_main(void) {
   EngineState engine = {0};
   engine.platform.code = (GameCode){0};
 
@@ -220,8 +221,8 @@ int platform_main() {
     update_window_from_backbuffer(&engine.game.backbuffer);
     EndDrawing();
 
-    real32 frame_time_ms = GetFrameTime() * 1000.0f;
-    real32 target_frame_time_ms =
+    f32 frame_time_ms = GetFrameTime() * 1000.0f;
+    f32 target_frame_time_ms =
         engine.game.config.target_seconds_per_frame * 1000.0f;
 
     if (frame_time_ms > (target_frame_time_ms + 5.0f)) {

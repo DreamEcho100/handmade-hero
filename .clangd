@@ -1,0 +1,22 @@
+If:
+  PathMatch: .*\.[ch]
+  PathExclude: [".*/build/.*"]
+CompileFlags:
+  Add: [-std=c11, -xc]
+
+---
+If:
+  PathMatch: .*/_ignore/.*
+Diagnostics:
+  Suppress: ["*"] # Ignore all diagnostics in specified directories
+
+
+# # Format all .c and .h files in games
+# find games -name '*.c' -o -name '*.h' | xargs clang-format -i
+
+# # Or for the engine directory
+# find engine -name '*.c' -o -name '*.h' | xargs clang-format -i
+
+# # Or the entire workspace
+# find . -name '*.c' -o -name '*.h' | xargs clang-format -i
+

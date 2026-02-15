@@ -1,7 +1,7 @@
 #include "./config.h"
 #include <string.h>
 
-GameConfig get_default_game_config() {
+GameConfig get_default_game_config(void) {
   GameConfig config = {0};
 
   /* =========================
@@ -52,7 +52,7 @@ GameConfig get_default_game_config() {
      ========================= */
 
   config.target_seconds_per_frame =
-      1.0f / (real32)config.max_allowed_refresh_rate_hz;
+      1.0f / (f32)config.max_allowed_refresh_rate_hz;
 
   return config;
 }

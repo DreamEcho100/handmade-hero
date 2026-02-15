@@ -3,7 +3,6 @@
 
 #include "../../_common/base.h"
 
-
 // ═══════════════════════════════════════════════════════════════════════════
 // PLATFORM AUDIO CONFIG
 // ═══════════════════════════════════════════════════════════════════════════
@@ -20,7 +19,6 @@ typedef struct {
   int32 samples_per_second; // e.g., 48000 Hz
   int32 bytes_per_sample;   // e.g., 4 (16-bit stereo)
   int32 buffer_size_bytes;  // Total buffer size _(secondary_buffer_size)_
-
 
   /** Maximum number of samples to process per audio callback */
   uint32 max_samples_per_call;
@@ -69,7 +67,7 @@ typedef struct {
   bool has_gamepads;
 
   // Timing
-  real32 seconds_per_frame;
+  f32 seconds_per_frame;
 } PlatformConfig;
 
 #endif /* DE100_GAME__COMMON_CONFIG_H */

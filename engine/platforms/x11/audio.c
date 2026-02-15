@@ -412,8 +412,8 @@ bool linux_init_audio(PlatformAudioConfig *audio_config,
   int32 safety_sample_count = samples_per_frame / 3;
 
   // Convert to microseconds for ALSA (they use µs for latency parameter)
-  int32 latency_microseconds = (int32)((real64)latency_sample_count /
-                                       (real64)samples_per_second * 1000000.0);
+  int32 latency_microseconds =
+      (int32)((f64)latency_sample_count / (f64)samples_per_second * 1000000.0);
 
   printf("[AUDIO] Samples per frame: %d (at %d Hz game logic)\n",
          samples_per_frame, game_update_hz);
@@ -1191,7 +1191,7 @@ void linux_debug_sync_display(GameBackBuffer *buffer,
 
   // Scale: map buffer frames to screen pixels
   int32 drawable_width = buffer->width - 2 * pad_x;
-  real32 scale = (real32)drawable_width / (real32)buffer_size_frames;
+  f32 scale = (f32)drawable_width / (f32)buffer_size_frames;
 
   // Colors
   uint32 delay_color = 0xFFFFFFFF;   // White: queued/playing audio

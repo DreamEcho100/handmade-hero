@@ -17,7 +17,7 @@
 
 /**
  * Poll current mouse position and button state.
- * 
+ *
  * Call this ONCE per frame, BEFORE processing X11 events.
  * This gives you the CURRENT mouse position, not stale event data.
  *
@@ -35,7 +35,7 @@ void x11_poll_mouse(Display *display, Window window, GameInput *input);
 
 /**
  * Handle mouse button press events.
- * 
+ *
  * Only needed for:
  *   - Scroll wheel (Button4/5) - cannot be polled
  *   - XButton1/2 (Button8/9) - not in standard mask
@@ -46,7 +46,7 @@ void handle_mouse_button_press(XEvent *event, GameInput *input);
 
 /**
  * Handle mouse button release events.
- * 
+ *
  * Only needed for XButton1/2 releases.
  * Scroll wheel and LMB/MMB/RMB releases are ignored.
  */

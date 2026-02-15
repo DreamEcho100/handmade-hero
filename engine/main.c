@@ -14,7 +14,7 @@ int main(int argc, char **argv) {
   (void)argv;
 
 #if DE100_INTERNAL
-  real64 main_start = de100_get_wall_clock();
+  f64 main_start = de100_get_wall_clock();
   printf("[MAIN ENTRY] %.6f seconds since boot\n", main_start);
 #endif
 

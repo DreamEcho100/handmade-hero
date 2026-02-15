@@ -387,6 +387,17 @@ over:
 
 If something looks more manual than expected, it is probably by design.
 
+## AI/LLMs Usage
+
+I'm using AI/LLMs to help with:
+
+- Help me on converting the Handmade Hero windows layer to be in X11 and Raylib, mainly because I'm on Ubuntu/Linux for X11 and want to work on cross platform or a more shippable version using Raylib. note: Raylib is more of the focus for the future since it's more cross-platform and shippable, but I want to have the X11 backend as a learning experience and to have a more "bare metal" backend to compare against. also for learning I'm prompting the AI/LLMs to help me on how to convert and why certain decisions are made, and then I review the code and test it myself to make sure I understand it and that it works.
+- Writing a more cross platform for the `_common` utilities for other OSes like windows since I have less experience with them, and I want to have a more complete cross platform engine, even if the focus is on Linux for now. _(though they're not tested yet)_
+- Writing documentation
+- Reviewing/Auditing code
+- Brainstorming ideas
+- Debugging
+
 ## Code Style Guide
 
 > Consistent, C-idiomatic, Casey-inspired.
@@ -458,7 +469,7 @@ const char *de100_memory_error_str(De100MemoryError error);
 De100FileResult de100_file_copy(const char *src, const char *dst);
 De100PathResult de100_path_join(const char *dir, const char *file);
 
-real64 de100_time_get_wall_clock(void);
+f64 de100_time_get_wall_clock(void);
 void de100_time_sleep_ms(uint32 ms);
 ```
 
@@ -469,8 +480,8 @@ void de100_time_sleep_ms(uint32 ms);
 ```c
 // games/handmade-hero-game/src/main.h
 typedef struct {
-    real32 frequency;
-    real32 volume;
+    f32 frequency;
+    f32 volume;
 } SoundSource;
 
 typedef struct {
@@ -497,7 +508,7 @@ void render_gradient(De100GameBackBuffer *buffer, int offset_x, int offset_y);
 ```c
 // Local variables
 int32 frame_counter = 0;
-real32 delta_time = 0.016f;
+f32 delta_time = 0.016f;
 bool is_running = true;
 
 // Globals (g_ prefix)

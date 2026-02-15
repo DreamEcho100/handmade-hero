@@ -36,8 +36,8 @@ typedef struct {
     };
   };
 
-  real32 stick_avg_x;
-  real32 stick_avg_y;
+  f32 stick_avg_x;
+  f32 stick_avg_y;
   int controller_index;
   bool32 is_analog;
   bool is_connected;

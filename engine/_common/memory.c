@@ -1,5 +1,9 @@
 #include "memory.h"
 
+#if DE100_INTERNAL && DE100_SLOW
+#include <stdio.h>
+#endif
+
 // #if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) ||        \
 //     defined(__unix__) || defined(__MACH__)
 // #define _GNU_SOURCE
@@ -383,7 +387,8 @@ De100MemoryBlock de100_memory_alloc(void *base_hint, size_t size,
                               3 * aligned_size / 4, aligned_size - 1};
     for (size_t i = 0; i < ArraySize(check_offsets); i++) {
       DEV_ASSERT_MSG(p[check_offsets[i]] == 0,
-                     "mmap returned non-zero memory!");
+                     "mmap returned non-zero memory!, offset %zu",
+                     check_offsets[i]);
     }
   }
 #endif
@@ -639,7 +644,7 @@ void *de100_mem_zero_secure(void *dest, size_t size) {
     (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 25))
   explicit_bzero(dest, size);
 #else
-  volatile uint8_t *p = (volatile uint8_t *)dest;
+  volatile uint8 *p = (volatile uint8 *)dest;
   while (size--)
     *p++ = 0;
 #endif

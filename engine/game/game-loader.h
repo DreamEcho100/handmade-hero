@@ -4,8 +4,11 @@
 #include "../_common/dll.h"
 #include "../_common/path.h"
 #include "../_common/time.h"
-#include "base.h"
+#include "audio.h"
+#include "backbuffer.h"
 #include "config.h"
+#include "inputs.h"
+#include "memory.h"
 #include "thread.h"
 
 #ifndef DE100_SHARED_LIB_PREFIX

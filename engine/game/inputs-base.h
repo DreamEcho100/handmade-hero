@@ -1,8 +1,6 @@
 #ifndef DE100_GAME_INPUTS_BASE_H
 #define DE100_GAME_INPUTS_BASE_H
 
-#include "../_common/base.h"
-
 typedef struct {
   /**
    * Number of state changes this frame

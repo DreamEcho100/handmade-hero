@@ -108,7 +108,7 @@ esac
 # ───────────────────────────────────────────────────────────────────────────────
 
 # Base flags (always applied)
-DE100_BASE_FLAGS="-std=c11"
+DE100_BASE_FLAGS="-std=c11 -pedantic"
 
 case "$DE100_OS" in
     linux|freebsd|posix)

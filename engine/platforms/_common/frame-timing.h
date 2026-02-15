@@ -8,10 +8,10 @@ typedef struct {
   De100TimeSpec frame_start;
   De100TimeSpec work_end;
   De100TimeSpec frame_end;
-  real32 work_seconds;
-  real32 total_seconds;
-  // real32 total_ms;
-  real32 sleep_seconds;
+  f32 work_seconds;
+  f32 total_seconds;
+  // f32 total_ms;
+  f32 sleep_seconds;
 #if DE100_INTERNAL
   uint64 start_cycles;
   uint64 end_cycles;
@@ -19,20 +19,20 @@ typedef struct {
 } FrameTiming;
 extern FrameTiming g_frame_timing;
 
-void frame_timing_begin();
+void frame_timing_begin(void);
 
-void frame_timing_mark_work_done();
+void frame_timing_mark_work_done(void);
 
-void frame_timing_sleep_until_target(real32 target_seconds);
+void frame_timing_sleep_until_target(f32 target_seconds);
 
-void frame_timing_end();
+void frame_timing_end(void);
 
-real32 frame_timing_get_ms();
+f32 frame_timing_get_ms(void);
 
-real32 frame_timing_get_fps();
+f32 frame_timing_get_fps(void);
 
 #if DE100_INTERNAL
-real32 frame_timing_get_mcpf();
+f32 frame_timing_get_mcpf(void);
 #endif
 
 #endif // DE100_PLATFORMS__COMMON_FRAME_TIMING_FPS_H

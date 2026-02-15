@@ -301,7 +301,7 @@ De100FileTimeResult de100_file_get_mod_time(const char *filename) {
 // COMPARE FILE MODIFICATION TIMES
 // ═══════════════════════════════════════════════════════════════════════════
 
-real64 de100_file_time_diff(const De100TimeSpec *a, const De100TimeSpec *b) {
+f64 de100_file_time_diff(const De100TimeSpec *a, const De100TimeSpec *b) {
   if (!a || !b) {
     return 0.0;
   }

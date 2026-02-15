@@ -4,7 +4,8 @@
 
 #include "../../../../game/inputs.h"
 
-void raylib_game_initpad(GameControllerInput *controller_old_input, GameControllerInput *controller_new_input);
+void raylib_game_initpad(GameControllerInput *controller_old_input,
+                         GameControllerInput *controller_new_input);
 void raylib_poll_gamepad(GameInput *new_input);
 void debug_joystick_state(GameInput *game_input);
 
