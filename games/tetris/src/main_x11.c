@@ -5,6 +5,7 @@
 #include "tetris.h"
 
 #include <X11/X.h>
+#include <X11/XKBlib.h>
 #include <X11/Xlib.h>
 #include <X11/keysym.h>
 #include <stdbool.h>
@@ -138,6 +139,15 @@ int platform_init(const char *title, int width, int height) {
     return 1;
   }
 
+  /* Disable X11 keyboard auto-repeat detection */
+  Bool supported;
+  XkbSetDetectableAutoRepeat(g_x11.display, True, &supported);
+  if (supported) {
+    printf("✓ Detectable auto-repeat enabled\n");
+  } else {
+    printf("⚠ Detectable auto-repeat not supported\n");
+  }
+
   g_x11.screen = DefaultScreen(g_x11.display);
 
   g_x11.alloc_colors.black = BlackPixel(g_x11.display, g_x11.screen);
@@ -176,7 +186,6 @@ int platform_init(const char *title, int width, int height) {
 }
 
 void platform_get_input(GameState *state, GameInput *input) {
-  memset(input, 0, sizeof(GameInput));
 
   while (XPending(g_x11.display) > 0) {
     XNextEvent(g_x11.display, &g_x11.event);
@@ -196,30 +205,32 @@ void platform_get_input(GameState *state, GameInput *input) {
       }
       case XK_x:
       case XK_X: {
-        input->rotate_x = 1;
+        UPDATE_BUTTON(input->rotate_x.button, 1);
+        input->rotate_x.value = TETROMINO_ROTATE_X_GO_RIGHT;
         break;
       }
       case XK_z:
       case XK_Z: {
-        input->rotate_x = -1;
+        UPDATE_BUTTON(input->rotate_x.button, 1);
+        input->rotate_x.value = TETROMINO_ROTATE_X_GO_LEFT;
         break;
       }
       case XK_Left:
       case XK_A:
       case XK_a: {
-        input->move_left = 1;
+        UPDATE_BUTTON(input->move_left.button, 1);
         break;
       }
       case XK_Right:
       case XK_D:
       case XK_d: {
-        input->move_right = 1;
+        UPDATE_BUTTON(input->move_right.button, 1);
         break;
       }
       case XK_Down:
       case XK_S:
       case XK_s: {
-        input->move_down = 1;
+        UPDATE_BUTTON(input->move_down.button, 1);
         break;
       }
       }
@@ -234,28 +245,34 @@ void platform_get_input(GameState *state, GameInput *input) {
                             // (for non-modified keys), and `1` would be for the
                             // second keysym (for Shift-modified keys), etc.
       switch (key) {
-      case XK_q:
-      case XK_Q:
-      case XK_Escape: {
-        g_is_game_running = false;
+      case XK_x:
+      case XK_X: {
+        UPDATE_BUTTON(input->rotate_x.button, 0);
+        input->rotate_x.value = TETROMINO_ROTATE_X_NONE;
+        break;
+      }
+      case XK_z:
+      case XK_Z: {
+        UPDATE_BUTTON(input->rotate_x.button, 0);
+        input->rotate_x.value = TETROMINO_ROTATE_X_NONE;
         break;
       }
       case XK_Left:
       case XK_A:
       case XK_a: {
-        input->move_left = 0;
+        UPDATE_BUTTON(input->move_left.button, 0);
         break;
       }
       case XK_Right:
       case XK_D:
       case XK_d: {
-        input->move_right = 0;
+        UPDATE_BUTTON(input->move_right.button, 0);
         break;
       }
       case XK_Down:
       case XK_S:
       case XK_s: {
-        input->move_down = 0;
+        UPDATE_BUTTON(input->move_down.button, 0);
         break;
       }
       }
@@ -363,17 +380,18 @@ int main(void) {
     return 1;
   }
 
-  GameInput input = {0}; /* zero out all fields */
+  GameInput game_input = {0};
   GameState game_state = {0};
-  game_init(&game_state);
+  game_init(&game_state, &game_input);
 
   while (g_is_game_running) {
     double current_time = platform_get_time();
     double delta_time = current_time - g_last_frame_time;
     g_last_frame_time = current_time;
 
-    platform_get_input(&game_state, &input);
-    tetris_update(&game_state, &input, (float)delta_time);
+    prepare_input_frame(&game_input);
+    platform_get_input(&game_state, &game_input);
+    tetris_update(&game_state, &game_input, (float)delta_time);
     platform_render(&game_state);
 
     double frame_time = platform_get_time() - current_time;

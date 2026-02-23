@@ -68,22 +68,29 @@ int platform_init(const char *title, int width, int height) {
   return 0;
 }
 void platform_get_input(GameState *state, GameInput *input) {
-  memset(input, 0, sizeof(GameInput));
-
   if (IsKeyPressed(KEY_Q) || IsKeyPressed(KEY_ESCAPE)) {
     WindowShouldClose();
   }
 
-  if (IsKeyPressed(KEY_X)) {
-    input->rotate_x = 1;
-  }
-  if (IsKeyPressed(KEY_Z)) {
-    input->rotate_x = -1;
+  /* Rotation — set value based on which key */
+  if (IsKeyDown(KEY_X)) {
+    UPDATE_BUTTON(input->rotate_x.button, 1);
+    input->rotate_x.value = TETROMINO_ROTATE_X_GO_RIGHT; /* Clockwise */
+  } else if (IsKeyDown(KEY_Z)) {
+    UPDATE_BUTTON(input->rotate_x.button, 1);
+    input->rotate_x.value = TETROMINO_ROTATE_X_GO_LEFT; /* Counter-clockwise */
+  } else {
+    UPDATE_BUTTON(input->rotate_x.button, 0);
+    input->rotate_x.value = TETROMINO_ROTATE_X_NONE; /* No rotation */
   }
 
-  input->move_left = IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT);
-  input->move_right = IsKeyDown(KEY_D) || IsKeyDown(KEY_RIGHT);
-  input->move_down = IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN);
+  /* Movement — can be held */
+  UPDATE_BUTTON(input->move_left.button,
+                IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT));
+  UPDATE_BUTTON(input->move_right.button,
+                IsKeyDown(KEY_D) || IsKeyDown(KEY_RIGHT));
+  UPDATE_BUTTON(input->move_down.button,
+                IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN));
 }
 void platform_render(GameState *state) {
   BeginDrawing();
@@ -158,15 +165,16 @@ int main(void) {
     return 1;
   }
 
-  GameInput input = {0}; /* zero out all fields */
+  GameInput game_input = {0};
   GameState game_state = {0};
-  game_init(&game_state);
+  game_init(&game_state, &game_input);
 
   while (!WindowShouldClose()) {
     float delta_time = GetFrameTime();
 
-    platform_get_input(&game_state, &input);
-    tetris_update(&game_state, &input, delta_time);
+    prepare_input_frame(&game_input);
+    platform_get_input(&game_state, &game_input);
+    tetris_update(&game_state, &game_input, delta_time);
 
     platform_render(&game_state);
   }
