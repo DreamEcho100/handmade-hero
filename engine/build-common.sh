@@ -218,24 +218,20 @@ de100_get_platform_sources() {
 de100_get_lib_defines() {
     local build_dir="$1"
     local main_lib="$2"
-    local startup_lib="$3"
-    local init_lib="$4"
+    local game_bootstrap_lib="$3"
     local defines=""
     
     # Library names
     defines+=" -DDE100_GAME_MAIN_LIB_NAME=\"$main_lib\""
-    defines+=" -DDE100_GAME_STARTUP_LIB_NAME=\"$startup_lib\""
-    defines+=" -DDE100_GAME_INIT_LIB_NAME=\"$init_lib\""
+    defines+=" -DDE100_GAME_GAME_BOOTSTRAP_LIB_NAME=\"$game_bootstrap_lib\""
     
     # Full library paths
     defines+=" -DDE100_GAME_MAIN_LIB_PATH=\"$build_dir/$(de100_shared_name "$main_lib")\""
-    defines+=" -DDE100_GAME_STARTUP_LIB_PATH=\"$build_dir/$(de100_shared_name "$startup_lib")\""
-    defines+=" -DDE100_GAME_INIT_LIB_PATH=\"$build_dir/$(de100_shared_name "$init_lib")\""
+    defines+=" -DDE100_GAME_GAME_BOOTSTRAP_LIB_PATH=\"$build_dir/$(de100_shared_name "$game_bootstrap_lib")\""
     
     # Temporary library paths (for hot-reload)
     defines+=" -DDE100_GAME_MAIN_TMP_LIB_PATH=\"$build_dir/$(de100_shared_name "${main_lib}_tmp")\""
-    defines+=" -DDE100_GAME_STARTUP_TMP_LIB_PATH=\"$build_dir/$(de100_shared_name "${startup_lib}_tmp")\""
-    defines+=" -DDE100_GAME_INIT_TMP_LIB_PATH=\"$build_dir/$(de100_shared_name "${init_lib}_tmp")\""
+    defines+=" -DDE100_GAME_GAME_BOOTSTRAP_TMP_LIB_PATH=\"$build_dir/$(de100_shared_name "${game_bootstrap_lib}_tmp")\""
     
     echo "$defines"
 }

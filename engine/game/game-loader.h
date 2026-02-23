@@ -46,24 +46,14 @@
 #define DE100_GAME_MAIN_TMP_LIB_NAME "main_tmp"
 #endif
 
-// DE100_GAME_STARTUP_LIB_NAME="startup"
-// DE100_GAME_STARTUP_TMP_LIB_NAME="startup.tmp"
-#ifndef DE100_GAME_STARTUP_LIB_NAME
-#define DE100_GAME_STARTUP_LIB_NAME "startup"
+// DE100_GAME_BOOTSTRAP_LIB_NAME="game-bootstrap"
+// DE100_GAME_BOOTSTRAP_TMP_LIB_NAME="game-bootstrap.tmp"
+#ifndef DE100_GAME_BOOTSTRAP_LIB_NAME
+#define DE100_GAME_BOOTSTRAP_LIB_NAME "game-bootstrap"
 #endif
-#ifndef DE100_GAME_STARTUP_TMP_LIB_NAME
-#define DE100_GAME_STARTUP_TMP_LIB_NAME "startup_tmp"
+#ifndef DE100_GAME_BOOTSTRAP_TMP_LIB_NAME
+#define DE100_GAME_BOOTSTRAP_TMP_LIB_NAME "game-bootstrap_tmp"
 #endif
-
-// DE100_GAME_INIT_LIB_NAME="init"
-// DE100_GAME_INIT_TMP_LIB_NAME="init.tmp"
-#ifndef DE100_GAME_INIT_LIB_NAME
-#define DE100_GAME_INIT_LIB_NAME "init"
-#endif
-#ifndef DE100_GAME_INIT_TMP_LIB_NAME
-#define DE100_GAME_INIT_TMP_LIB_NAME "init_tmp"
-#endif
-
 // Main
 #ifndef DE100_GAME_MAIN_SHARED_LIB_PATH
 #define DE100_GAME_MAIN_SHARED_LIB_PATH                                        \
@@ -76,29 +66,18 @@
                       "." DE100_SHARED_LIB_EXT
 #endif
 
-// Startup
-#ifndef DE100_GAME_STARTUP_SHARED_LIB_PATH
-#define DE100_GAME_STARTUP_SHARED_LIB_PATH                                     \
-  GAME_BUILD_DIR_PATH "/" DE100_SHARED_LIB_PREFIX DE100_GAME_STARTUP_LIB_NAME  \
-                      "." DE100_SHARED_LIB_EXT
-#endif
-#ifndef DE100_GAME_STARTUP_TMP_SHARED_LIB_PATH
-#define DE100_GAME_STARTUP_TMP_SHARED_LIB_PATH                                 \
+// Game Bootstrap
+#ifndef DE100_GAME_BOOTSTRAP_SHARED_LIB_PATH
+#define DE100_GAME_BOOTSTRAP_SHARED_LIB_PATH                                   \
   GAME_BUILD_DIR_PATH                                                          \
-  "/" DE100_SHARED_LIB_PREFIX DE100_GAME_STARTUP_TMP_LIB_NAME                  \
+  "/" DE100_SHARED_LIB_PREFIX DE100_GAME_BOOTSTRAP_LIB_NAME                    \
   "." DE100_SHARED_LIB_EXT
 #endif
-
-// Init
-#ifndef DE100_GAME_INIT_SHARED_LIB_PATH
-#define DE100_GAME_INIT_SHARED_LIB_PATH                                        \
-  GAME_BUILD_DIR_PATH "/" DE100_SHARED_LIB_PREFIX DE100_GAME_INIT_LIB_NAME     \
-                      "." DE100_SHARED_LIB_EXT
-#endif
-#ifndef DE100_GAME_INIT_TMP_SHARED_LIB_PATH
-#define DE100_GAME_INIT_TMP_SHARED_LIB_PATH                                    \
-  GAME_BUILD_DIR_PATH "/" DE100_SHARED_LIB_PREFIX DE100_GAME_INIT_TMP_LIB_NAME \
-                      "." DE100_SHARED_LIB_EXT
+#ifndef DE100_GAME_BOOTSTRAP_TMP_SHARED_LIB_PATH
+#define DE100_GAME_BOOTSTRAP_TMP_SHARED_LIB_PATH                               \
+  GAME_BUILD_DIR_PATH                                                          \
+  "/" DE100_SHARED_LIB_PREFIX DE100_GAME_BOOTSTRAP_TMP_LIB_NAME                \
+  "." DE100_SHARED_LIB_EXT
 #endif
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -134,41 +113,40 @@ typedef GAME_GET_AUDIO_SAMPLES(game_get_audio_samples_t);
 typedef struct {
   char *game_main_lib_path;
   char *game_main_lib_tmp_path;
-  char *game_startup_lib_path;
-  char *game_startup_lib_tmp_path;
-  char *game_init_lib_path;
-  char *game_init_lib_tmp_path;
+  char *game_bootstrap_lib_path;
+  char *game_bootstrap_lib_tmp_path;
 
   De100PathResult exe_full_path; // Full path to executable
   De100PathResult exe_directory; // Directory containing executable
 } GameCodePaths;
 
 typedef struct {
-  De100DllHandle game_code_lib;
+  De100DllHandle code_lib;
   De100TimeSpec last_write_time;
+} GameCodeMeta;
 
-  game_update_and_render_t *update_and_render;
-  game_get_audio_samples_t *get_audio_samples;
-
-  game_startup_t *startup;
-
-  game_init_t *init;
-
+typedef struct {
+  GameCodeMeta meta;
   bool32 is_valid;
-} GameCode;
+
+  struct {
+    game_update_and_render_t *update_and_render;
+    game_get_audio_samples_t *get_audio_samples;
+  } functions;
+} GameMainCode;
+
+typedef struct {
+  GameCodeMeta meta;
+  struct {
+    game_startup_t *startup;
+    game_init_t *init;
+  } functions;
+} GameBootstrapCode;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // API FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════════
 
-typedef enum {
-  GAME_CODE_CATEGORY_NONE = 0,
-  GAME_CODE_CATEGORY_MAIN = 1 << 0,
-  GAME_CODE_CATEGORY_INIT = 1 << 1,
-  GAME_CODE_CATEGORY_STARTUP = 1 << 2,
-  GAME_CODE_CATEGORY_ANY = GAME_CODE_CATEGORY_MAIN | GAME_CODE_CATEGORY_INIT |
-                           GAME_CODE_CATEGORY_STARTUP
-} GAME_CODE_CATEGORIES;
 /**
  * Load game code from a dynamic library.
  *
@@ -183,8 +161,8 @@ typedef enum {
  * Never exits or crashes - always returns a valid GameCode structure.
  * On error, uses stub functions and sets is_valid to false.
  */
-int load_game_code(GameCode *game_code, GameCodePaths *game_code_paths,
-                   GAME_CODE_CATEGORIES category);
+int load_game_main_code(GameMainCode *game_code,
+                        GameCodePaths *game_code_paths);
 
 /**
  * Unload game code and free resources.
@@ -195,7 +173,11 @@ int load_game_code(GameCode *game_code, GameCodePaths *game_code_paths,
  * Safe to call multiple times (idempotent).
  * Safe to call with NULL pointer (no-op with warning).
  */
-void unload_game_code(GameCode *game_code);
+void unload_game_main_code(GameMainCode *game_code);
+
+int load_game_bootstrap_code(GameBootstrapCode *game_code,
+                             GameCodePaths *game_code_paths);
+void unload_game_bootstrap_code(GameBootstrapCode *game_code);
 
 /**
  * Check if game code needs to be reloaded.
@@ -207,9 +189,10 @@ void unload_game_code(GameCode *game_code);
  * Safe to call with NULL pointers (returns false with warning).
  * Returns false if file doesn't exist or can't be accessed.
  */
-bool32 game_main_code_needs_reload(GameCode *game_code, char *source_lib_name);
+bool32 game_main_code_needs_reload(GameMainCode *game_code,
+                                   char *source_lib_name);
 
-void handle_game_reload_check(GameCode *game_code,
+void handle_game_reload_check(GameMainCode *game_code,
                               GameCodePaths *game_code_paths);
 
 // ═══════════════════════════════════════════════════════════════════════════

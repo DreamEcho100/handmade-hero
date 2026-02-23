@@ -5,6 +5,7 @@
 #include "_common/path.h"
 #include "_common/time.h"
 #include "game/base.h"
+#include "game/game-loader.h"
 #include "platforms/_common/replay-buffer.h"
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -50,17 +51,16 @@ int engine_init(EngineState *engine) {
   platform->paths = (GameCodePaths){
       .game_main_lib_path = DE100_GAME_MAIN_SHARED_LIB_PATH,
       .game_main_lib_tmp_path = DE100_GAME_MAIN_TMP_SHARED_LIB_PATH,
-      .game_startup_lib_path = DE100_GAME_STARTUP_SHARED_LIB_PATH,
-      .game_startup_lib_tmp_path = DE100_GAME_STARTUP_TMP_SHARED_LIB_PATH,
-      .game_init_lib_path = DE100_GAME_INIT_SHARED_LIB_PATH,
-      .game_init_lib_tmp_path = DE100_GAME_INIT_TMP_SHARED_LIB_PATH,
+      .game_bootstrap_lib_path = DE100_GAME_BOOTSTRAP_SHARED_LIB_PATH,
+      .game_bootstrap_lib_tmp_path = DE100_GAME_BOOTSTRAP_TMP_SHARED_LIB_PATH,
       .exe_full_path = de100_path_get_executable(),
       .exe_directory = de100_path_get_executable_directory(),
   };
 
-  load_game_code(&platform->code, &platform->paths, GAME_CODE_CATEGORY_ANY);
+  load_game_bootstrap_code(&platform->game_bootstrap_code, &platform->paths);
 
-  if (!platform->code.is_valid) {
+  load_game_main_code(&platform->game_main_code, &platform->paths);
+  if (!platform->game_main_code.is_valid) {
     fprintf(stderr, "❌ Failed to load game code\n");
     return 1;
   }
@@ -73,7 +73,7 @@ int engine_init(EngineState *engine) {
 
   game->config = get_default_game_config();
   // #if DE100_HOT_RELOAD
-  platform->code.startup(&game->config);
+  platform->game_bootstrap_code.functions.startup(&game->config);
   // #else
   // game_startup(&game->config);
   // #endif

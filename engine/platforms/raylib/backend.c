@@ -126,7 +126,8 @@ audio_generate_and_send(EnginePlatformState *platform, EngineGameState *game) {
         .sample_count = samples_to_generate,
         .samples = (i16 *)game->audio.samples};
 
-    platform->code.get_audio_samples(&game->memory, &audio_buffer);
+    platform->game_main_code.functions.get_audio_samples(&game->memory,
+                                                         &audio_buffer);
     raylib_send_samples(&platform->config.audio, &audio_buffer);
   }
 }
@@ -171,7 +172,7 @@ de100_file_scoped_fn inline int raylib_init(EngineState *engine) {
 
 int platform_main(void) {
   EngineState engine = {0};
-  engine.platform.code = (GameCode){0};
+  engine.platform.game_main_code = (GameMainCode){0};
 
   if (engine_init(&engine)) {
     return 1;
@@ -182,13 +183,15 @@ int platform_main(void) {
     return 1;
   }
 
-  engine.platform.code.init(&engine.game.thread_context, &engine.game.memory,
-                            engine.game.inputs, &engine.game.backbuffer);
+  engine.platform.game_bootstrap_code.functions.init(
+      &engine.game.thread_context, &engine.game.memory, engine.game.inputs,
+      &engine.game.backbuffer);
 
   printf("✅ Entering main loop...\n");
 
   while (!WindowShouldClose() && is_game_running) {
-    handle_game_reload_check(&engine.platform.code, &engine.platform.paths);
+    handle_game_reload_check(&engine.platform.game_main_code,
+                             &engine.platform.paths);
     prepare_input_frame(engine.platform.old_inputs, engine.game.inputs);
 
     // if (IsWindowResized()) {
@@ -210,7 +213,7 @@ int platform_main(void) {
                                      engine.game.inputs);
     }
 
-    engine.platform.code.update_and_render(
+    engine.platform.game_main_code.functions.update_and_render(
         &engine.game.thread_context, &engine.game.memory, engine.game.inputs,
         &engine.game.backbuffer);
 

@@ -297,7 +297,8 @@ audio_generate_and_send(EnginePlatformState *platform, EngineGameState *game) {
         .sample_count = samples_to_generate,
         .samples = (i16 *)game->audio.samples};
 
-    platform->code.get_audio_samples(&game->memory, &audio_buffer);
+    platform->game_main_code.functions.get_audio_samples(&game->memory,
+                                                         &audio_buffer);
     linux_send_samples_to_alsa(&platform->config.audio, &audio_buffer);
   }
 }
@@ -428,7 +429,7 @@ de100_file_scoped_fn inline void x11_shutdown(EngineState *engine) {
 
 int platform_main(void) {
   EngineState engine = {0};
-  engine.platform.code = (GameCode){0};
+  engine.platform.game_main_code = (GameMainCode){0};
 
   if (engine_init(&engine)) {
     return 1;
@@ -441,8 +442,9 @@ int platform_main(void) {
 
   X11PlatformState *x11 = engine_get_backend(&engine, X11PlatformState);
 
-  engine.platform.code.init(&engine.game.thread_context, &engine.game.memory,
-                            engine.game.inputs, &engine.game.backbuffer);
+  engine.platform.game_bootstrap_code.functions.init(
+      &engine.game.thread_context, &engine.game.memory, engine.game.inputs,
+      &engine.game.backbuffer);
 
   while (is_game_running) {
 #if DE100_INTERNAL
@@ -456,7 +458,8 @@ int platform_main(void) {
 
     frame_timing_begin();
 
-    handle_game_reload_check(&engine.platform.code, &engine.platform.paths);
+    handle_game_reload_check(&engine.platform.game_main_code,
+                             &engine.platform.paths);
 
     prepare_input_frame(engine.platform.old_inputs, engine.game.inputs);
     x11_poll_mouse(x11->display, x11->window, engine.game.inputs);
@@ -475,7 +478,7 @@ int platform_main(void) {
                                      engine.game.inputs);
     }
 
-    engine.platform.code.update_and_render(
+    engine.platform.game_main_code.functions.update_and_render(
         &engine.game.thread_context, &engine.game.memory, engine.game.inputs,
         &engine.game.backbuffer);
 

@@ -58,7 +58,8 @@ typedef struct {
 
 typedef struct {
   PlatformConfig config;
-  GameCode code;
+  GameMainCode game_main_code;
+  GameBootstrapCode game_bootstrap_code;
   GameCodePaths paths;
   GameMemoryState memory_state; // Recording/playback
 
@@ -146,7 +147,7 @@ de100_file_scoped_fn inline void engine_swap_inputs(EngineState *engine) {
  * Check if engine is ready to run.
  */
 de100_file_scoped_fn inline bool engine_is_valid(EngineState *engine) {
-  return engine && engine->platform.code.is_valid &&
+  return engine && engine->platform.game_main_code.is_valid &&
          de100_memory_is_valid(engine->allocations.game_state);
 }
 
