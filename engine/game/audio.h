@@ -15,6 +15,7 @@ typedef struct {
   f32 target_frequency; // For smooth frequency transitions (future)
   f32 volume;           // 0.0 to 1.0
   f32 pan_position;     // -1.0 (left) to 1.0 (right)
+  f32 current_volume;
   bool is_playing;
 } SoundSource;
 

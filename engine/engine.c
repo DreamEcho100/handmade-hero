@@ -192,9 +192,6 @@ int engine_init(EngineState *engine) {
   game->audio.samples_per_second = game->config.initial_audio_sample_rate;
   game->audio.samples = allocations->audio_samples.base;
 
-  platform->config.audio.buffer_size_bytes =
-      game->config.initial_audio_sample_rate * bytes_per_sample;
-
   printf("✅ Audio buffer: %d samples max\n",
          platform->config.audio.max_samples_per_call);
 

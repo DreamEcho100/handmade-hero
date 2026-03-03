@@ -106,17 +106,21 @@ update_window_from_backbuffer(GameBackBuffer *backbuffer) {
 
 de100_file_scoped_fn inline void
 audio_generate_and_send(EnginePlatformState *platform, EngineGameState *game) {
-  u32 samples_to_generate =
-      raylib_get_samples_to_write(&platform->config.audio, &game->audio);
 
+  // Fill ALL available buffers (Raylib double-buffers internally)
+  for (int i = 0; i < 4; i++) {
+    u32 samples_to_generate =
+        raylib_get_samples_to_write(&platform->config.audio, &game->audio);
 #if DE100_INTERNAL
-  if (FRAME_LOG_EVERY_THREE_SECONDS_CHECK) {
-    printf("[AUDIO] samples_to_generate=%d, RSI=%ld\n", samples_to_generate,
-           (long)platform->config.audio.running_sample_index);
-  }
+    if (FRAME_LOG_EVERY_THREE_SECONDS_CHECK) {
+      printf("[AUDIO] samples_to_generate=%d, RSI=%ld\n", samples_to_generate,
+             (long)platform->config.audio.running_sample_index);
+    }
 #endif
 
-  if (samples_to_generate > 0) {
+    if (samples_to_generate == 0)
+      break;
+
     if (samples_to_generate > platform->config.audio.max_samples_per_call) {
       samples_to_generate = platform->config.audio.max_samples_per_call;
     }

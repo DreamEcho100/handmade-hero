@@ -18,7 +18,7 @@ typedef struct {
   // Hardware (set once at init)
   i32 samples_per_second; // e.g., 48000 Hz
   i32 bytes_per_sample;   // e.g., 4 (16-bit stereo)
-  i32 buffer_size_bytes;  // Total buffer size _(secondary_buffer_size)_
+  // i32 buffer_size_bytes;  // Total buffer size _(secondary_buffer_size)_
 
   /** Maximum number of samples to process per audio callback */
   u32 max_samples_per_call;

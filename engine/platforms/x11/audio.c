@@ -501,8 +501,6 @@ bool linux_init_audio(PlatformAudioConfig *audio_config, i32 samples_per_second,
   audio_config->game_update_hz = game_update_hz;
   audio_config->latency_samples = latency_sample_count;
   audio_config->safety_samples = safety_sample_count;
-  audio_config->buffer_size_bytes =
-      (i32)actual_buffer_size * audio_config->bytes_per_sample;
 
   // Linux-specific state
   g_linux_audio_output.buffer_size = (u32)actual_buffer_size;

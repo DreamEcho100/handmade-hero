@@ -35,9 +35,6 @@ bool raylib_init_audio(PlatformAudioConfig *audio_config,
   printf("🔊 RAYLIB AUDIO INITIALIZATION\n");
   printf("═══════════════════════════════════════════════════════════\n");
 
-  // ─────────────────────────────────────────────────────────────────────
-  // STEP 1: Initialize Raylib audio device
-  // ─────────────────────────────────────────────────────────────────────
   InitAudioDevice();
 
   if (!IsAudioDeviceReady()) {
@@ -48,74 +45,45 @@ bool raylib_init_audio(PlatformAudioConfig *audio_config,
 
   printf("✅ Audio: Device initialized\n");
 
-  // ─────────────────────────────────────────────────────────────────────
-  // STEP 2: Calculate proper buffer size
-  // ─────────────────────────────────────────────────────────────────────
-  // For 60 FPS: we need ~800 samples per frame (48000/60)
-  // For smooth audio, buffer should be ~2-3 frames worth
-  // But not too big or latency increases
-  // ─────────────────────────────────────────────────────────────────────
-
   i32 samples_per_frame = samples_per_second / game_update_hz;
+  i32 buffer_size = samples_per_frame * 2; // ~2 frames
 
-  // Use 2 frames worth as buffer size for low latency
-  // This means we'll get IsAudioStreamProcessed() every ~2 frames
-  i32 actual_buffer_size = samples_per_frame * 2;
-
-  // Clamp to reasonable range
-  if (actual_buffer_size < 512)
-    actual_buffer_size = 512;
-  if (actual_buffer_size > 4096)
-    actual_buffer_size = 4096;
+  if (buffer_size < 512)
+    buffer_size = 512;
+  if (buffer_size > 4096)
+    buffer_size = 4096;
 
   printf("[AUDIO] Samples per frame: %d (at %d Hz game logic)\n",
          samples_per_frame, game_update_hz);
   printf("[AUDIO] Buffer size: %d samples (%.1f ms, ~%.1f frames)\n",
-         actual_buffer_size,
-         (float)actual_buffer_size / samples_per_second * 1000.0f,
-         (float)actual_buffer_size / samples_per_frame);
+         buffer_size, (float)buffer_size / samples_per_second * 1000.0f,
+         (float)buffer_size / samples_per_frame);
 
-  // ─────────────────────────────────────────────────────────────────────
-  // STEP 3: Configure platform audio config
-  // ─────────────────────────────────────────────────────────────────────
+  // ───────
+
+  // Configure
   audio_config->samples_per_second = samples_per_second;
   audio_config->bytes_per_sample = sizeof(i16) * 2; // 16-bit stereo
   audio_config->running_sample_index = 0;
   audio_config->game_update_hz = game_update_hz;
-  audio_config->latency_samples = actual_buffer_size;
-
-  // Safety margin: 1/3 of a frame (same as Casey's SafetyBytes)
+  audio_config->latency_samples = buffer_size;
   audio_config->safety_samples = samples_per_frame / 3;
 
-  // Target buffer: 2 frames of audio (provides good latency cushion)
-  i32 target_buffer_samples = samples_per_frame * 2;
-  audio_config->buffer_size_bytes =
-      target_buffer_samples * audio_config->bytes_per_sample;
+  // Set buffer size BEFORE creating stream
+  SetAudioStreamBufferSizeDefault(buffer_size);
 
-  // ─────────────────────────────────────────────────────────────────────
-  // STEP 4: Set buffer size BEFORE creating stream
-  // ─────────────────────────────────────────────────────────────────────
-  SetAudioStreamBufferSizeDefault(actual_buffer_size);
-
-  // ─────────────────────────────────────────────────────────────────────
-  // STEP 5: Create audio stream
-  // ─────────────────────────────────────────────────────────────────────
-  g_raylib_audio_output.stream =
-      LoadAudioStream(samples_per_second, // Sample rate
-                      16,                 // Bits per sample
-                      2                   // Channels (stereo)
-      );
+  // Create stream ONCE
+  g_raylib_audio_output.stream = LoadAudioStream(samples_per_second, 16, 2);
 
   if (!IsAudioStreamValid(g_raylib_audio_output.stream)) {
-    fprintf(stderr, "❌ Audio: Failed to create audio stream\n");
+    fprintf(stderr, "❌ Audio: Failed to create stream\n");
     CloseAudioDevice();
     audio_config->is_initialized = false;
     return false;
   }
 
   g_raylib_audio_output.stream_valid = true;
-  // g_raylib_audio_output.buffer_size_frames = actual_buffer_size;
-  g_raylib_audio_output.buffer_size_frames = samples_per_frame * 2;
+  g_raylib_audio_output.buffer_size_frames = buffer_size;
 
   printf("✅ Audio: Stream created (%d Hz, 16-bit stereo)\n",
          samples_per_second);
@@ -124,64 +92,31 @@ bool raylib_init_audio(PlatformAudioConfig *audio_config,
          (float)g_raylib_audio_output.buffer_size_frames / samples_per_second *
              1000.0f);
 
-  // Create audio stream with this buffer size
-  g_raylib_audio_output.stream = LoadAudioStream(samples_per_second,
-                                                 16, // 16-bit
-                                                 2   // stereo
-  );
-
-  // ─────────────────────────────────────────────────────────────────────
-  // STEP 6: Allocate sample buffer for game to fill
-  // ─────────────────────────────────────────────────────────────────────
-  // Only need enough for one buffer write
-  u32 buffer_bytes = actual_buffer_size * audio_config->bytes_per_sample;
-
+  // Allocate buffer ONCE
+  u32 buffer_bytes = buffer_size * audio_config->bytes_per_sample;
   g_raylib_audio_output.sample_buffer =
       de100_memory_alloc(NULL, buffer_bytes,
                          De100_MEMORY_FLAG_READ | De100_MEMORY_FLAG_WRITE |
                              De100_MEMORY_FLAG_ZEROED);
 
   if (!de100_memory_is_valid(g_raylib_audio_output.sample_buffer)) {
-    fprintf(stderr, "❌ Audio: Failed to allocate sample buffer\n");
+    fprintf(stderr, "❌ Audio: Failed to allocate buffer\n");
     UnloadAudioStream(g_raylib_audio_output.stream);
     CloseAudioDevice();
     audio_config->is_initialized = false;
-    fprintf(
-        stderr, "   Code: %s\n",
-        de100_memory_error_str(g_raylib_audio_output.sample_buffer.error_code));
     return false;
   }
 
-  g_raylib_audio_output.sample_buffer_size =
-      g_raylib_audio_output.buffer_size_frames *
-      audio_config->bytes_per_sample * 4;
+  printf("✅ Audio: Sample buffer allocated (%d bytes)\n",
+         g_raylib_audio_output.sample_buffer_size);
 
-  g_raylib_audio_output.sample_buffer =
-      de100_memory_alloc(NULL, g_raylib_audio_output.sample_buffer_size,
-                         De100_MEMORY_FLAG_READ | De100_MEMORY_FLAG_WRITE |
-                             De100_MEMORY_FLAG_ZEROED);
+  g_raylib_audio_output.sample_buffer_size = buffer_bytes;
 
-  printf("✅ Audio: Sample buffer allocated (%d bytes)\n", buffer_bytes);
-
-  // // ─────────────────────────────────────────────────────────────────────
-  // // STEP 7: Configure game audio output buffer
-  // // ─────────────────────────────────────────────────────────────────────
-  // audio_output->samples_per_second = samples_per_second;
-  // audio_output->sample_count = actual_buffer_size; // Fixed size for Raylib
-  // engine_allocations->audio_samples = g_raylib_audio_output.sample_buffer;
-  // audio_output->samples = engine_allocations->audio_samples.base;
-
-  // ─────────────────────────────────────────────────────────────────────
-  // STEP 8: Start playback (Raylib handles pre-buffering internally)
-  // ─────────────────────────────────────────────────────────────────────
   PlayAudioStream(g_raylib_audio_output.stream);
-
   audio_config->is_initialized = true;
 
-  printf("═══════════════════════════════════════════════════════════\n");
-  printf("🔊 AUDIO SYSTEM INITIALIZED\n");
-  printf("═══════════════════════════════════════════════════════════\n");
-
+  printf("✅ Audio: %d Hz, %d sample buffer\n", samples_per_second,
+         buffer_size);
   return true;
 }
 
@@ -193,29 +128,18 @@ bool raylib_init_audio(PlatformAudioConfig *audio_config,
 // ═══════════════════════════════════════════════════════════════════════════
 u32 raylib_get_samples_to_write(PlatformAudioConfig *audio_config,
                                 GameAudioOutputBuffer *audio_output) {
-  (void)(audio_output);
+  (void)audio_output;
+
   if (!audio_config->is_initialized || !g_raylib_audio_output.stream_valid) {
     return 0;
   }
 
-  // CRITICAL: Only write when Raylib's buffer has been consumed
-  // This prevents buffer overflow warnings
+  // Check if ANY buffer is ready
   if (!IsAudioStreamProcessed(g_raylib_audio_output.stream)) {
-    return 0; // Buffer still has data, don't write yet
+    return 0;
   }
 
-  // Calculate samples to fill one buffer's worth
-  // Use the buffer size we configured the stream with
-  u32 samples_to_write = g_raylib_audio_output.buffer_size_frames;
-
-  // Clamp to our sample buffer capacity
-  u32 max_samples =
-      g_raylib_audio_output.sample_buffer_size / audio_config->bytes_per_sample;
-  if (samples_to_write > max_samples) {
-    samples_to_write = max_samples;
-  }
-
-  return samples_to_write;
+  return g_raylib_audio_output.buffer_size_frames;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
