@@ -12,6 +12,8 @@
 | **SDL3 backend**             | Write `src/main_sdl3.c` implementing the same 6 functions.                                                 | SDL3 runs on Linux, macOS, and Windows. The game logic compiles unchanged.                                                   |
 | **DAS (Delayed Auto-Shift)** | When holding left/right, piece starts moving after a short delay, then moves repeatedly at a set interval. | Track how long the button has been held. After an initial delay (e.g. 200ms), start auto-moving every 50ms until released.   |
 
+---
+
 ## Optional: Further Improvements
 
 If you want to enhance the audio further in the future:
@@ -24,3 +26,37 @@ If you want to enhance the audio further in the future:
 | **Vibrato**                 | Slight pitch oscillation on held notes       | Medium     |
 | **Reverb/delay**            | Echo effects                                 | Hard       |
 | **Multiple channels**       | Separate music tracks (bass, melody)         | Medium     |
+
+---
+
+## Migrating Tetris to Use Engine Audio (Future)
+
+When you're ready to integrate Tetris with the engine:
+
+```c:games/tetris/src/audio.c
+// Before: Tetris-specific types in utils/audio.h
+// After: Use engine helpers + game-specific extensions
+
+#include "../../../engine/game/audio.h"
+#include "../../../engine/game/audio-helpers.h"
+
+// Tetris-specific sound IDs (game layer)
+typedef enum {
+  TETRIS_SOUND_NONE = 0,
+  TETRIS_SOUND_MOVE,
+  TETRIS_SOUND_ROTATE,
+  // ... etc
+} TetrisSoundID;
+
+// Tetris audio state (uses engine types)
+typedef struct {
+  De100SoundPlayer sfx;
+  De100MusicSequencer music;
+  f32 master_volume;
+  f32 sfx_volume;
+  f32 music_volume;
+} TetrisAudioState;
+
+// game_get_audio_samples uses engine helpers internally
+// Same pattern as handmade-hero but with Tetris-specific sounds
+```

@@ -719,6 +719,600 @@ clang -Wall -Wextra -O2 -o game src/*.c src/utils/*.c -lraylib -lm
 
 ---
 
+## Audio System Architecture
+
+### Mental Model: The Audio Pipeline
+
+Audio in games follows a **producer-consumer** model:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    THE AUDIO PIPELINE                                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  TIME ──────────────────────────────────────────────────────────────────▶   │
+│                                                                             │
+│  ┌──────────────────┐                                                       │
+│  │  AUDIO HARDWARE  │   Constantly consuming samples at fixed rate          │
+│  │  (Speaker/DAC)   │   e.g., 48000 samples/second = 1 sample every 21µs   │
+│  └────────▲─────────┘                                                       │
+│           │ pulls samples                                                   │
+│  ┌────────┴─────────┐                                                       │
+│  │  PLATFORM BUFFER │   Ring buffer holding ~2-4 frames of audio            │
+│  │  (ALSA/Raylib)   │   Must never run empty (underrun = clicks/silence)   │
+│  └────────▲─────────┘                                                       │
+│           │ pushes samples each frame                                       │
+│  ┌────────┴─────────┐                                                       │
+│  │  GAME AUDIO      │   Generates samples on demand                         │
+│  │  (game code)     │   Mix SFX + Music → stereo buffer                    │
+│  └──────────────────┘                                                       │
+│                                                                             │
+│  KEY INSIGHT: Hardware doesn't wait! If buffer empties, you hear            │
+│  silence/clicks. Game must ALWAYS stay ahead by ~2 frames.                  │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### The Two-Phase Audio Update
+
+Audio requires TWO separate updates per frame:
+
+1. **Logic Update** (with `delta_time`) — Advance sequencers, handle timing
+2. **Sample Generation** (with `sample_count`) — Fill the audio buffer
+
+**Why separate?** Logic uses real time (seconds), sample generation uses audio time (samples). These can differ during frame rate spikes.
+
+**Reference:** `games/tetris/src/game.c` — `game_audio_update()` called with `delta_time`, then `game_get_audio_samples()` called by platform
+
+```c
+/* In game_update(): */
+game_audio_update(&state->audio, delta_time);  /* Phase 1: Logic */
+
+/* In platform layer, after game_update(): */
+game_get_audio_samples(game_state, &buffer);   /* Phase 2: Samples */
+```
+
+### Responsibility Separation
+
+| Aspect                 | Platform Layer | Game Layer |
+| ---------------------- | -------------- | ---------- |
+| Buffer allocation      | ✅             | ❌         |
+| Sample rate selection  | ✅             | ❌         |
+| Underrun recovery      | ✅             | ❌         |
+| Hardware communication | ✅             | ❌         |
+| Sound effect IDs       | ❌             | ✅         |
+| Music patterns         | ❌             | ✅         |
+| Mixing logic           | ❌             | ✅         |
+| Volume control         | ❌             | ✅         |
+| Panning decisions      | ❌             | ✅         |
+
+**Platform provides:** `samples_per_second`, `sample_count`, pointer to buffer
+**Game provides:** Filled buffer with interleaved stereo samples
+
+---
+
+### Platform Audio Configuration
+
+**Reference:** `games/tetris/src/platform.h` — `PlatformAudioConfig`
+
+```c
+typedef struct {
+  int samples_per_second;  /* 44100 or 48000 */
+  int buffer_size_samples; /* Hardware buffer size */
+  int is_initialized;
+
+  /* Casey's Latency Model */
+  int samples_per_frame;        /* samples_per_second / game_hz */
+  int latency_samples;          /* Target buffered samples (~2 frames) */
+  int safety_samples;           /* Extra margin (~1/3 frame) */
+  int64_t running_sample_index; /* Total samples written (for debugging) */
+  int frames_of_latency;        /* Target latency in frames (e.g., 2) */
+  int hz;                       /* Game update rate (e.g., 60) */
+} PlatformAudioConfig;
+```
+
+**Latency calculation:**
+
+```c
+config->samples_per_frame = config->samples_per_second / config->hz;
+config->latency_samples = config->samples_per_frame * config->frames_of_latency;
+config->safety_samples = config->samples_per_frame / 3;
+```
+
+**Example at 48kHz, 60Hz game:**
+
+- Samples per frame: 48000 / 60 = 800
+- Target latency (2 frames): 800 × 2 = 1600 samples = 33ms
+- Safety margin: 800 / 3 ≈ 267 samples = 5.5ms
+
+---
+
+### Game Audio State Pattern
+
+**Reference:** `games/tetris/src/utils/audio.h` — Game-specific audio types
+
+A complete game audio system needs:
+
+```c
+/* Sound effect slot (one playing sound) */
+typedef struct {
+  int sound_id;           /* Game-defined enum, 0 = inactive */
+  float phase;            /* 0.0 to 1.0 (normalized) */
+  float frequency;        /* Hz */
+  float frequency_slide;  /* Hz per sample (for pitch bends) */
+  float volume;           /* 0.0 to 1.0 */
+  float pan_position;     /* -1.0 (left) to 1.0 (right) */
+  int samples_remaining;  /* Countdown */
+  int total_samples;      /* Original duration */
+  int fade_in_samples;    /* Click prevention */
+} SoundInstance;
+
+/* Background music tone */
+typedef struct {
+  float phase;
+  float frequency;
+  float volume;
+  float current_volume;  /* For smooth ramping */
+  float pan_position;
+  int is_playing;
+} ToneGenerator;
+
+/* Pattern-based music sequencer */
+typedef struct {
+  uint8_t patterns[MAX_PATTERNS][PATTERN_LENGTH];
+  int current_pattern;
+  int current_step;
+  float step_timer;      /* Seconds since last step */
+  float step_duration;   /* Seconds per step (tempo) */
+  ToneGenerator tone;
+  int is_playing;
+} MusicSequencer;
+
+/* Complete audio state (lives in GameState) */
+typedef struct {
+  SoundInstance active_sounds[MAX_SOUNDS];
+  MusicSequencer music;
+  float master_volume;
+  float sfx_volume;
+  float music_volume;
+  int samples_per_second;
+} GameAudioState;
+```
+
+---
+
+### Click Prevention (Volume Ramping)
+
+**The Problem:** Instant volume changes cause audible clicks/pops.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    WHY CLICKS HAPPEN                                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  BAD: Instant volume change                                                 │
+│  ═══════════════════════════                                                │
+│                                                                             │
+│  Waveform:    ~~~~▒▒▒▒▒▒▒                                                  │
+│                   │                                                         │
+│                   └─ Discontinuity = CLICK!                                 │
+│                                                                             │
+│  GOOD: Ramped volume change                                                 │
+│  ═══════════════════════════                                                │
+│                                                                             │
+│  Waveform:    ~~~~▓▓▓▒▒░░                                                  │
+│                   ├──────┤                                                  │
+│                   └─ Smooth transition = no click                           │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Solution:** Never change volume instantly. Ramp `current_volume` toward `target_volume`:
+
+```c
+/* In sample generation loop: */
+float target = tone->is_playing ? tone->volume : 0.0f;
+
+if (tone->current_volume < target) {
+  tone->current_volume += VOLUME_RAMP_SPEED;  /* ~0.002 per sample */
+  if (tone->current_volume > target) tone->current_volume = target;
+} else if (tone->current_volume > target) {
+  tone->current_volume -= VOLUME_RAMP_SPEED;
+  if (tone->current_volume < 0.0f) tone->current_volume = 0.0f;
+}
+
+/* Use current_volume, not volume, for sample generation */
+float sample = wave * tone->current_volume;
+```
+
+**Reference:** `games/tetris/src/audio.c` — `game_get_audio_samples()` music section
+
+**For SFX:** Use fade-in envelope on sound start:
+
+```c
+int samples_played = inst->total_samples - inst->samples_remaining;
+if (samples_played < inst->fade_in_samples) {
+  float fade_in = (float)samples_played / (float)inst->fade_in_samples;
+  env *= fade_in;
+}
+```
+
+---
+
+### Stereo Panning
+
+**Reference:** `games/tetris/src/audio.c` — `calculate_piece_pan()`, `calculate_pan_volumes()`
+
+Panning adds spatial awareness — sounds come from where the action is.
+
+**Pattern:**
+
+```c
+/* Calculate pan from game position (-1.0 to 1.0) */
+float calculate_pan_from_position(float x, float field_width) {
+  float center = field_width / 2.0f;
+  float offset = x - center;
+  float pan = (offset / center) * 0.8f;  /* Scale to ±0.8, not full ±1.0 */
+
+  if (pan < -1.0f) pan = -1.0f;
+  if (pan > 1.0f) pan = 1.0f;
+
+  return pan;
+}
+
+/* Apply pan to get stereo volumes */
+void calculate_pan_volumes(float pan, float *left_vol, float *right_vol) {
+  if (pan <= 0.0f) {
+    *left_vol = 1.0f;
+    *right_vol = 1.0f + pan;  /* pan is negative */
+  } else {
+    *left_vol = 1.0f - pan;
+    *right_vol = 1.0f;
+  }
+}
+```
+
+**Usage in Tetris:**
+
+- Piece on left side → sounds pan left
+- Piece on right side → sounds pan right
+- Music stays centered (pan = 0.0)
+
+---
+
+### Sound Effect System
+
+**Reference:** `games/tetris/src/audio.c` — `game_play_sound_at()`
+
+**Sound Definition Pattern:**
+
+```c
+typedef struct {
+  float frequency;      /* Starting Hz */
+  float frequency_end;  /* Ending Hz (0 = no slide) */
+  float duration_ms;    /* Duration */
+  float volume;         /* 0.0 to 1.0 */
+} SoundDef;
+
+static const SoundDef SOUND_DEFS[SOUND_COUNT] = {
+  [SOUND_NONE]       = {0,   0,    0,   0.0f},
+  [SOUND_MOVE]       = {200, 150,  50,  0.3f},  /* Quick blip down */
+  [SOUND_ROTATE]     = {300, 400,  80,  0.3f},  /* Quick blip up */
+  [SOUND_DROP]       = {150, 50,   100, 0.5f},  /* Thud down */
+  [SOUND_LINE_CLEAR] = {400, 800,  200, 0.6f},  /* Rising sweep */
+  [SOUND_TETRIS]     = {300, 1200, 400, 0.8f},  /* Long rising sweep */
+};
+```
+
+**Playing a Sound:**
+
+```c
+void game_play_sound_at(GameAudioState *audio, SOUND_ID sound, float pan) {
+  /* Find empty slot or steal oldest */
+  int slot = find_free_slot(audio);
+
+  SoundDef *def = &SOUND_DEFS[sound];
+  SoundInstance *inst = &audio->active_sounds[slot];
+
+  inst->sound_id = sound;
+  inst->phase = 0.0f;
+  inst->frequency = def->frequency;
+  inst->volume = def->volume;
+  inst->pan_position = pan;
+  inst->samples_remaining = (int)(def->duration_ms * audio->samples_per_second / 1000.0f);
+  inst->total_samples = inst->samples_remaining;
+  inst->fade_in_samples = 96;  /* ~2ms at 48kHz */
+
+  /* Calculate pitch slide */
+  if (def->frequency_end > 0) {
+    inst->frequency_slide = (def->frequency_end - def->frequency) / inst->samples_remaining;
+  }
+}
+```
+
+---
+
+### Music Sequencer
+
+**Reference:** `games/tetris/src/audio.c` — `game_audio_update()`, pattern arrays
+
+A simple step sequencer for chiptune-style music:
+
+```c
+/* Pattern data: MIDI note numbers, 0 = rest */
+static const uint8_t PATTERN_A[16] = {
+  76, 71, 72, 74, 72, 71, 69, 69, 72, 76, 74, 72, 71, 71, 72, 74,
+};
+
+/* Update sequencer (call with delta_time) */
+void sequencer_update(MusicSequencer *seq, float delta_time) {
+  if (!seq->is_playing) return;
+
+  seq->step_timer += delta_time;
+
+  if (seq->step_timer >= seq->step_duration) {
+    seq->step_timer -= seq->step_duration;  /* Keep remainder */
+
+    uint8_t note = seq->patterns[seq->current_pattern][seq->current_step];
+
+    if (note > 0) {
+      seq->tone.frequency = midi_to_freq(note);
+      seq->tone.is_playing = 1;
+      /* DON'T reset phase — prevents clicks between notes */
+    } else {
+      seq->tone.is_playing = 0;  /* Rest */
+    }
+
+    /* Advance step */
+    seq->current_step++;
+    if (seq->current_step >= PATTERN_LENGTH) {
+      seq->current_step = 0;
+      seq->current_pattern = (seq->current_pattern + 1) % PATTERN_COUNT;
+    }
+  }
+}
+```
+
+**MIDI to Frequency:**
+
+```c
+float midi_to_freq(int note) {
+  return 440.0f * powf(2.0f, (note - 69) / 12.0f);
+}
+/* A4 (69) = 440 Hz, Middle C (60) = 261.63 Hz */
+```
+
+---
+
+### Sample Generation Loop
+
+**Reference:** `games/tetris/src/audio.c` — `game_get_audio_samples()`
+
+The core mixing loop:
+
+```c
+void game_get_audio_samples(GameState *state, AudioOutputBuffer *buffer) {
+  GameAudioState *audio = &state->audio;
+  int16_t *out = buffer->samples;
+  float inv_sample_rate = 1.0f / (float)buffer->samples_per_second;
+
+  /* Clear buffer */
+  memset(out, 0, buffer->sample_count * 2 * sizeof(int16_t));
+
+  for (int s = 0; s < buffer->sample_count; s++) {
+    float mix_left = 0.0f;
+    float mix_right = 0.0f;
+
+    /* ─── Mix Sound Effects ─── */
+    for (int i = 0; i < MAX_SOUNDS; i++) {
+      SoundInstance *inst = &audio->active_sounds[i];
+      if (inst->samples_remaining <= 0) continue;
+
+      /* Generate waveform */
+      float wave = (inst->phase < 0.5f) ? 1.0f : -1.0f;  /* Square wave */
+
+      /* Apply envelope */
+      float env = calculate_envelope(inst);
+      float sample = wave * inst->volume * env * audio->sfx_volume;
+
+      /* Apply panning */
+      float left_vol, right_vol;
+      calculate_pan_volumes(inst->pan_position, &left_vol, &right_vol);
+      mix_left += sample * left_vol;
+      mix_right += sample * right_vol;
+
+      /* Advance phase and frequency */
+      inst->phase += inst->frequency * inv_sample_rate;
+      if (inst->phase >= 1.0f) inst->phase -= 1.0f;
+      inst->frequency += inst->frequency_slide;
+      inst->samples_remaining--;
+    }
+
+    /* ─── Mix Music ─── */
+    if (audio->music.is_playing) {
+      ToneGenerator *tone = &audio->music.tone;
+
+      /* Volume ramping (click prevention) */
+      float target = tone->is_playing ? tone->volume : 0.0f;
+      tone->current_volume = ramp_toward(tone->current_volume, target, 0.002f);
+
+      if (tone->current_volume > 0.0001f) {
+        float wave = (tone->phase < 0.5f) ? 1.0f : -1.0f;
+        float sample = wave * tone->current_volume * audio->music_volume;
+
+        float left_vol, right_vol;
+        calculate_pan_volumes(tone->pan_position, &left_vol, &right_vol);
+        mix_left += sample * left_vol;
+        mix_right += sample * right_vol;
+
+        tone->phase += tone->frequency * inv_sample_rate;
+        if (tone->phase >= 1.0f) tone->phase -= 1.0f;
+      }
+    }
+
+    /* ─── Final Output ─── */
+    mix_left *= audio->master_volume * 16000.0f;
+    mix_right *= audio->master_volume * 16000.0f;
+
+    *out++ = clamp_sample(mix_left);   /* Left */
+    *out++ = clamp_sample(mix_right);  /* Right */
+  }
+}
+```
+
+---
+
+### Platform-Specific Audio Handling
+
+#### Raylib Audio
+
+**Reference:** `games/tetris/src/main_raylib.c`
+
+```c
+int platform_audio_init(PlatformAudioConfig *config) {
+  InitAudioDevice();
+  if (!IsAudioDeviceReady()) return 1;
+
+  /* CRITICAL: Set buffer size BEFORE creating stream */
+  SetAudioStreamBufferSizeDefault(config->buffer_size_samples);
+
+  g_raylib.stream = LoadAudioStream(config->samples_per_second, 16, 2);
+
+  /* Pre-fill buffers with silence (prevents initial underrun) */
+  memset(g_raylib.sample_buffer, 0, buffer_bytes);
+  UpdateAudioStream(g_raylib.stream, g_raylib.sample_buffer, buffer_size);
+  UpdateAudioStream(g_raylib.stream, g_raylib.sample_buffer, buffer_size);
+
+  PlayAudioStream(g_raylib.stream);
+  return 0;
+}
+
+void platform_audio_update(GameState *game, PlatformAudioConfig *config) {
+  /* Fill ALL consumed buffers (may be 0, 1, or 2) */
+  while (IsAudioStreamProcessed(g_raylib.stream)) {
+    AudioOutputBuffer buffer = {
+      .samples = g_raylib.sample_buffer,
+      .samples_per_second = config->samples_per_second,
+      .sample_count = g_raylib.buffer_size_frames
+    };
+    game_get_audio_samples(game, &buffer);
+    UpdateAudioStream(g_raylib.stream, buffer.samples, buffer.sample_count);
+  }
+}
+```
+
+**Raylib Limitations:**
+
+- No precise buffer state query (just `IsAudioStreamProcessed()`)
+- Must use larger buffers for stability
+- Pre-fill required to prevent initial clicks
+
+#### ALSA (X11) Audio
+
+**Reference:** `games/tetris/src/main_x11.c`
+
+```c
+int platform_audio_init(PlatformAudioConfig *config) {
+  snd_pcm_open(&g_x11.pcm_handle, "default", SND_PCM_STREAM_PLAYBACK, 0);
+
+  /* Configure hardware parameters */
+  snd_pcm_hw_params_set_format(handle, hw_params, SND_PCM_FORMAT_S16_LE);
+  snd_pcm_hw_params_set_channels(handle, hw_params, 2);
+  snd_pcm_hw_params_set_rate_near(handle, hw_params, &sample_rate, 0);
+  snd_pcm_hw_params_set_buffer_size_near(handle, hw_params, &buffer_frames);
+
+  /* Pre-fill with silence */
+  snd_pcm_writei(g_x11.pcm_handle, silence_buffer, config->latency_samples);
+  snd_pcm_prepare(g_x11.pcm_handle);
+  return 0;
+}
+
+void platform_audio_update(GameState *game, PlatformAudioConfig *config) {
+  /* Query exact buffer state (Casey's model) */
+  snd_pcm_sframes_t delay_frames;
+  snd_pcm_delay(g_x11.pcm_handle, &delay_frames);
+
+  int target_buffered = config->latency_samples + config->safety_samples;
+  int samples_to_write = target_buffered - (int)delay_frames;
+
+  if (samples_to_write > 0) {
+    AudioOutputBuffer buffer = { /* ... */ };
+    buffer.sample_count = samples_to_write;
+    game_get_audio_samples(game, &buffer);
+    snd_pcm_writei(g_x11.pcm_handle, buffer.samples, samples_to_write);
+  }
+}
+```
+
+**ALSA Advantages:**
+
+- Precise buffer state via `snd_pcm_delay()`
+- Can write exact number of samples needed
+- Lower latency possible
+
+---
+
+### Audio Debugging Tips
+
+1. **Print buffer state:**
+
+   ```c
+   printf("delay=%d avail=%d writing=%d\n", delay, avail, samples_to_write);
+   ```
+
+2. **Track underruns:**
+
+   ```c
+   if (frames_avail == -EPIPE) {
+     fprintf(stderr, "UNDERRUN at sample %lld\n", running_sample_index);
+     underrun_count++;
+   }
+   ```
+
+3. **Visualize latency:**
+
+   ```c
+   float latency_ms = (float)delay_frames / samples_per_second * 1000.0f;
+   draw_text(buffer, 10, 10, "Latency: %.1fms", latency_ms);
+   ```
+
+4. **Test click prevention:**
+   - Rapidly toggle `is_playing` — should hear smooth fades, not clicks
+   - Change frequency while playing — should transition smoothly
+
+---
+
+### Common Audio Bugs
+
+| Symptom                 | Cause            | Fix                                            |
+| ----------------------- | ---------------- | ---------------------------------------------- |
+| Click at sound start    | No fade-in       | Add `fade_in_samples`                          |
+| Click at sound end      | Abrupt stop      | Add fade-out envelope                          |
+| Click when note changes | Phase reset      | Don't reset `phase` on frequency change        |
+| Stuttering/gaps         | Buffer underrun  | Increase `latency_samples`                     |
+| High latency            | Buffer too large | Decrease `buffer_size_samples`                 |
+| Pitch drift             | Rounding errors  | Use double for `phase`, cast to float for wave |
+| Mono output             | Same L/R values  | Apply panning calculation                      |
+
+---
+
+### Audio Lesson Progression
+
+When building audio into a course:
+
+1. **Lesson: Silent foundation** — Platform allocates buffer, game fills with silence
+2. **Lesson: Simple tone** — Generate sine wave, hear continuous tone
+3. **Lesson: Tone control** — Start/stop, frequency changes (will click!)
+4. **Lesson: Click prevention** — Add volume ramping
+5. **Lesson: Sound effects** — `SoundInstance` array, multiple simultaneous
+6. **Lesson: Music sequencer** — Pattern-based note playback
+7. **Lesson: Stereo panning** — Position-based sound placement
+8. **Lesson: Polish** — Envelopes, frequency slides, mixing balance
+
+**Reference Implementation:** `games/tetris/src/audio.c` contains all these features.
+
+---
+
 ## Platform layer responsibilities
 
 The platform provides **services**. The game contains **logic**.
