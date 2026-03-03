@@ -10,7 +10,7 @@ Use this file with the Copilot CLI agent to convert a source file or project int
 
 Attach this file + the source file(s) or directory you want to convert, then say:
 
-> "Build a course from @path/to/source based on @ai-llm-knowledge-dump/PROMPT.md and output it to @path/to/course/"
+> "Build a course from @path/to/source based on @ai-llm-knowledge-dump/prompt/course-builder.md and output it to @path/to/course/"
 
 ---
 
@@ -175,7 +175,7 @@ Pre-define named color constants in `game.h`:
 
 ### Delta-time game loop (mandatory)
 
-**Reference:** `games/tetris/src/main_x11.c` (lines ~280-310), `games/tetris/src/main_raylib.c` (main loop)
+**Reference:** `games/tetris/src/main_x11.c` (main loop), `games/tetris/src/main_raylib.c` (main loop)
 
 **Pattern:**
 
@@ -187,11 +187,14 @@ while (running) {
     prev_time = curr_time;
     if (delta_time > 0.1f) delta_time = 0.1f;  /* cap for debugger pauses */
 
-    prepare_input_frame(&input);
-    platform_get_input(&input, &props);
-    game_update(&state, &input, delta_time);
+    prepare_input_frame(old_input, current_input);
+    platform_get_input(current_input, &props);
+    game_update(&state, current_input, delta_time);
     game_render(&backbuffer, &state);
     /* platform uploads backbuffer */
+
+    /* swap input buffers */
+    current_index = 1 - current_index;
 }
 ```
 
@@ -221,48 +224,365 @@ while (running) {
 
 **Raylib:** Handles this internally with `SetTargetFPS(60)`.
 
-### Input system (mandatory)
+---
 
-**Reference:** `games/tetris/src/game.h` (input types), `games/tetris/src/game.c` (`prepare_input_frame`, `handle_action_with_repeat`)
+## Input System (mandatory)
 
-**Core types:**
+**Reference:** `games/tetris/src/game.h` (input types), `games/tetris/src/game.c` (`prepare_input_frame`, `handle_action_with_repeat`), `games/tetris/src/platform.h` (`platform_swap_input_buffers`)
+
+### Double-Buffered Input
+
+Why double-buffer? We need to know what happened **last frame** to detect transitions (pressed → held, held → released). A single buffer loses this history.
+
+**Reference:** `games/tetris/src/main_raylib.c` (main loop), `games/tetris/src/main_x11.c` (main loop)
+
+**Pattern (index-based swap):**
+
+```c
+/* In main(): */
+GameInput inputs[2] = {0};
+int current_index = 0;
+
+while (running) {
+    GameInput *current_input = &inputs[current_index];
+    GameInput *old_input = &inputs[1 - current_index];
+
+    prepare_input_frame(old_input, current_input);
+    platform_get_input(current_input, &props);
+
+    game_update(&state, current_input, delta_time);
+
+    /* Swap by toggling index */
+    current_index = 1 - current_index;
+}
+```
+
+**Alternative (content swap):**
+
+```c
+/* In platform.h: */
+static inline void platform_swap_input_buffers(GameInput *old_input,
+                                               GameInput *current_input) {
+  GameInput temp = *current_input;
+  *current_input = *old_input;
+  *old_input = temp;
+}
+```
+
+**Warning:** Do NOT swap pointers — you must swap the actual contents:
+
+```c
+/* WRONG - swaps local pointer copies, not data! */
+GameInput *temp = current_input;
+*current_input = *old_input;  /* Copies data, but... */
+*old_input = *temp;           /* temp is still old pointer! */
+
+/* CORRECT - swaps contents */
+GameInput temp = *current_input;  /* Copy CONTENTS to stack */
+*current_input = *old_input;
+*old_input = temp;
+```
+
+### Core Types
+
+**Reference:** `games/tetris/src/game.h`
 
 ```c
 typedef struct {
-    int half_transition_count;  /* state changes this frame */
+    int half_transition_count;  /* state changes this frame (0, 1, or 2) */
     int ended_down;             /* current state: 1=pressed, 0=released */
 } GameButtonState;
-
-typedef struct {
-    float timer;      /* accumulates delta time while held */
-    float interval;   /* time between auto-repeats */
-} AutoRepeatInterval;
-
-typedef struct {
-    GameButtonState button;
-    AutoRepeatInterval repeat;
-} GameActionWithRepeat;
 ```
 
-**Look for in the reference:**
+**Why `half_transition_count`?**
 
-- `UPDATE_BUTTON()` macro — call on key press/release events
-- `prepare_input_frame()` — resets `half_transition_count`, keeps `ended_down` and timers
-- `handle_action_with_repeat()` — returns whether action should trigger this frame
+- `0` = No change (button held or released entire frame)
+- `1` = Changed once (normal press or release)
+- `2` = Changed twice (pressed then released, or vice versa, within one frame)
 
-**Game-specific considerations:**
+At 30fps, each frame is 33ms. A quick tap might go down AND up within one frame.
 
-- Tetris: Auto-repeat for movement (left/right/down), single-shot for rotation
-- Platformer: Auto-repeat not needed for jump, useful for run
-- Shooter: Auto-repeat for firing, single-shot for reload
-
-**Key insight:** Subtract interval instead of resetting timer for timing accuracy:
+**Button update macro:**
 
 ```c
-action->repeat.timer -= action->repeat.interval;  /* preserves remainder */
+#define UPDATE_BUTTON(button, is_down)                                         \
+  do {                                                                         \
+    if ((button).ended_down != (is_down)) {                                    \
+      (button).half_transition_count++;                                        \
+      (button).ended_down = (is_down);                                         \
+    }                                                                          \
+  } while (0)
 ```
 
-### Typed enums (mandatory)
+**GameInput struct with union for iteration:**
+
+```c
+#define BUTTON_COUNT 4
+
+typedef struct {
+  union {
+    GameButtonState buttons[BUTTON_COUNT];
+    struct {
+      GameButtonState move_left;
+      GameButtonState move_right;
+      GameButtonState move_down;
+      GameButtonState rotate;
+    };
+  };
+  int quit;
+  int restart;
+} GameInput;
+```
+
+**Why union?** Iterate with `buttons[i]` for bulk operations, access by name for readability.
+
+### Preparing Each Frame
+
+**Reference:** `games/tetris/src/game.c` — `prepare_input_frame()`
+
+```c
+void prepare_input_frame(GameInput *old_input, GameInput *current_input) {
+  for (int btn = 0; btn < BUTTON_COUNT; btn++) {
+    /* CRITICAL: Preserve ended_down from last frame! */
+    current_input->buttons[btn].ended_down = old_input->buttons[btn].ended_down;
+    /* Reset transition count for new frame */
+    current_input->buttons[btn].half_transition_count = 0;
+  }
+  /* Reset one-shot inputs */
+  current_input->quit = 0;
+  current_input->restart = 0;
+}
+```
+
+**Why preserve `ended_down`?** For event-based input (X11), if no event fires this frame, the button state should remain unchanged. Copying from `old_input` ensures held keys stay held.
+
+### Event-Based vs Polling Input
+
+**Reference:** `games/tetris/src/main_x11.c` (event-based), `games/tetris/src/main_raylib.c` (polling)
+
+| Platform | Model       | How it works                                                 |
+| -------- | ----------- | ------------------------------------------------------------ |
+| X11/ALSA | Event-based | `KeyPress` fires once on press, `KeyRelease` once on release |
+| Raylib   | Polling     | `IsKeyDown()` returns true every frame while held            |
+
+**X11 (events):**
+
+```c
+while (XPending(display) > 0) {
+    XNextEvent(display, &event);
+    switch (event.type) {
+    case KeyPress:
+        KeySym key = XLookupKeysym(&event.xkey, 0);
+        switch (key) {
+        case XK_Left:
+        case XK_a:
+            UPDATE_BUTTON(input->move_left, 1);
+            break;
+        /* ... other keys ... */
+        }
+        break;
+    case KeyRelease:
+        KeySym key = XLookupKeysym(&event.xkey, 0);
+        switch (key) {
+        case XK_Left:
+        case XK_a:
+            UPDATE_BUTTON(input->move_left, 0);
+            break;
+        /* ... other keys ... */
+        }
+        break;
+    }
+}
+/* No event = no change. ended_down preserved from prepare_input_frame */
+```
+
+**Raylib (polling):**
+
+```c
+/* Called every frame regardless of events */
+UPDATE_BUTTON(current_input->move_left, IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT));
+UPDATE_BUTTON(current_input->move_right, IsKeyDown(KEY_D) || IsKeyDown(KEY_RIGHT));
+UPDATE_BUTTON(current_input->move_down, IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN));
+```
+
+**Why this matters:** With event-based input, `prepare_input_frame` MUST copy `ended_down` from the previous frame. With polling, you overwrite it every frame anyway—but the copy doesn't hurt and keeps the code consistent.
+
+### Auto-Repeat (DAS/ARR)
+
+**Reference:** `games/tetris/src/game.h` — `RepeatInterval`, `games/tetris/src/game.c` — `handle_action_with_repeat()`
+
+DAS = Delayed Auto Shift (initial delay before repeating starts)
+ARR = Auto Repeat Rate (speed of repeating after DAS)
+
+```c
+typedef struct {
+  float timer;               /* Accumulates delta time */
+  float initial_delay;       /* DAS: time before first repeat (e.g., 0.15s) */
+  float interval;            /* ARR: time between repeats (e.g., 0.05s) */
+  bool is_active;            /* Currently in repeat sequence? */
+  bool passed_initial_delay; /* Have we triggered the first repeat? */
+} RepeatInterval;
+```
+
+**Key insight:** Repeat state lives in `GameState`, NOT in `GameInput`:
+
+```c
+/* In GameState: */
+struct {
+  RepeatInterval move_left;
+  RepeatInterval move_right;
+  RepeatInterval move_down;
+} input_repeat;
+```
+
+**Why separate?** `GameInput` represents raw hardware state (what buttons are pressed). `RepeatInterval` represents game timing logic (when to trigger actions). Different concerns, different locations.
+
+### Handle Action With Repeat
+
+**Reference:** `games/tetris/src/game.c` — `handle_action_with_repeat()`
+
+```c
+static void handle_action_with_repeat(GameButtonState *button,
+                                      RepeatInterval *repeat,
+                                      float delta_time,
+                                      int *should_trigger) {
+  *should_trigger = 0;
+
+  /* Released - reset everything */
+  if (!button->ended_down) {
+    repeat->timer = 0.0f;
+    repeat->is_active = false;
+    repeat->passed_initial_delay = false;
+    return;
+  }
+
+  /* Just pressed this frame */
+  if (button->half_transition_count > 0) {
+    repeat->timer = 0.0f;
+    repeat->is_active = true;
+    repeat->passed_initial_delay = (repeat->initial_delay <= 0.0f);
+
+    /* Trigger immediately only if no initial delay */
+    if (repeat->initial_delay <= 0.0f) {
+      *should_trigger = 1;
+    }
+    return;
+  }
+
+  /* Held from previous frame */
+  if (!repeat->is_active) {
+    return;
+  }
+
+  repeat->timer += delta_time;
+
+  if (!repeat->passed_initial_delay) {
+    /* Waiting for initial delay (DAS) */
+    if (repeat->timer >= repeat->initial_delay) {
+      *should_trigger = 1;
+      repeat->timer = 0.0f;
+      repeat->passed_initial_delay = true;
+    }
+  } else {
+    /* In repeat phase (ARR) */
+    if (repeat->timer >= repeat->interval) {
+      *should_trigger = 1;
+      repeat->timer -= repeat->interval;  /* Keep remainder */
+    }
+  }
+}
+```
+
+**Usage:**
+
+```c
+int should_move_left = 0;
+handle_action_with_repeat(&input->move_left, &state->input_repeat.move_left,
+                          delta_time, &should_move_left);
+if (should_move_left && piece_can_move_left(state)) {
+    state->piece.x--;
+}
+```
+
+### Initialize Repeat Intervals
+
+**Reference:** `games/tetris/src/game.c` — `game_init()`
+
+```c
+void game_init(GameState *state, GameInput *input) {
+  /* ... other init ... */
+
+  /* Movement: DAS=150ms, ARR=50ms */
+  state->input_repeat.move_left = (RepeatInterval){
+    .timer = 0.0f,
+    .initial_delay = 0.15f,
+    .interval = 0.05f,
+    .is_active = false,
+    .passed_initial_delay = false
+  };
+
+  state->input_repeat.move_right = (RepeatInterval){
+    .timer = 0.0f,
+    .initial_delay = 0.15f,
+    .interval = 0.05f,
+    .is_active = false,
+    .passed_initial_delay = false
+  };
+
+  /* Soft drop: No delay, fast repeat */
+  state->input_repeat.move_down = (RepeatInterval){
+    .timer = 0.0f,
+    .initial_delay = 0.0f,   /* Trigger immediately */
+    .interval = 0.03f,       /* Fast repeat */
+    .is_active = false,
+    .passed_initial_delay = false
+  };
+}
+```
+
+### Timing Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│  KEY PRESSED                          KEY RELEASED                      │
+│      │                                     │                            │
+│      ▼                                     ▼                            │
+│  ════╪═══════════════════════════════════════════════════════════════   │
+│      │                                                                  │
+│      │   initial_delay (DAS)   interval (ARR)                          │
+│      │◄─────────────────────►│◄──────────►│◄──────────►│               │
+│      │         150ms          │    50ms    │    50ms    │               │
+│      │                        │            │            │               │
+│      ▼                        ▼            ▼            ▼               │
+│   [nothing]              [trigger]    [trigger]    [trigger]           │
+│   (waiting)              (1st repeat) (2nd repeat) (3rd repeat)        │
+│                                                                         │
+│  For move_down (initial_delay=0):                                      │
+│      │                                                                  │
+│      │   interval   interval   interval                                │
+│      │◄──────────►│◄──────────►│◄──────────►│                          │
+│      │    30ms     │    30ms    │    30ms    │                          │
+│      ▼             ▼            ▼            ▼                          │
+│   [trigger]    [trigger]   [trigger]    [trigger]                      │
+│   (immediate)                                                           │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Common Input Bugs
+
+| Symptom                                   | Cause                                               | Fix                                                                |
+| ----------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------ |
+| Held key acts like repeated presses       | `ended_down` not preserved in `prepare_input_frame` | Copy from `old_input` before resetting transitions                 |
+| Key only works on first press (X11)       | Event-based input loses state between frames        | Ensure `prepare_input_frame` copies `ended_down`                   |
+| Auto-repeat doesn't work                  | `passed_initial_delay` not tracked                  | Add flag to `RepeatInterval`, check in handler                     |
+| Repeat triggers immediately despite delay | Early return when `half_transition_count > 0`       | Only trigger immediately if `initial_delay <= 0`                   |
+| Input feels "sticky" after release        | Buffer swap not happening correctly                 | Verify swapping contents, not pointers                             |
+| Down key doesn't repeat but left/right do | Different `initial_delay` values                    | Check initialization — `move_down` should have `initial_delay = 0` |
+
+---
+
+## Typed enums (mandatory)
 
 **Reference:** `games/tetris/src/game.h` — all `typedef enum` declarations
 
@@ -284,7 +604,7 @@ void piece_move(GameState *state, MOVE_DIR dir);  /* self-documenting */
 
 ---
 
-### Debug trap macro (mandatory for debug builds)
+## Debug trap macro (mandatory for debug builds)
 
 **Why:** When an assertion fails, you want the debugger to break at the exact line. A null pointer dereference (`*(int*)0 = 0`) works but is undefined behavior. Platform-specific traps are cleaner.
 
@@ -318,6 +638,8 @@ ASSERT_MSG(buffer != NULL, "Buffer was not allocated");
 ```
 
 **Add `-DDEBUG` to debug builds in your build script.**
+
+---
 
 ## Coordinate and unit systems
 
@@ -360,1065 +682,958 @@ int screen_y = (backbuffer->height - 1) - (int)world_y;
 #define PIXELS_PER_UNIT 32.0f  /* 1 world unit = 32 pixels */
 
 /* Game logic uses world units */
-float player_x = 5.5f;  /* 5.5 meters */
+player.pos.x += velocity.x * dt;  /* units per second */
 
-/* Convert at render time only */
-int px_x = (int)(player_x * PIXELS_PER_UNIT);
+/* Rendering converts to pixels */
+int pixel_x = (int)(player.pos.x * PIXELS_PER_UNIT);
+int pixel_y = (int)(player.pos.y * PIXELS_PER_UNIT);
 ```
 
-**Rule:** All `GameState` fields use world units. All `draw_*` functions receive pixels. Conversion happens in `game_render()`.
-
-### Hierarchical coordinates (for large worlds)
-
-**When needed:** World larger than ~10,000 units from origin (float precision degrades).
-
-**Pattern:**
-
-```c
-typedef struct {
-    int32_t chunk_x, chunk_y;   /* coarse: which chunk */
-    float offset_x, offset_y;   /* fine: position within chunk (always small) */
-} WorldPosition;
-```
-
-**Reference:** See `ai-llm-knowledge-dump/world-coordinate-system.md` for full implementation.
-
-**Games that need this:** Open-world RPGs, infinite runners, procedural worlds.
-**Games that don't:** Tetris, Pong, single-screen platformers.
-
-### Camera-relative rendering (for scrolling games)
-
-**When needed:** World larger than screen.
-
-**Pattern:**
-
-```c
-int screen_x = (int)((entity.x - camera.x) * PIXELS_PER_UNIT) + screen_width / 2;
-int screen_y = screen_height / 2 - (int)((entity.y - camera.y) * PIXELS_PER_UNIT);
-```
-
-**Tetris doesn't use a camera** — the entire field fits on screen.
+**Reference:** `games/tetris/src/game.h` — `CELL_SIZE`, `FIELD_WIDTH`, `FIELD_HEIGHT`
 
 ---
 
-## Drawing utilities
-
-### Math utilities
-
-**Reference:** `games/tetris/src/utils/math.h`
-
-**Look for:**
-
-- `MIN(a, b)`, `MAX(a, b)` macros
-- Use for clipping, bounds checking
-
-**Consider adding for other games:**
-
-- `CLAMP(x, lo, hi)`
-- `ABS(x)`
-- `WRAP(x, max)` — for wrapping positions
+## Drawing primitives
 
 ### Rectangle drawing
 
 **Reference:** `games/tetris/src/utils/draw-shapes.c`
 
-**Look for:**
-
-- `draw_rect()` — solid rectangle with clipping
-- `draw_rect_blend()` — alpha blending with fast paths
-
-**Key optimization in `draw_rect_blend()`:**
+**Solid rectangle:**
 
 ```c
-if (alpha == 255) { draw_rect(...); return; }  /* fully opaque */
-if (alpha == 0) return;                         /* fully transparent */
-/* Only blend when actually needed */
+void draw_rect(Backbuffer *bb, int x, int y, int w, int h, uint32_t color) {
+  /* Clip to backbuffer bounds */
+  int x0 = (x < 0) ? 0 : x;
+  int y0 = (y < 0) ? 0 : y;
+  int x1 = (x + w > bb->width) ? bb->width : x + w;
+  int y1 = (y + h > bb->height) ? bb->height : y + h;
+
+  for (int py = y0; py < y1; py++) {
+    uint32_t *row = bb->pixels + py * bb->width;
+    for (int px = x0; px < x1; px++) {
+      row[px] = color;
+    }
+  }
+}
+```
+
+**Blended rectangle (for overlays):**
+
+```c
+void draw_rect_blend(Backbuffer *bb, int x, int y, int w, int h, uint32_t color) {
+  int x0 = (x < 0) ? 0 : x;
+  int y0 = (y < 0) ? 0 : y;
+  int x1 = (x + w > bb->width) ? bb->width : x + w;
+  int y1 = (y + h > bb->height) ? bb->height : y + h;
+
+  uint32_t src_a = (color >> 24) & 0xFF;
+  uint32_t src_r = (color >> 16) & 0xFF;
+  uint32_t src_g = (color >> 8) & 0xFF;
+  uint32_t src_b = color & 0xFF;
+  uint32_t inv_a = 255 - src_a;
+
+  for (int py = y0; py < y1; py++) {
+    uint32_t *row = bb->pixels + py * bb->width;
+    for (int px = x0; px < x1; px++) {
+      uint32_t dst = row[px];
+      uint32_t dst_r = (dst >> 16) & 0xFF;
+      uint32_t dst_g = (dst >> 8) & 0xFF;
+      uint32_t dst_b = dst & 0xFF;
+
+      uint32_t out_r = (src_r * src_a + dst_r * inv_a) / 255;
+      uint32_t out_g = (src_g * src_a + dst_g * inv_a) / 255;
+      uint32_t out_b = (src_b * src_a + dst_b * inv_a) / 255;
+
+      row[px] = 0xFF000000 | (out_r << 16) | (out_g << 8) | out_b;
+    }
+  }
+}
+```
+
+**Usage:**
+
+```c
+/* Solid red rectangle */
+draw_rect(bb, 10, 10, 100, 50, COLOR_RED);
+
+/* Semi-transparent black overlay for game over screen */
+draw_rect_blend(bb, 0, 0, bb->width, bb->height, GAME_RGBA(0, 0, 0, 128));
 ```
 
 ### Bitmap font rendering
 
 **Reference:** `games/tetris/src/utils/draw-text.c`, `games/tetris/src/utils/draw-text.h`
 
-**Look for:**
-
-- `FONT_DIGITS[10][7]` — 5×7 pixel bitmaps for 0-9
-- `FONT_LETTERS[26][7]` — 5×7 pixel bitmaps for A-Z
-- `FONT_SPECIAL[]` — punctuation and symbols
-- `draw_char()` — renders single character with scale
-- `draw_text()` — renders string, advances cursor
-
-**Pattern:** Each row is 5 bits packed into a byte. Bit 4 = leftmost pixel.
-
-**Why self-contained?** No external font dependencies. Works on any platform.
-
----
-
-## Scalable game patterns
-
-Choose patterns based on your game's complexity. Start simple; add complexity only when needed.
-
-### Fixed-size arrays with count (default)
-
-**Reference:** `games/tetris/src/game.h` — `field[FIELD_WIDTH * FIELD_HEIGHT]`
+**Pattern:** Embed a simple bitmap font as a static array. Each character is an 8x8 grid stored as 8 bytes (one byte per row, bits are pixels).
 
 ```c
-#define MAX_BULLETS 256
-Bullet bullets[MAX_BULLETS];
-int bullet_count;
-```
+/* 8x8 bitmap font - each char is 8 bytes */
+static const uint8_t FONT_8X8[128][8] = {
+  /* ASCII 32 (space) */
+  [' '] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+  /* ASCII 65 'A' */
+  ['A'] = {0x18, 0x3C, 0x66, 0x7E, 0x66, 0x66, 0x66, 0x00},
+  /* ... etc ... */
+};
 
-**Use for:** Most games with < 100 entities. Tetris, Pong, Breakout.
+void draw_char(Backbuffer *bb, int x, int y, char c, uint32_t color, int scale) {
+  if (c < 0 || c > 127) return;
+  const uint8_t *glyph = FONT_8X8[(int)c];
 
-### Entity pools with free list
-
-For frequently spawned/despawned entities:
-
-```c
-typedef struct {
-    Bullet bullets[MAX_BULLETS];
-    int first_free;  /* index of first free slot, or -1 */
-} BulletPool;
-```
-
-**Use for:** Shooters, particle systems.
-
-### Spatial partitioning (grid-based)
-
-For collision detection with many entities:
-
-```c
-#define GRID_CELL_SIZE 64
-GridCell cells[GRID_WIDTH * GRID_HEIGHT];
-```
-
-**Use for:** Shmups, crowd simulations, physics with many bodies.
-
-### Chunk-based tile storage
-
-For large tile worlds:
-
-```c
-#define CHUNK_DIM 256
-TileChunk *chunks;  /* sparse array or hash map */
-```
-
-**Use for:** RPGs, roguelikes, procedural worlds.
-
-### Pattern selection guide
-
-| Situation              | Pattern                   |
-| ---------------------- | ------------------------- |
-| < 100 entities         | Fixed array with count    |
-| Frequent spawn/despawn | Free list pool            |
-| Many collision checks  | Spatial grid              |
-| Need undo/replay       | Double-buffered state     |
-| > 1000 entities        | Parallel arrays (SoA)     |
-| Large tile world       | Chunk-based storage       |
-| Scrolling game         | Camera-relative rendering |
-| World > 10,000 units   | Hierarchical coordinates  |
-
----
-
-## State machine architecture
-
-### When to use
-
-Use when:
-
-- Only **one mode of behavior** should run at a time
-- Certain actions are invalid in certain modes
-- Timers belong to specific phases
-- Logic feels "scattered"
-
-**Tetris phases:** Playing → Line Flash → Line Collapse → (Game Over or Playing)
-
-**Reference:** `games/tetris/src/game.c` — look at how `game_over` and `completed_lines.flash_timer` create implicit phases. This should ideally be an explicit state machine.
-
-### Recommended pattern
-
-```c
-typedef enum {
-    PHASE_PLAYING,
-    PHASE_LINE_FLASH,
-    PHASE_LINE_COLLAPSE,
-    PHASE_GAME_OVER,
-    PHASE_COUNT
-} GAME_PHASE;
-
-typedef struct {
-    GAME_PHASE phase;
-    float phase_timer;
-    /* ... other state ... */
-} GameState;
-
-void game_update(GameState *state, GameInput *input, float dt) {
-    switch (state->phase) {
-        case PHASE_PLAYING:
-            update_playing(state, input, dt);
-            break;
-        case PHASE_LINE_FLASH:
-            update_line_flash(state, dt);
-            break;
-        /* ... */
+  for (int row = 0; row < 8; row++) {
+    uint8_t bits = glyph[row];
+    for (int col = 0; col < 8; col++) {
+      if (bits & (0x80 >> col)) {
+        /* Draw scaled pixel */
+        for (int sy = 0; sy < scale; sy++) {
+          for (int sx = 0; sx < scale; sx++) {
+            int px = x + col * scale + sx;
+            int py = y + row * scale + sy;
+            if (px >= 0 && px < bb->width && py >= 0 && py < bb->height) {
+              bb->pixels[py * bb->width + px] = color;
+            }
+          }
+        }
+      }
     }
-}
-```
-
-### Transition rules
-
-Never assign `state->phase` directly. Use a transition function:
-
-```c
-static void change_phase(GameState *state, GAME_PHASE next) {
-#ifdef DEBUG
-    validate_transition(state->phase, next);
-#endif
-    state->phase = next;
-    state->phase_timer = 0.0f;
-}
-```
-
-### Design principles
-
-1. **States are mutually exclusive** — If two behaviors can run simultaneously, they need separate state machines
-2. **A state owns its timers** — Reset on entry, update only inside that phase
-3. **Don't encode state in flags** — Replace `bool flashing`, `bool locked` with explicit phases
-
----
-
-## Lesson rules
-
-Each lesson must follow this structure:
-
-### 1. Title & Goal
-
-```
-# Lesson N — [What Gets Built]
-
-**By the end of this lesson you will have:**
-[Describe what the student sees running on screen]
-```
-
-### 2. Numbered build steps
-
-- Each step = one small addition to the code
-- Show the **exact code to write** — no "add something like..."
-- Before each code block: one short paragraph explaining **why**
-- After each major addition: remind the student to build and what they should see
-- All new C concepts explained inline, with a JS analogy
-
-### 3. Build & Run
-
-```
-## Build & Run
-./build-dev.sh --backend=raylib -r
-[What you should see]
-```
-
-### 4. Key Concepts
-
-End with a bullet list of concepts introduced. Concrete and scannable.
-
-### 5. Exercise
-
-One small extension to try — proves understanding, not just copy-paste.
-
-### 6. Pattern introduction lessons
-
-When introducing a new pattern:
-
-1. **Show the problem first** — demonstrate why the naive approach fails
-2. **Introduce the pattern** — with a real-world analogy
-3. **Implement incrementally** — smallest working version first
-4. **Test edge cases** — boundary conditions, overflow
-5. **Add debug visualization** — make the invisible visible
-
----
-
-## Student profile
-
-- Full-stack web dev: React, TypeScript, Node.js
-- **C beginner** — treat every concept as new
-- **Not strong at math** — worked examples with real numbers first
-- Learns by doing — theory after experience
-
-### Teaching patterns
-
-| Situation           | How to handle                                                                                     |
-| ------------------- | ------------------------------------------------------------------------------------------------- |
-| New C concept       | Define it, show JS equivalent, then use it                                                        |
-| Any formula/math    | Worked example with real numbers FIRST, then derive the formula                                   |
-| Array indexing      | Always show: `index = row * width + col` with concrete example (row=2, col=3, width=4 → index=11) |
-| Pointers            | "A pointer stores an address (like a street address), not a value"                                |
-| Structs             | Compare to JS object: `struct { int x; int y; }` ≈ `{ x: number, y: number }`                     |
-| `#include`          | Compare to `import` in JS                                                                         |
-| `#define`           | Compare to `const` in JS (but simpler — just text substitution)                                   |
-| `malloc`/`free`     | "Like `new` in JS, but no garbage collector — you must call `free()` yourself"                    |
-| Stack memory        | "Like a local variable in JS — exists while the function runs, gone when it returns"              |
-| World units         | "Like using `rem` in CSS — game logic uses meters/tiles, convert to pixels only when drawing"     |
-| Y-up coordinates    | "Math textbooks use Y-up. We match that so formulas copy directly."                               |
-| Hierarchical coords | "Like a street address: Country → City → Street → Building. Each level keeps numbers small."      |
-| Camera-relative     | "Player stays centered. World scrolls around them. Like Google Maps."                             |
-
-### Required patterns in every course
-
-- **Backbuffer pipeline**: game renders to `uint32_t *`, platform uploads
-- **Delta-time**: for all timing — no `sleep_ms`, no frame counters
-- **`GameButtonState`**: for input — not booleans
-- **Typed enums**: for every categorical value
-- **Data-oriented design**: flat structs, no dynamic allocation in hot path
-- **Separation**: `game_update()` modifies state, `game_render()` reads state and writes pixels
-
----
-
-## Code style rules
-
-### General
-
-- No STL (`std::vector`, `std::string`, etc.) — use fixed-size C arrays
-- No `new`/`delete` — use stack allocation where possible, `malloc`/`free` for backbuffer only
-- `GameState` has zero dynamic allocation — sub-structs fine, heap pointers inside are not
-- No heap allocation inside `game_update()` (the hot path)
-- Use `clang` not `gcc`
-
-### Platform/Game separation
-
-- Platform functions never modify `GameState` — only `game_update()` does
-- `game_render()` takes `Backbuffer *` and `GameState *` — writes pixels, reads state
-- Platform layer should be thin — window creation, input polling, backbuffer upload
-
-**Reference:** Compare `games/tetris/src/main_x11.c` (~400 lines) vs `games/tetris/src/game.c` (~600 lines). Platform is setup + loop; game is all logic.
-
-### Naming conventions
-
-| Type            | Convention             | Example                     |
-| --------------- | ---------------------- | --------------------------- |
-| Types/Structs   | `PascalCase`           | `GameState`, `Backbuffer`   |
-| Enum types      | `SCREAMING_SNAKE_CASE` | `GAME_PHASE`, `MOVE_DIR`    |
-| Enum values     | `SCREAMING_SNAKE_CASE` | `PHASE_PLAYING`, `DIR_LEFT` |
-| Functions       | `snake_case`           | `game_update`, `draw_rect`  |
-| Macros          | `SCREAMING_SNAKE_CASE` | `GAME_RGB`, `UPDATE_BUTTON` |
-| Local variables | `snake_case`           | `delta_time`, `cell_x`      |
-| Constants       | `SCREAMING_SNAKE_CASE` | `FIELD_WIDTH`, `COLOR_RED`  |
-
-### Build commands
-
-**Debug build:**
-
-```bash
-clang -Wall -Wextra -g -O0 -fsanitize=address,undefined -DDEBUG -o game src/*.c src/utils/*.c -lraylib -lm
-```
-
-**Release build:**
-
-```bash
-clang -Wall -Wextra -O2 -o game src/*.c src/utils/*.c -lraylib -lm
-```
-
-**Reference:** `games/tetris/build-dev.sh` for the full script with backend selection.
-
----
-
-## Audio System Architecture
-
-### Mental Model: The Audio Pipeline
-
-Audio in games follows a **producer-consumer** model:
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    THE AUDIO PIPELINE                                       │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  TIME ──────────────────────────────────────────────────────────────────▶   │
-│                                                                             │
-│  ┌──────────────────┐                                                       │
-│  │  AUDIO HARDWARE  │   Constantly consuming samples at fixed rate          │
-│  │  (Speaker/DAC)   │   e.g., 48000 samples/second = 1 sample every 21µs   │
-│  └────────▲─────────┘                                                       │
-│           │ pulls samples                                                   │
-│  ┌────────┴─────────┐                                                       │
-│  │  PLATFORM BUFFER │   Ring buffer holding ~2-4 frames of audio            │
-│  │  (ALSA/Raylib)   │   Must never run empty (underrun = clicks/silence)   │
-│  └────────▲─────────┘                                                       │
-│           │ pushes samples each frame                                       │
-│  ┌────────┴─────────┐                                                       │
-│  │  GAME AUDIO      │   Generates samples on demand                         │
-│  │  (game code)     │   Mix SFX + Music → stereo buffer                    │
-│  └──────────────────┘                                                       │
-│                                                                             │
-│  KEY INSIGHT: Hardware doesn't wait! If buffer empties, you hear            │
-│  silence/clicks. Game must ALWAYS stay ahead by ~2 frames.                  │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### The Two-Phase Audio Update
-
-Audio requires TWO separate updates per frame:
-
-1. **Logic Update** (with `delta_time`) — Advance sequencers, handle timing
-2. **Sample Generation** (with `sample_count`) — Fill the audio buffer
-
-**Why separate?** Logic uses real time (seconds), sample generation uses audio time (samples). These can differ during frame rate spikes.
-
-**Reference:** `games/tetris/src/game.c` — `game_audio_update()` called with `delta_time`, then `game_get_audio_samples()` called by platform
-
-```c
-/* In game_update(): */
-game_audio_update(&state->audio, delta_time);  /* Phase 1: Logic */
-
-/* In platform layer, after game_update(): */
-game_get_audio_samples(game_state, &buffer);   /* Phase 2: Samples */
-```
-
-### Responsibility Separation
-
-| Aspect                 | Platform Layer | Game Layer |
-| ---------------------- | -------------- | ---------- |
-| Buffer allocation      | ✅             | ❌         |
-| Sample rate selection  | ✅             | ❌         |
-| Underrun recovery      | ✅             | ❌         |
-| Hardware communication | ✅             | ❌         |
-| Sound effect IDs       | ❌             | ✅         |
-| Music patterns         | ❌             | ✅         |
-| Mixing logic           | ❌             | ✅         |
-| Volume control         | ❌             | ✅         |
-| Panning decisions      | ❌             | ✅         |
-
-**Platform provides:** `samples_per_second`, `sample_count`, pointer to buffer
-**Game provides:** Filled buffer with interleaved stereo samples
-
----
-
-### Platform Audio Configuration
-
-**Reference:** `games/tetris/src/platform.h` — `PlatformAudioConfig`
-
-```c
-typedef struct {
-  int samples_per_second;  /* 44100 or 48000 */
-  int buffer_size_samples; /* Hardware buffer size */
-  int is_initialized;
-
-  /* Casey's Latency Model */
-  int samples_per_frame;        /* samples_per_second / game_hz */
-  int latency_samples;          /* Target buffered samples (~2 frames) */
-  int safety_samples;           /* Extra margin (~1/3 frame) */
-  int64_t running_sample_index; /* Total samples written (for debugging) */
-  int frames_of_latency;        /* Target latency in frames (e.g., 2) */
-  int hz;                       /* Game update rate (e.g., 60) */
-} PlatformAudioConfig;
-```
-
-**Latency calculation:**
-
-```c
-config->samples_per_frame = config->samples_per_second / config->hz;
-config->latency_samples = config->samples_per_frame * config->frames_of_latency;
-config->safety_samples = config->samples_per_frame / 3;
-```
-
-**Example at 48kHz, 60Hz game:**
-
-- Samples per frame: 48000 / 60 = 800
-- Target latency (2 frames): 800 × 2 = 1600 samples = 33ms
-- Safety margin: 800 / 3 ≈ 267 samples = 5.5ms
-
----
-
-### Game Audio State Pattern
-
-**Reference:** `games/tetris/src/utils/audio.h` — Game-specific audio types
-
-A complete game audio system needs:
-
-```c
-/* Sound effect slot (one playing sound) */
-typedef struct {
-  int sound_id;           /* Game-defined enum, 0 = inactive */
-  float phase;            /* 0.0 to 1.0 (normalized) */
-  float frequency;        /* Hz */
-  float frequency_slide;  /* Hz per sample (for pitch bends) */
-  float volume;           /* 0.0 to 1.0 */
-  float pan_position;     /* -1.0 (left) to 1.0 (right) */
-  int samples_remaining;  /* Countdown */
-  int total_samples;      /* Original duration */
-  int fade_in_samples;    /* Click prevention */
-} SoundInstance;
-
-/* Background music tone */
-typedef struct {
-  float phase;
-  float frequency;
-  float volume;
-  float current_volume;  /* For smooth ramping */
-  float pan_position;
-  int is_playing;
-} ToneGenerator;
-
-/* Pattern-based music sequencer */
-typedef struct {
-  uint8_t patterns[MAX_PATTERNS][PATTERN_LENGTH];
-  int current_pattern;
-  int current_step;
-  float step_timer;      /* Seconds since last step */
-  float step_duration;   /* Seconds per step (tempo) */
-  ToneGenerator tone;
-  int is_playing;
-} MusicSequencer;
-
-/* Complete audio state (lives in GameState) */
-typedef struct {
-  SoundInstance active_sounds[MAX_SOUNDS];
-  MusicSequencer music;
-  float master_volume;
-  float sfx_volume;
-  float music_volume;
-  int samples_per_second;
-} GameAudioState;
-```
-
----
-
-### Click Prevention (Volume Ramping)
-
-**The Problem:** Instant volume changes cause audible clicks/pops.
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    WHY CLICKS HAPPEN                                        │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  BAD: Instant volume change                                                 │
-│  ═══════════════════════════                                                │
-│                                                                             │
-│  Waveform:    ~~~~▒▒▒▒▒▒▒                                                  │
-│                   │                                                         │
-│                   └─ Discontinuity = CLICK!                                 │
-│                                                                             │
-│  GOOD: Ramped volume change                                                 │
-│  ═══════════════════════════                                                │
-│                                                                             │
-│  Waveform:    ~~~~▓▓▓▒▒░░                                                  │
-│                   ├──────┤                                                  │
-│                   └─ Smooth transition = no click                           │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-**Solution:** Never change volume instantly. Ramp `current_volume` toward `target_volume`:
-
-```c
-/* In sample generation loop: */
-float target = tone->is_playing ? tone->volume : 0.0f;
-
-if (tone->current_volume < target) {
-  tone->current_volume += VOLUME_RAMP_SPEED;  /* ~0.002 per sample */
-  if (tone->current_volume > target) tone->current_volume = target;
-} else if (tone->current_volume > target) {
-  tone->current_volume -= VOLUME_RAMP_SPEED;
-  if (tone->current_volume < 0.0f) tone->current_volume = 0.0f;
+  }
 }
 
-/* Use current_volume, not volume, for sample generation */
-float sample = wave * tone->current_volume;
-```
-
-**Reference:** `games/tetris/src/audio.c` — `game_get_audio_samples()` music section
-
-**For SFX:** Use fade-in envelope on sound start:
-
-```c
-int samples_played = inst->total_samples - inst->samples_remaining;
-if (samples_played < inst->fade_in_samples) {
-  float fade_in = (float)samples_played / (float)inst->fade_in_samples;
-  env *= fade_in;
-}
-```
-
----
-
-### Stereo Panning
-
-**Reference:** `games/tetris/src/audio.c` — `calculate_piece_pan()`, `calculate_pan_volumes()`
-
-Panning adds spatial awareness — sounds come from where the action is.
-
-**Pattern:**
-
-```c
-/* Calculate pan from game position (-1.0 to 1.0) */
-float calculate_pan_from_position(float x, float field_width) {
-  float center = field_width / 2.0f;
-  float offset = x - center;
-  float pan = (offset / center) * 0.8f;  /* Scale to ±0.8, not full ±1.0 */
-
-  if (pan < -1.0f) pan = -1.0f;
-  if (pan > 1.0f) pan = 1.0f;
-
-  return pan;
-}
-
-/* Apply pan to get stereo volumes */
-void calculate_pan_volumes(float pan, float *left_vol, float *right_vol) {
-  if (pan <= 0.0f) {
-    *left_vol = 1.0f;
-    *right_vol = 1.0f + pan;  /* pan is negative */
-  } else {
-    *left_vol = 1.0f - pan;
-    *right_vol = 1.0f;
+void draw_text(Backbuffer *bb, int x, int y, const char *text, uint32_t color, int scale) {
+  int cursor_x = x;
+  while (*text) {
+    draw_char(bb, cursor_x, y, *text, color, scale);
+    cursor_x += 8 * scale;  /* 8 pixels per char, scaled */
+    text++;
   }
 }
 ```
 
-**Usage in Tetris:**
+**Usage:**
 
-- Piece on left side → sounds pan left
-- Piece on right side → sounds pan right
-- Music stays centered (pan = 0.0)
+```c
+draw_text(bb, 10, 10, "SCORE", COLOR_WHITE, 2);  /* 2x scale */
+draw_text(bb, 10, 30, "12345", COLOR_YELLOW, 2);
+```
 
 ---
 
-### Sound Effect System
+## Audio system (optional)
 
-**Reference:** `games/tetris/src/audio.c` — `game_play_sound_at()`
+**Reference:** `games/tetris/src/utils/audio.h`, `games/tetris/src/audio.c`
 
-**Sound Definition Pattern:**
+### Audio output buffer
 
 ```c
 typedef struct {
-  float frequency;      /* Starting Hz */
-  float frequency_end;  /* Ending Hz (0 = no slide) */
-  float duration_ms;    /* Duration */
+  int16_t *samples;       /* Interleaved stereo: L0,R0,L1,R1,... */
+  int samples_per_second; /* Usually 44100 or 48000 */
+  int sample_count;       /* How many stereo pairs to generate */
+} AudioOutputBuffer;
+```
+
+### Sound effect system
+
+```c
+typedef enum {
+  SOUND_NONE = 0,
+  SOUND_MOVE,
+  SOUND_ROTATE,
+  SOUND_DROP,
+  SOUND_LINE_CLEAR,
+  SOUND_TETRIS,
+  SOUND_LEVEL_UP,
+  SOUND_GAME_OVER,
+  SOUND_COUNT
+} SOUND_ID;
+
+typedef struct {
+  float frequency;      /* Starting frequency (Hz) */
+  float frequency_end;  /* Ending frequency (Hz), 0 = no slide */
+  float duration_ms;    /* Duration in milliseconds */
   float volume;         /* 0.0 to 1.0 */
 } SoundDef;
 
+/* Define sounds as data */
 static const SoundDef SOUND_DEFS[SOUND_COUNT] = {
-  [SOUND_NONE]       = {0,   0,    0,   0.0f},
-  [SOUND_MOVE]       = {200, 150,  50,  0.3f},  /* Quick blip down */
-  [SOUND_ROTATE]     = {300, 400,  80,  0.3f},  /* Quick blip up */
-  [SOUND_DROP]       = {150, 50,   100, 0.5f},  /* Thud down */
-  [SOUND_LINE_CLEAR] = {400, 800,  200, 0.6f},  /* Rising sweep */
-  [SOUND_TETRIS]     = {300, 1200, 400, 0.8f},  /* Long rising sweep */
+  [SOUND_NONE]       = {0, 0, 0, 0.0f},
+  [SOUND_MOVE]       = {200, 150, 50, 0.3f},   /* Quick blip down */
+  [SOUND_ROTATE]     = {300, 400, 80, 0.3f},   /* Quick blip up */
+  [SOUND_DROP]       = {150, 50, 100, 0.5f},   /* Thud down */
+  [SOUND_LINE_CLEAR] = {400, 800, 200, 0.6f},  /* Rising sweep */
+  [SOUND_TETRIS]     = {300, 1200, 400, 0.8f}, /* Long rising sweep */
+  [SOUND_LEVEL_UP]   = {440, 880, 300, 0.5f},  /* Octave up */
+  [SOUND_GAME_OVER]  = {400, 100, 500, 0.7f},  /* Sad descend */
 };
 ```
 
-**Playing a Sound:**
+### Playing sounds
 
 ```c
-void game_play_sound_at(GameAudioState *audio, SOUND_ID sound, float pan) {
-  /* Find empty slot or steal oldest */
-  int slot = find_free_slot(audio);
+#define MAX_SIMULTANEOUS_SOUNDS 4
 
-  SoundDef *def = &SOUND_DEFS[sound];
+typedef struct {
+  SOUND_ID sound_id;
+  float phase;
+  int samples_remaining;
+  float volume;
+  float frequency;
+  float frequency_slide;
+} SoundInstance;
+
+void game_play_sound(GameAudioState *audio, SOUND_ID sound) {
+  if (sound == SOUND_NONE || sound >= SOUND_COUNT) return;
+
+  /* Find a free slot */
+  int slot = -1;
+  for (int i = 0; i < MAX_SIMULTANEOUS_SOUNDS; i++) {
+    if (audio->active_sounds[i].samples_remaining <= 0) {
+      slot = i;
+      break;
+    }
+  }
+
+  /* No free slot - steal the oldest (slot 0) */
+  if (slot < 0) slot = 0;
+
+  const SoundDef *def = &SOUND_DEFS[sound];
   SoundInstance *inst = &audio->active_sounds[slot];
 
   inst->sound_id = sound;
   inst->phase = 0.0f;
   inst->frequency = def->frequency;
   inst->volume = def->volume;
-  inst->pan_position = pan;
   inst->samples_remaining = (int)(def->duration_ms * audio->samples_per_second / 1000.0f);
-  inst->total_samples = inst->samples_remaining;
-  inst->fade_in_samples = 96;  /* ~2ms at 48kHz */
 
-  /* Calculate pitch slide */
-  if (def->frequency_end > 0) {
+  if (def->frequency_end > 0 && inst->samples_remaining > 0) {
     inst->frequency_slide = (def->frequency_end - def->frequency) / inst->samples_remaining;
+  } else {
+    inst->frequency_slide = 0;
   }
 }
 ```
 
----
-
-### Music Sequencer
-
-**Reference:** `games/tetris/src/audio.c` — `game_audio_update()`, pattern arrays
-
-A simple step sequencer for chiptune-style music:
-
-```c
-/* Pattern data: MIDI note numbers, 0 = rest */
-static const uint8_t PATTERN_A[16] = {
-  76, 71, 72, 74, 72, 71, 69, 69, 72, 76, 74, 72, 71, 71, 72, 74,
-};
-
-/* Update sequencer (call with delta_time) */
-void sequencer_update(MusicSequencer *seq, float delta_time) {
-  if (!seq->is_playing) return;
-
-  seq->step_timer += delta_time;
-
-  if (seq->step_timer >= seq->step_duration) {
-    seq->step_timer -= seq->step_duration;  /* Keep remainder */
-
-    uint8_t note = seq->patterns[seq->current_pattern][seq->current_step];
-
-    if (note > 0) {
-      seq->tone.frequency = midi_to_freq(note);
-      seq->tone.is_playing = 1;
-      /* DON'T reset phase — prevents clicks between notes */
-    } else {
-      seq->tone.is_playing = 0;  /* Rest */
-    }
-
-    /* Advance step */
-    seq->current_step++;
-    if (seq->current_step >= PATTERN_LENGTH) {
-      seq->current_step = 0;
-      seq->current_pattern = (seq->current_pattern + 1) % PATTERN_COUNT;
-    }
-  }
-}
-```
-
-**MIDI to Frequency:**
-
-```c
-float midi_to_freq(int note) {
-  return 440.0f * powf(2.0f, (note - 69) / 12.0f);
-}
-/* A4 (69) = 440 Hz, Middle C (60) = 261.63 Hz */
-```
-
----
-
-### Sample Generation Loop
-
-**Reference:** `games/tetris/src/audio.c` — `game_get_audio_samples()`
-
-The core mixing loop:
+### Generating samples
 
 ```c
 void game_get_audio_samples(GameState *state, AudioOutputBuffer *buffer) {
   GameAudioState *audio = &state->audio;
   int16_t *out = buffer->samples;
+  int sample_count = buffer->sample_count;
   float inv_sample_rate = 1.0f / (float)buffer->samples_per_second;
 
-  /* Clear buffer */
-  memset(out, 0, buffer->sample_count * 2 * sizeof(int16_t));
+  /* Clear buffer first */
+  memset(out, 0, sample_count * 2 * sizeof(int16_t));
 
-  for (int s = 0; s < buffer->sample_count; s++) {
-    float mix_left = 0.0f;
-    float mix_right = 0.0f;
+  for (int s = 0; s < sample_count; s++) {
+    float mixed_sample = 0.0f;
 
-    /* ─── Mix Sound Effects ─── */
-    for (int i = 0; i < MAX_SOUNDS; i++) {
+    /* Mix all active sound effects */
+    for (int i = 0; i < MAX_SIMULTANEOUS_SOUNDS; i++) {
       SoundInstance *inst = &audio->active_sounds[i];
       if (inst->samples_remaining <= 0) continue;
 
-      /* Generate waveform */
-      float wave = (inst->phase < 0.5f) ? 1.0f : -1.0f;  /* Square wave */
+      /* Generate square wave (classic 8-bit sound) */
+      float wave = (inst->phase < 0.5f) ? 1.0f : -1.0f;
 
-      /* Apply envelope */
-      float env = calculate_envelope(inst);
-      float sample = wave * inst->volume * env * audio->sfx_volume;
+      /* Apply envelope (simple linear fadeout) */
+      float env = (float)inst->samples_remaining /
+                  (SOUND_DEFS[inst->sound_id].duration_ms *
+                   buffer->samples_per_second / 1000.0f);
 
-      /* Apply panning */
-      float left_vol, right_vol;
-      calculate_pan_volumes(inst->pan_position, &left_vol, &right_vol);
-      mix_left += sample * left_vol;
-      mix_right += sample * right_vol;
+      mixed_sample += wave * inst->volume * env * audio->sfx_volume;
 
-      /* Advance phase and frequency */
+      /* Advance phase */
       inst->phase += inst->frequency * inv_sample_rate;
       if (inst->phase >= 1.0f) inst->phase -= 1.0f;
+
+      /* Apply frequency slide */
       inst->frequency += inst->frequency_slide;
       inst->samples_remaining--;
     }
 
-    /* ─── Mix Music ─── */
-    if (audio->music.is_playing) {
-      ToneGenerator *tone = &audio->music.tone;
+    /* Apply master volume and convert to int16 */
+    mixed_sample *= audio->master_volume * 16000.0f;
+    int16_t sample = (mixed_sample > 32767.0f) ? 32767 :
+                     (mixed_sample < -32768.0f) ? -32768 : (int16_t)mixed_sample;
 
-      /* Volume ramping (click prevention) */
-      float target = tone->is_playing ? tone->volume : 0.0f;
-      tone->current_volume = ramp_toward(tone->current_volume, target, 0.002f);
-
-      if (tone->current_volume > 0.0001f) {
-        float wave = (tone->phase < 0.5f) ? 1.0f : -1.0f;
-        float sample = wave * tone->current_volume * audio->music_volume;
-
-        float left_vol, right_vol;
-        calculate_pan_volumes(tone->pan_position, &left_vol, &right_vol);
-        mix_left += sample * left_vol;
-        mix_right += sample * right_vol;
-
-        tone->phase += tone->frequency * inv_sample_rate;
-        if (tone->phase >= 1.0f) tone->phase -= 1.0f;
-      }
-    }
-
-    /* ─── Final Output ─── */
-    mix_left *= audio->master_volume * 16000.0f;
-    mix_right *= audio->master_volume * 16000.0f;
-
-    *out++ = clamp_sample(mix_left);   /* Left */
-    *out++ = clamp_sample(mix_right);  /* Right */
+    /* Write stereo (same sample to both channels) */
+    *out++ = sample;  /* Left */
+    *out++ = sample;  /* Right */
   }
 }
 ```
 
----
+### Platform audio integration
 
-### Platform-Specific Audio Handling
+**Reference:** `games/tetris/src/main_raylib.c`, `games/tetris/src/main_x11.c`
 
-#### Raylib Audio
-
-**Reference:** `games/tetris/src/main_raylib.c`
+**Raylib:**
 
 ```c
 int platform_audio_init(PlatformAudioConfig *config) {
   InitAudioDevice();
-  if (!IsAudioDeviceReady()) return 1;
+  if (!IsAudioDeviceReady()) {
+    config->is_initialized = 0;
+    return 1;
+  }
 
-  /* CRITICAL: Set buffer size BEFORE creating stream */
-  SetAudioStreamBufferSizeDefault(config->buffer_size_samples);
+  config->samples_per_second = 48000;
+  config->buffer_size_samples = 1024;
 
   g_raylib.stream = LoadAudioStream(config->samples_per_second, 16, 2);
-
-  /* Pre-fill buffers with silence (prevents initial underrun) */
-  memset(g_raylib.sample_buffer, 0, buffer_bytes);
-  UpdateAudioStream(g_raylib.stream, g_raylib.sample_buffer, buffer_size);
-  UpdateAudioStream(g_raylib.stream, g_raylib.sample_buffer, buffer_size);
+  g_raylib.buffer_size = config->buffer_size_samples;
+  g_raylib.sample_buffer = malloc(g_raylib.buffer_size * 2 * sizeof(int16_t));
 
   PlayAudioStream(g_raylib.stream);
+  config->is_initialized = 1;
   return 0;
 }
 
-void platform_audio_update(GameState *game, PlatformAudioConfig *config) {
-  /* Fill ALL consumed buffers (may be 0, 1, or 2) */
-  while (IsAudioStreamProcessed(g_raylib.stream)) {
+static void platform_audio_update(GameState *game_state, PlatformAudioConfig *config) {
+  if (!config->is_initialized) return;
+
+  if (IsAudioStreamProcessed(g_raylib.stream)) {
     AudioOutputBuffer buffer = {
       .samples = g_raylib.sample_buffer,
       .samples_per_second = config->samples_per_second,
-      .sample_count = g_raylib.buffer_size_frames
+      .sample_count = g_raylib.buffer_size
     };
-    game_get_audio_samples(game, &buffer);
+    game_get_audio_samples(game_state, &buffer);
     UpdateAudioStream(g_raylib.stream, buffer.samples, buffer.sample_count);
   }
 }
 ```
 
-**Raylib Limitations:**
-
-- No precise buffer state query (just `IsAudioStreamProcessed()`)
-- Must use larger buffers for stability
-- Pre-fill required to prevent initial clicks
-
-#### ALSA (X11) Audio
-
-**Reference:** `games/tetris/src/main_x11.c`
+**X11/ALSA:**
 
 ```c
 int platform_audio_init(PlatformAudioConfig *config) {
-  snd_pcm_open(&g_x11.pcm_handle, "default", SND_PCM_STREAM_PLAYBACK, 0);
+  int err;
+  config->samples_per_second = 48000;
+  config->buffer_size_samples = 1024;
 
-  /* Configure hardware parameters */
-  snd_pcm_hw_params_set_format(handle, hw_params, SND_PCM_FORMAT_S16_LE);
-  snd_pcm_hw_params_set_channels(handle, hw_params, 2);
-  snd_pcm_hw_params_set_rate_near(handle, hw_params, &sample_rate, 0);
-  snd_pcm_hw_params_set_buffer_size_near(handle, hw_params, &buffer_frames);
+  err = snd_pcm_open(&g_x11.pcm_handle, "default", SND_PCM_STREAM_PLAYBACK, 0);
+  if (err < 0) {
+    config->is_initialized = 0;
+    return 1;
+  }
 
-  /* Pre-fill with silence */
-  snd_pcm_writei(g_x11.pcm_handle, silence_buffer, config->latency_samples);
+  /* Configure ALSA hardware parameters */
+  snd_pcm_hw_params_t *hw_params;
+  snd_pcm_hw_params_alloca(&hw_params);
+  snd_pcm_hw_params_any(g_x11.pcm_handle, hw_params);
+  snd_pcm_hw_params_set_access(g_x11.pcm_handle, hw_params, SND_PCM_ACCESS_RW_INTERLEAVED);
+  snd_pcm_hw_params_set_format(g_x11.pcm_handle, hw_params, SND_PCM_FORMAT_S16_LE);
+  snd_pcm_hw_params_set_channels(g_x11.pcm_handle, hw_params, 2);
+
+  unsigned int sample_rate = config->samples_per_second;
+  snd_pcm_hw_params_set_rate_near(g_x11.pcm_handle, hw_params, &sample_rate, 0);
+
+  snd_pcm_hw_params(g_x11.pcm_handle, hw_params);
   snd_pcm_prepare(g_x11.pcm_handle);
+
+  g_x11.buffer_size = config->buffer_size_samples;
+  g_x11.sample_buffer = malloc(g_x11.buffer_size * 2 * sizeof(int16_t));
+
+  config->is_initialized = 1;
   return 0;
 }
 
-void platform_audio_update(GameState *game, PlatformAudioConfig *config) {
-  /* Query exact buffer state (Casey's model) */
-  snd_pcm_sframes_t delay_frames;
-  snd_pcm_delay(g_x11.pcm_handle, &delay_frames);
+static void platform_audio_update(GameState *game_state, PlatformAudioConfig *config) {
+  if (!config->is_initialized || !g_x11.pcm_handle) return;
 
-  int target_buffered = config->latency_samples + config->safety_samples;
-  int samples_to_write = target_buffered - (int)delay_frames;
+  snd_pcm_sframes_t frames_avail = snd_pcm_avail_update(g_x11.pcm_handle);
+  if (frames_avail < 0) {
+    if (frames_avail == -EPIPE) {
+      snd_pcm_prepare(g_x11.pcm_handle);
+      frames_avail = snd_pcm_avail_update(g_x11.pcm_handle);
+    } else {
+      return;
+    }
+  }
 
-  if (samples_to_write > 0) {
-    AudioOutputBuffer buffer = { /* ... */ };
-    buffer.sample_count = samples_to_write;
-    game_get_audio_samples(game, &buffer);
-    snd_pcm_writei(g_x11.pcm_handle, buffer.samples, samples_to_write);
+  if (frames_avail < g_x11.buffer_size) return;
+
+  AudioOutputBuffer buffer = {
+    .samples = g_x11.sample_buffer,
+    .samples_per_second = g_x11.samples_per_second,
+    .sample_count = g_x11.buffer_size
+  };
+
+  game_get_audio_samples(game_state, &buffer);
+
+  snd_pcm_sframes_t frames_written = snd_pcm_writei(g_x11.pcm_handle, g_x11.sample_buffer, g_x11.buffer_size);
+  if (frames_written < 0) {
+    snd_pcm_recover(g_x11.pcm_handle, frames_written, 0);
   }
 }
 ```
 
-**ALSA Advantages:**
+### Music sequencer (optional)
 
-- Precise buffer state via `snd_pcm_delay()`
-- Can write exact number of samples needed
-- Lower latency possible
+**Reference:** `games/tetris/src/audio.c` — `MusicSequencer`, `game_audio_update()`
 
----
+```c
+#define MUSIC_PATTERN_LENGTH 16
+#define MUSIC_NUM_PATTERNS 4
 
-### Audio Debugging Tips
+typedef struct {
+  uint8_t patterns[MUSIC_NUM_PATTERNS][MUSIC_PATTERN_LENGTH];
+  int current_pattern;
+  int current_step;
+  float step_timer;
+  float step_duration;  /* Seconds per step (tempo) */
+  ToneGenerator tone;
+  int is_playing;
+} MusicSequencer;
 
-1. **Print buffer state:**
+void game_audio_update(GameAudioState *audio, float delta_time) {
+  if (!audio->music.is_playing) return;
 
-   ```c
-   printf("delay=%d avail=%d writing=%d\n", delay, avail, samples_to_write);
-   ```
+  MusicSequencer *seq = &audio->music;
+  seq->step_timer += delta_time;
 
-2. **Track underruns:**
+  if (seq->step_timer >= seq->step_duration) {
+    seq->step_timer -= seq->step_duration;
 
-   ```c
-   if (frames_avail == -EPIPE) {
-     fprintf(stderr, "UNDERRUN at sample %lld\n", running_sample_index);
-     underrun_count++;
-   }
-   ```
+    uint8_t note = seq->patterns[seq->current_pattern][seq->current_step];
+    if (note > 0) {
+      seq->tone.frequency = midi_to_freq(note);
+      seq->tone.is_playing = 1;
+    } else {
+      seq->tone.is_playing = 0;
+    }
 
-3. **Visualize latency:**
+    seq->current_step++;
+    if (seq->current_step >= MUSIC_PATTERN_LENGTH) {
+      seq->current_step = 0;
+      seq->current_pattern = (seq->current_pattern + 1) % MUSIC_NUM_PATTERNS;
+    }
+  }
+}
 
-   ```c
-   float latency_ms = (float)delay_frames / samples_per_second * 1000.0f;
-   draw_text(buffer, 10, 10, "Latency: %.1fms", latency_ms);
-   ```
-
-4. **Test click prevention:**
-   - Rapidly toggle `is_playing` — should hear smooth fades, not clicks
-   - Change frequency while playing — should transition smoothly
-
----
-
-### Common Audio Bugs
-
-| Symptom                 | Cause            | Fix                                            |
-| ----------------------- | ---------------- | ---------------------------------------------- |
-| Click at sound start    | No fade-in       | Add `fade_in_samples`                          |
-| Click at sound end      | Abrupt stop      | Add fade-out envelope                          |
-| Click when note changes | Phase reset      | Don't reset `phase` on frequency change        |
-| Stuttering/gaps         | Buffer underrun  | Increase `latency_samples`                     |
-| High latency            | Buffer too large | Decrease `buffer_size_samples`                 |
-| Pitch drift             | Rounding errors  | Use double for `phase`, cast to float for wave |
-| Mono output             | Same L/R values  | Apply panning calculation                      |
-
----
-
-### Audio Lesson Progression
-
-When building audio into a course:
-
-1. **Lesson: Silent foundation** — Platform allocates buffer, game fills with silence
-2. **Lesson: Simple tone** — Generate sine wave, hear continuous tone
-3. **Lesson: Tone control** — Start/stop, frequency changes (will click!)
-4. **Lesson: Click prevention** — Add volume ramping
-5. **Lesson: Sound effects** — `SoundInstance` array, multiple simultaneous
-6. **Lesson: Music sequencer** — Pattern-based note playback
-7. **Lesson: Stereo panning** — Position-based sound placement
-8. **Lesson: Polish** — Envelopes, frequency slides, mixing balance
-
-**Reference Implementation:** `games/tetris/src/audio.c` contains all these features.
+/* MIDI note to frequency conversion */
+static inline float midi_to_freq(int note) {
+  return 440.0f * powf(2.0f, (note - 69) / 12.0f);
+}
+```
 
 ---
 
-## Platform layer responsibilities
+## Game state management
 
-The platform provides **services**. The game contains **logic**.
+### State struct pattern
 
-### Platform layer handles:
+**Reference:** `games/tetris/src/game.h` — `GameState`
 
-- Window creation and management
-- Input polling (keyboard, mouse, gamepad)
-- Timing (monotonic clock)
-- Backbuffer upload to GPU
-- VSync / frame timing
-- Audio output (if applicable)
+```c
+typedef struct {
+  /* Core game data */
+  unsigned char field[FIELD_WIDTH * FIELD_HEIGHT];
+  CurrentPiece current_piece;
+  int score;
+  int level;
+  int pieces_count;
+  bool is_game_over;
 
-### Game layer handles:
+  /* Timing */
+  struct {
+    float timer;
+    float interval;
+  } drop_timer;
 
-- All game state
-- All update logic
-- All rendering to backbuffer
-- Coordinate systems and unit conversion
-- Collision detection
-- Entity management
+  /* Input repeat state (separate from raw input!) */
+  struct {
+    RepeatInterval move_left;
+    RepeatInterval move_right;
+    RepeatInterval move_down;
+  } input_repeat;
 
-### Consistency across courses
+  /* Line clear animation */
+  struct {
+    int indexes[4];
+    int count;
+    float flash_timer;
+  } completed_lines;
 
-When building multiple courses:
+  /* Audio state */
+  GameAudioState audio;
+} GameState;
+```
 
-1. Decide: should platform or game layer handle a new feature?
-2. Be consistent across all courses
-3. If a pattern should move layers, refactor previous courses
-4. Update this document when new insights emerge
+**Principles:**
 
-**Principle:** The game layer should compile (in theory) without any platform layer. The platform layer should swap out without changing game code.
+1. Group related fields with anonymous structs
+2. Keep timing state separate from game logic state
+3. Input repeat state lives here, not in `GameInput`
+4. Audio state is part of game state (persists across frames)
+
+### Initialization
+
+**Reference:** `games/tetris/src/game.c` — `game_init()`
+
+```c
+void game_init(GameState *state, GameInput *input) {
+  /* Zero everything first */
+  memset(state, 0, sizeof(GameState));
+
+  /* Set non-zero defaults */
+  state->pieces_count = 1;
+  state->drop_timer.interval = 0.8f;
+
+  /* Initialize field with walls */
+  for (int y = 0; y < FIELD_HEIGHT; y++) {
+    for (int x = 0; x < FIELD_WIDTH; x++) {
+      if (x == 0 || x == FIELD_WIDTH - 1 || y == FIELD_HEIGHT - 1) {
+        state->field[y * FIELD_WIDTH + x] = TETRIS_FIELD_WALL;
+      }
+    }
+  }
+
+  /* Initialize input repeat intervals */
+  state->input_repeat.move_left = (RepeatInterval){
+    .initial_delay = 0.15f,
+    .interval = 0.05f
+  };
+  state->input_repeat.move_right = (RepeatInterval){
+    .initial_delay = 0.15f,
+    .interval = 0.05f
+  };
+  state->input_repeat.move_down = (RepeatInterval){
+    .initial_delay = 0.0f,
+    .interval = 0.03f
+  };
+
+  /* Spawn first piece */
+  srand((unsigned int)time(NULL));
+  state->current_piece.index = rand() % TETROMINOS_COUNT;
+  state->current_piece.next_index = rand() % TETROMINOS_COUNT;
+  state->current_piece.x = FIELD_WIDTH / 2 - 2;
+  state->current_piece.y = 0;
+}
+```
 
 ---
 
-## Reference implementation checklist
+## Game update pattern
 
-When creating a new game, verify against `games/tetris/`:
+**Reference:** `games/tetris/src/game.c` — `game_update()`
 
-### File structure
+```c
+void game_update(GameState *state, GameInput *input, float delta_time) {
+  /* Update audio sequencer (always, even when paused) */
+  game_audio_update(&state->audio, delta_time);
 
-- [ ] `build-dev.sh` with `--backend=` and `--run` flags
-- [ ] `src/utils/backbuffer.h` — `Backbuffer` struct, color macros
-- [ ] `src/utils/math.h` — `MIN`, `MAX` macros
-- [ ] `src/utils/draw-shapes.c/h` — `draw_rect`, `draw_rect_blend`
-- [ ] `src/utils/draw-text.c/h` — bitmap font, `draw_text`, `draw_char`
-- [ ] `src/platform.h` — platform contract
-- [ ] `src/game.h` — game types, enums, function declarations
-- [ ] `src/game.c` — game logic, update, render
-- [ ] `src/main_x11.c` — X11/OpenGL backend
-- [ ] `src/main_raylib.c` — Raylib backend
+  /* Handle game over state */
+  if (state->is_game_over) {
+    if (input->restart) {
+      game_init(state, input);
+      game_music_play(&state->audio);
+    }
+    return;  /* Don't process game logic */
+  }
 
-### Patterns
+  /* Handle animation states (line clear flash) */
+  if (state->completed_lines.flash_timer > 0) {
+    state->completed_lines.flash_timer -= delta_time;
+    if (state->completed_lines.flash_timer <= 0) {
+      /* Animation done - collapse lines */
+      collapse_completed_lines(state);
+    }
+    return;  /* Freeze game logic during animation */
+  }
 
-- [ ] `Backbuffer` with `uint32_t *pixels`
-- [ ] `GAME_RGB()` / `GAME_RGBA()` macros
-- [ ] Named color constants
-- [ ] `GameButtonState` with `half_transition_count` and `ended_down`
-- [ ] `UPDATE_BUTTON()` macro
-- [ ] `prepare_input_frame()` function
-- [ ] `AutoRepeatInterval` for held-button actions (if needed)
-- [ ] Delta-time passed to `game_update()`
-- [ ] All game logic in `game_update()`, all drawing in `game_render()`
-- [ ] Typed enums for all categorical values
+  /* Process input */
+  apply_input(state, input, delta_time);
 
-### Platform backends
+  /* Update game timers */
+  state->drop_timer.timer += delta_time;
+  if (state->drop_timer.timer >= state->drop_timer.interval) {
+    state->drop_timer.timer -= state->drop_timer.interval;
+    try_drop_piece(state);
+  }
+}
+```
 
-- [ ] X11: VSync detection with fallback to manual frame limiting
-- [ ] X11: Monotonic clock via `clock_gettime(CLOCK_MONOTONIC)`
-- [ ] X11: Key event handling with proper press/release detection
-- [ ] Raylib: `SetTargetFPS(60)` or equivalent
-- [ ] Raylib: `GetFrameTime()` for delta time
+**Key patterns:**
 
----
-
-## Quick reference: When to use which pattern
-
-| Your situation           | Use this pattern                                       |
-| ------------------------ | ------------------------------------------------------ |
-| Any game                 | Backbuffer, delta-time, `GameButtonState`, typed enums |
-| Phase-based behavior     | State machine with explicit `GAME_PHASE` enum          |
-| < 100 entities           | Fixed array with count                                 |
-| Frequent spawn/despawn   | Free list pool                                         |
-| Many collision checks    | Spatial grid                                           |
-| Need undo/replay         | Double-buffered state                                  |
-| > 1000 entities          | Parallel arrays (SoA)                                  |
-| Large tile world         | Chunk-based storage                                    |
-| Scrolling/large world    | Camera-relative rendering                              |
-| World > 10,000 units     | Hierarchical coordinates                               |
-| Single screen game       | Flat coordinates, no camera                            |
-| Tile-based game (Tetris) | Y-down, tile units directly                            |
-| Physics game             | Y-up, world units (meters)                             |
+1. Audio updates even during pause/game over (music keeps playing)
+2. Early returns for special states (game over, animations)
+3. Input processing is separate from timer-based logic
+4. Timer uses subtraction to keep remainder (precision)
 
 ---
 
-## Adding new patterns to this document
+## Rendering pattern
 
-When you discover a new pattern while building a course:
+**Reference:** `games/tetris/src/game.c` — `game_render()`
 
-1. **Implement it** in the game first
-2. **Document it** here with:
-   - When to use it
-   - Reference to the implementation file
-   - What to look for in the reference
-   - Game-specific considerations
-3. **Update the checklist** if it's a mandatory pattern
-4. **Update the quick reference** table
+```c
+void game_render(Backbuffer *bb, GameState *state) {
+  /* 1. Clear background */
+  for (int i = 0; i < bb->width * bb->height; i++) {
+    bb->pixels[i] = COLOR_BLACK;
+  }
 
-**Goal:** This document + the Tetris reference = everything needed to build a new game course.
+  /* 2. Draw static elements (field, walls) */
+  for (int y = 0; y < FIELD_HEIGHT; y++) {
+    for (int x = 0; x < FIELD_WIDTH; x++) {
+      unsigned char cell = state->field[y * FIELD_WIDTH + x];
+      if (cell != TETRIS_FIELD_EMPTY) {
+        draw_cell(bb, x, y, get_cell_color(cell));
+      }
+    }
+  }
+
+  /* 3. Draw dynamic elements (current piece) */
+  draw_piece(bb, &state->current_piece);
+
+  /* 4. Draw UI (score, level, next piece) */
+  draw_ui(bb, state);
+
+  /* 5. Draw overlays (game over screen) */
+  if (state->is_game_over) {
+    draw_game_over_overlay(bb);
+  }
+}
+```
+
+**Layer order:**
+
+1. Background (clear or fill)
+2. Static game elements
+3. Dynamic game elements
+4. UI elements
+5. Overlays (semi-transparent)
+
+---
+
+## Lesson structure
+
+Each lesson should follow this structure:
+
+### Lesson file template
+
+````markdown
+# Lesson XX: [Title]
+
+## What we're building
+
+[One paragraph describing what the student will have at the end of this lesson]
+
+## What you'll learn
+
+- [Concept 1]
+- [Concept 2]
+- [Concept 3]
+
+## Prerequisites
+
+- Completed Lesson XX-1
+- [Any other requirements]
+
+---
+
+## Step 1: [First major step]
+
+[Explanation of what we're doing and why]
+
+```c
+/* Code block with heavy comments */
+```
+````
+
+**What's happening:**
+
+- [Bullet point explanation]
+- [Another point]
+
+---
+
+## Step 2: [Second major step]
+
+[Continue pattern...]
+
+---
+
+## Build and run
+
+```bash
+./build-dev.sh --backend=raylib -r
+```
+
+**Expected output:**
+[Description or screenshot of what student should see]
+
+---
+
+## Exercises
+
+1. [Easy exercise]
+2. [Medium exercise]
+3. [Challenge exercise]
+
+---
+
+## What's next
+
+In Lesson XX+1, we'll [preview of next lesson].
+
+### Lesson progression guidelines
+
+1. **Lesson 1**: Window + colored background (proof of life)
+2. **Lesson 2**: Draw a single shape (rectangle, sprite)
+3. **Lesson 3**: Input handling (move the shape)
+4. **Lesson 4**: Game state struct + basic logic
+5. **Lesson 5+**: Game-specific features
+
+**Each lesson should:**
+
+- Add ONE major concept
+- Be completable in 15-30 minutes
+- End with something visible/playable
+- Include exercises for reinforcement
+
+---
+
+## Quick reference table
+
+| Need                           | Pattern                                                        |
+| ------------------------------ | -------------------------------------------------------------- |
+| Platform-independent rendering | Backbuffer with `uint32_t *pixels`                             |
+| Color constants                | `GAME_RGB(r,g,b)` macro + named constants                      |
+| Frame timing                   | `delta_time` from platform, cap at 0.1f                        |
+| Button state                   | `GameButtonState` with `ended_down` + `half_transition_count`  |
+| Previous frame's input         | Double-buffered `GameInput` with swap                          |
+| Auto-repeat with delay         | `RepeatInterval` with `initial_delay` + `passed_initial_delay` |
+| Event-based input (X11)        | Preserve `ended_down` in `prepare_input_frame`                 |
+| Polling input (Raylib)         | Call `UPDATE_BUTTON` every frame with current state            |
+| Type-safe constants            | `typedef enum { ... } NAME;`                                   |
+| Debug assertions               | `ASSERT()` macro with `DEBUG_TRAP()`                           |
+| Sound effects                  | `SoundDef` data + `SoundInstance` mixer                        |
+| Background music               | `MusicSequencer` with pattern data                             |
+| Semi-transparent overlay       | `draw_rect_blend()` with alpha                                 |
+| Text rendering                 | 8x8 bitmap font + `draw_text()`                                |
+| Resolution independence        | World units + `PIXELS_PER_UNIT` conversion                     |
+| VSync with fallback            | Detect extension, manual sleep if unavailable                  |
+
+---
+
+## Common bugs and fixes
+
+| Symptom                                   | Cause                                               | Fix                                                |
+| ----------------------------------------- | --------------------------------------------------- | -------------------------------------------------- |
+| Held key acts like repeated presses       | `ended_down` not preserved in `prepare_input_frame` | Copy from `old_input` before resetting transitions |
+| Key only works on first press (X11)       | Event-based input loses state between frames        | Ensure `prepare_input_frame` copies `ended_down`   |
+| Auto-repeat doesn't work                  | `passed_initial_delay` not tracked                  | Add flag to `RepeatInterval`, check in handler     |
+| Repeat triggers immediately despite delay | Early return when `half_transition_count > 0`       | Only trigger immediately if `initial_delay <= 0`   |
+| Input feels "sticky" after release        | Buffer swap not happening correctly                 | Verify swapping contents, not pointers             |
+| Colors look wrong                         | RGBA vs ARGB byte order mismatch                    | Check platform expects `0xAARRGGBB`                |
+| Game runs too fast without VSync          | No frame limiting                                   | Add manual sleep when VSync unavailable            |
+| Audio clicks/pops                         | Phase discontinuity or buffer underrun              | Don't reset phase; check buffer fill timing        |
+| Game freezes during line clear            | Animation timer not decrementing                    | Ensure `delta_time` subtraction in animation state |
+| Piece spawns inside wall                  | Initial position not accounting for piece size      | Center based on piece width, not field center      |
+
+---
+
+## Checklist before submitting course
+
+- [ ] PLAN.md exists and matches final lesson structure
+- [ ] Each lesson builds and runs independently
+- [ ] All code compiles with `-Wall -Wextra` without warnings
+- [ ] Both X11 and Raylib backends work
+- [ ] Comments explain WHY, not just WHAT
+- [ ] Exercises are included and tested
+- [ ] Build script has `--backend` and `-r` flags
+- [ ] Input system uses double-buffering with proper swap
+- [ ] `prepare_input_frame` preserves `ended_down`
+- [ ] Auto-repeat uses `RepeatInterval` with all fields
+- [ ] Audio (if included) works on both platforms
+
+---
+
+---
+
+## Testing checklist
+
+### Input testing
+
+- [ ] Tap key once → action triggers once
+- [ ] Hold key → action triggers after delay, then repeats
+- [ ] Release key → action stops immediately
+- [ ] Press two keys → both actions work independently
+- [ ] Quick tap (< 1 frame) → action still triggers
+- [ ] Works identically on X11 and Raylib
+
+### Audio testing
+
+- [ ] Sound effects play when triggered
+- [ ] Multiple sounds can play simultaneously
+- [ ] Sounds don't click/pop at start or end
+- [ ] Music loops correctly
+- [ ] Volume controls work
+- [ ] No audio when game is muted/closed
+
+### Rendering testing
+
+- [ ] Colors appear correct (not swapped channels)
+- [ ] No flickering or tearing
+- [ ] UI elements are readable
+- [ ] Overlays blend correctly
+- [ ] Window resize doesn't break rendering
+
+### Game logic testing
+
+- [ ] Game initializes to correct state
+- [ ] Restart resets everything properly
+- [ ] Score/level increment correctly
+- [ ] Game over triggers at right time
+- [ ] Animations play at correct speed
+- [ ] Delta time works (game speed independent of frame rate)
+
+---
+
+## Style guide
+
+### Code formatting
+
+```c
+/* Function declarations: return type on same line */
+void game_update(GameState *state, GameInput *input, float delta_time);
+
+/* Braces: opening brace on same line */
+if (condition) {
+    /* code */
+} else {
+    /* code */
+}
+
+/* Switch: cases indented, break aligned with case */
+switch (value) {
+case CASE_A:
+    do_something();
+    break;
+case CASE_B:
+    do_other();
+    break;
+default:
+    break;
+}
+
+/* Pointer declarations: star with type */
+int *pointer;
+GameState *state;
+
+/* Constants: UPPER_SNAKE_CASE */
+#define MAX_PLAYERS 4
+#define CELL_SIZE 30
+
+/* Types: PascalCase */
+typedef struct { ... } GameState;
+typedef enum { ... } MOVE_DIR;
+
+/* Functions: snake_case */
+void game_update(...);
+void draw_rect(...);
+
+/* Local variables: snake_case */
+int current_index = 0;
+float delta_time = 0.016f;
+```
+
+### Comment style
+
+```c
+/* Single-line comments use this style */
+
+/*
+ * Multi-line comments use this style.
+ * Each line starts with a star.
+ */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * Section headers use box drawing characters
+ * ═══════════════════════════════════════════════════════════════════════════
+ */
+
+void function(void) {
+    /* Explain WHY, not WHAT */
+    x += 1;  /* WRONG: increment x */
+    x += 1;  /* RIGHT: move to next cell for collision check */
+
+    /* Group related operations with blank lines and comments */
+
+    /* Calculate new position */
+    float new_x = pos_x + vel_x * dt;
+    float new_y = pos_y + vel_y * dt;
+
+    /* Check bounds */
+    if (new_x < 0) new_x = 0;
+    if (new_y < 0) new_y = 0;
+
+    /* Apply position */
+    pos_x = new_x;
+    pos_y = new_y;
+}
+```
+
+### File organization
+
+```c
+/* 1. Include guards (headers only) */
+#ifndef GAME_H
+#define GAME_H
+
+/* 2. System includes */
+#include <stdint.h>
+#include <stdbool.h>
+
+/* 3. Local includes */
+#include "utils/backbuffer.h"
+
+/* 4. Constants and macros */
+#define FIELD_WIDTH 12
+#define FIELD_HEIGHT 18
+
+/* 5. Type definitions (enums first, then structs) */
+typedef enum { ... } CellType;
+typedef struct { ... } GameState;
+
+/* 6. Function declarations */
+void game_init(GameState *state);
+void game_update(GameState *state, GameInput *input, float dt);
+
+/* 7. End include guard */
+#endif /* GAME_H */
+```
+
+---
+
+## Final notes
+
+### Philosophy
+
+1. **Simplicity over cleverness** — Write code a beginner can follow
+2. **Explicit over implicit** — Name things clearly, avoid magic numbers
+3. **Platform independence** — Game logic never calls platform APIs
+4. **Data-oriented** — Prefer structs of arrays, avoid deep hierarchies
+5. **Comments explain WHY** — Code shows what, comments show reasoning
+
+### When to deviate
+
+These patterns work for simple 2D games. Deviate when:
+
+- Performance requires it (profile first!)
+- Game mechanics demand different architecture
+- Platform limitations force changes
+
+Document deviations clearly and explain the reasoning.
+
+### Resources
+
+- Handmade Hero (Casey Muratori) — Low-level game programming
+- Raylib examples — Simple game patterns
+- Lazy Foo SDL tutorials — Cross-platform basics
+- Game Programming Patterns (Robert Nystrom) — Architecture patterns
