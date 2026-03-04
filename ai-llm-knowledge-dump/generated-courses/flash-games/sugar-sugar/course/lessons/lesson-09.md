@@ -1,324 +1,388 @@
-# Lesson 09 — Special Mechanics: Gravity, Cyclic, Teleporters
+# Lesson 09: Level System — LevelDef, Emitters, Cups, and levels.c
 
-**By the end of this lesson you will have:**
-Three distinct mechanics working:
-(a) Press **G** → gravity flips. Grains that were falling down now fall up.
-(b) On a "cyclic" level, grains that exit the bottom of the screen reappear at the top.
-(c) A grain that touches the blue portal disappears and reappears at the orange portal.
+## What we're building
 
----
+Add the `LevelDef` type and a `levels.c` file with 30 hand-crafted puzzle levels.
+Wire `level_load()` into the state machine so clicking a level button on the title
+screen actually starts that puzzle.  After this lesson the game is playable end-to-end.
 
-## Step 1 — `gravity_sign`: flip with a single field
+## What you'll learn
 
-The physics update multiplies `GRAVITY` by `gravity_sign`:
+- `LevelDef` and its entity arrays (`Emitter`, `Cup`, `Obstacle`, etc.)
+- C99 designated initialisers — the cleanest way to write level data
+- `levels.c` + `extern` declaration — separating data from logic
+- `level_load()` — stamping cups and obstacles into the `LineBitmap`
+- `stamp_cups()` and `stamp_obstacles()` — baking level geometry into physics
+- The title-screen level-select grid
 
-```c
-// inside update_grains() — game.c
-p->vy[i] += GRAVITY * state->gravity_sign * dt;
-```
+## Prerequisites
 
-`gravity_sign` is either `+1` (down) or `-1` (up). That is the entire flip mechanism.
-
-Concrete numbers — first frame, dt = 0.016 s, gravity_sign = +1:
-```
-vy += 500.0 * (+1) * 0.016
-vy += 8.0
-```
-Grain accelerates downward.
-
-Same frame, gravity_sign = -1:
-```
-vy += 500.0 * (-1) * 0.016
-vy += -8.0
-```
-Grain accelerates upward.
-
-No separate "flipped physics" code path. One field, one multiply.
-
-Toggling:
-```c
-// inside update_playing(), when gravity button is pressed
-if (BUTTON_PRESSED(input->gravity) && state->level.has_gravity_switch) {
-    state->gravity_sign = -state->gravity_sign; // +1 → -1 → +1 → ...
-}
-```
+- Lesson 08 complete (state machine working)
 
 ---
 
-## Step 2 — Keyboard binding: G key in `main_x11.c`
-
-The platform backend translates OS key events into `GameInput` button state. Open `src/main_x11.c` and look at `platform_get_input()`:
+## Step 1: Level entity types in `game.h`
 
 ```c
-// main_x11.c — already written
-case KeyPress: {
-    KeySym ks = XLookupKeysym(&ev.xkey, 0);
-    if (ks == XK_Escape) UPDATE_BUTTON(input->escape,  1);
-    if (ks == XK_r || ks == XK_R) UPDATE_BUTTON(input->reset,   1);
-    if (ks == XK_g || ks == XK_G) UPDATE_BUTTON(input->gravity, 1);
-    break;
-}
-case KeyRelease: {
-    KeySym ks = XLookupKeysym(&ev.xkey, 0);
-    if (ks == XK_Escape) UPDATE_BUTTON(input->escape,  0);
-    if (ks == XK_r || ks == XK_R) UPDATE_BUTTON(input->reset,   0);
-    if (ks == XK_g || ks == XK_G) UPDATE_BUTTON(input->gravity, 0);
-    break;
-}
-```
+/* src/game.h  —  level entities */
 
-`UPDATE_BUTTON(btn, is_down)` increments `half_transition_count` only when the state actually changes (prevents repeated KeyPress auto-repeat events from counting as multiple presses).
-
-The game never sees `XK_g` — it only sees `GameInput.gravity`. That is the whole point of the platform abstraction layer.
-
----
-
-## Step 3 — `has_gravity_switch`: level-controlled feature flag
-
-Not every level has a gravity button. The flag in `LevelDef` controls it:
-
-```c
-// in game.h
-int has_gravity_switch; // 1 = show and enable gravity flip button
-```
-
-Level 13 (`g_levels[12]`) sets it:
-```c
-[12] = {
-    .emitter_count     = 1,
-    .emitters          = { EMITTER(320, 440, 80) }, // emitter at BOTTOM
-    .cup_count         = 1,
-    .cups              = { CUP(278, 30, 85, 80, GRAIN_WHITE, 150) }, // cup at TOP
-    .has_gravity_switch = 1,
-},
-```
-
-The emitter is at y=440 (near bottom). The cup is at y=30 (near top). Grains spawn moving upward only after the player flips gravity.
-
-In `render_playing()` the button is only drawn when the flag is set:
-```c
-if (state->level.has_gravity_switch) {
-    // draw the gravity toggle button
-    uint32_t btn_col = state->gravity_hover ? COLOR_BTN_HOVER : COLOR_BTN_NORMAL;
-    draw_rect(bb, 560, 10, 70, 28, btn_col);
-    draw_rect_outline(bb, 560, 10, 70, 28, COLOR_BTN_BORDER);
-    if (state->gravity_sign == 1)
-        draw_text(bb, 564, 17, "GRAV v", COLOR_UI_TEXT);
-    else
-        draw_text(bb, 564, 17, "GRAV ^", COLOR_UI_TEXT);
-}
-```
-
-The caret `^` and `v` give an immediate visual signal about which direction is "down".
-
----
-
-## Step 4 — Cyclic screen wrap: `iy >= H → ny = 1`
-
-"Cyclic" means the bottom edge connects to the top edge — like Pac-Man's screen wrapping. A grain that falls off the bottom reappears at the top.
-
-Inside `update_grains()`, after moving the grain by one sub-step:
-
-```c
-// game.c — inside the sub-step loop
-int iy = (int)p->y[i];
-
-if (iy >= CANVAS_H) {
-    if (state->level.is_cyclic) {
-        p->y[i] = 1.0f;  // teleport to top, keep vx/vy unchanged
-        continue;         // skip deactivation, keep sub-stepping
-    } else {
-        p->active[i] = 0; // off the bottom — deactivate
-        break;
-    }
-}
-if (iy < 0) {
-    if (state->level.is_cyclic) {
-        p->y[i] = (float)(CANVAS_H - 2); // wrap to bottom
-        continue;
-    } else {
-        p->active[i] = 0;
-        break;
-    }
-}
-```
-
-`continue` restarts the sub-step loop with the new position. The grain is not deactivated; it just jumps rows.
-
-Why `ny = 1` not `ny = 0`? Row 0 is the very top edge — if the emitter is there, newly spawned grains would immediately re-enter the wrap zone and double-count. Row 1 is safe.
-
----
-
-## Step 5 — Teleporter circle test: no `sqrt()` needed
-
-A `Teleporter` has two portals A and B:
-
-```c
+/* Emitter: continuously spawns grains from its spout position. */
 typedef struct {
-    int ax, ay; // portal A center
-    int bx, by; // portal B center
-    int radius; // trigger radius in pixels
+  int   x, y;              /* pixel position of the spout         */
+  int   grains_per_second; /* emission rate (e.g. 80)             */
+  float spawn_timer;       /* internal: seconds since last emit   */
+} Emitter;
+
+/* Cup: the goal — collect enough grains of the right color. */
+typedef struct {
+  int        x, y, w, h;       /* bounding box (pixels)           */
+  GRAIN_COLOR required_color;  /* GRAIN_WHITE = accepts any color */
+  int        required_count;   /* grains needed to fill the cup   */
+  int        collected;        /* grains received so far          */
+} Cup;
+
+/* ColorFilter: grains passing through this zone change color. */
+typedef struct {
+  int         x, y, w, h;    /* bounding box of the filter zone  */
+  GRAIN_COLOR output_color;  /* color grains get after passing   */
+} ColorFilter;
+
+/* Teleporter: two linked portals — grains entering A exit at B and vice versa. */
+typedef struct {
+  int ax, ay; /* portal A center (pixels) */
+  int bx, by; /* portal B center (pixels) */
+  int radius; /* trigger radius  (pixels) */
 } Teleporter;
+
+/* Obstacle: a solid rectangle pre-stamped into the line bitmap. */
+typedef struct {
+  int x, y, w, h;
+} Obstacle;
+
+#define MAX_EMITTERS    2
+#define MAX_CUPS        8
+#define MAX_FILTERS     4
+#define MAX_TELEPORTERS 2
+#define MAX_OBSTACLES  12
+
+/* LevelDef: everything needed to initialise one puzzle. */
+typedef struct {
+  int         index;
+  Emitter     emitters[MAX_EMITTERS];
+  int         emitter_count;
+  Cup         cups[MAX_CUPS];
+  int         cup_count;
+  ColorFilter filters[MAX_FILTERS];
+  int         filter_count;
+  Teleporter  teleporters[MAX_TELEPORTERS];
+  int         teleporter_count;
+  Obstacle    obstacles[MAX_OBSTACLES];
+  int         obstacle_count;
+  int         has_gravity_switch; /* 1 = show the gravity flip button */
+  int         is_cyclic;          /* 1 = sugar wraps bottom→top       */
+} LevelDef;
+
+/* Total level count — defined in levels.c */
+#define TOTAL_LEVELS 30
+extern LevelDef g_levels[TOTAL_LEVELS];
 ```
-
-To check if a grain at `(gx, gy)` is inside portal A:
-
-```
-dist² = (gx - ax)² + (gy - ay)²
-if dist² <= radius²  → inside
-```
-
-Concrete example — portal A at (320, 150), radius 18, grain at (310, 158):
-```
-dx = 310 - 320 = -10
-dy = 158 - 150 =   8
-dist² = (-10)² + 8² = 100 + 64 = 164
-radius² = 18² = 324
-164 <= 324  → inside portal A ✓
-```
-
-We never call `sqrt()`. Comparing squares is identical to comparing distances, and integer multiplication is much cheaper than square root.
-
-In `update_grains()`:
-
-```c
-for (int t = 0; t < lv->teleporter_count; t++) {
-    Teleporter *tp = &lv->teleporters[t];
-    if (p->tpcd[i] > 0) { p->tpcd[i]--; continue; }
-
-    int dax = gx - tp->ax, day = gy - tp->ay;
-    int dbx = gx - tp->bx, dby = gy - tp->by;
-    int r2  = tp->radius * tp->radius;
-
-    if (dax*dax + day*day <= r2) {
-        p->x[i] = (float)tp->bx;
-        p->y[i] = (float)tp->by;
-        p->tpcd[i] = 8; // 8-frame cooldown
-    } else if (dbx*dbx + dby*dby <= r2) {
-        p->x[i] = (float)tp->ax;
-        p->y[i] = (float)tp->ay;
-        p->tpcd[i] = 8;
-    }
-}
-```
-
-Portal A teleports to B. Portal B teleports to A. Bidirectional with a single struct.
 
 ---
 
-## Step 6 — `tpcd`: teleport cooldown prevents infinite loops
+## Step 2: `levels.c` — data separated from logic
 
-Without cooldown, what happens on frame N:
-1. Grain enters portal A at (320, 150).
-2. Game moves grain to portal B at (100, 350).
-3. *Same frame*, grain is still inside A's radius (it was just placed at B, but the loop continues). → teleports back to A. → teleports to B again. → infinite loop.
-
-`tpcd` (teleport cooldown) is a per-grain countdown in frames:
+The level data lives in its own translation unit.  This keeps `game.c` readable
+and lets you edit level data without recompiling game logic.
 
 ```c
-uint8_t tpcd[MAX_GRAINS]; // 0 = ready, >0 = cooling down
-```
+/* src/levels.c  —  Sugar, Sugar | Level Data (first 3 levels shown) */
 
-After teleporting, set `tpcd[i] = 8`. Each frame decrement it. Only teleport when `tpcd[i] == 0`. The grain spends 8 frames immune from re-entry — long enough to physically leave the portal radius.
+#include "game.h"
 
-```
-Frame 0:  grain enters A → teleport to B, tpcd=8
-Frame 1:  tpcd=7, no teleport check
-...
-Frame 8:  tpcd=0, normal checks resume
-```
+/* C99 designated initialisers let you name every field explicitly.
+ * Unspecified fields are zero-initialised (cups start with collected=0, etc.).
+ *
+ * JS analogy: like an object literal with default values:
+ *   const level = { emitters: [...], cups: [...], ...rest: defaults }
+ */
+LevelDef g_levels[TOTAL_LEVELS] = {
 
-8 frames at 60 fps = 133 ms. In that time a grain moving at ~200 px/s travels ~27 px, which is larger than the 18 px radius. So it is guaranteed to have left the portal.
-
----
-
-## Step 7 — Level 17 (cyclic) and Level 21 (teleporter) definitions
-
-```c
-// levels.c — already written
-[16] = {  // Level 17 — cyclic
-    .index         = 16,
+  /* ------------------------------------------------------------------ */
+  /* LEVEL 0: "Tutorial" — single emitter, single cup, no obstacles     */
+  /* ------------------------------------------------------------------ */
+  [0] = {
+    .index = 0,
     .emitter_count = 1,
-    .emitters      = { EMITTER(320, 20, 80) },
-    .cup_count     = 1,
-    .cups          = { CUP(490, 50, 85, 80, GRAIN_WHITE, 150) },
-    .is_cyclic     = 1,
-},
+    .emitters = {
+      [0] = { .x = 320, .y = 30, .grains_per_second = 60 },
+    },
+    .cup_count = 1,
+    .cups = {
+      [0] = { .x = 270, .y = 380, .w = 100, .h = 60,
+              .required_color = GRAIN_WHITE, .required_count = 120 },
+    },
+  },
 
-[20] = {  // Level 21 — teleporter
-    .index              = 20,
-    .emitter_count      = 1,
-    .emitters           = { EMITTER(320, 20, 80) },
-    .cup_count          = 1,
-    .cups               = { CUP(60, 370, 85, 100, GRAIN_WHITE, 150) },
-    .teleporter_count   = 1,
-    .teleporters        = { TELE(320, 150, 100, 350, 18) },
-},
+  /* ------------------------------------------------------------------ */
+  /* LEVEL 1: "Funnel" — one emitter, one cup, one obstacle ramp        */
+  /* ------------------------------------------------------------------ */
+  [1] = {
+    .index = 1,
+    .emitter_count = 1,
+    .emitters = {
+      [0] = { .x = 160, .y = 30, .grains_per_second = 70 },
+    },
+    .cup_count = 1,
+    .cups = {
+      [0] = { .x = 450, .y = 380, .w = 100, .h = 60,
+              .required_color = GRAIN_WHITE, .required_count = 120 },
+    },
+    .obstacle_count = 1,
+    .obstacles = {
+      [0] = { .x = 100, .y = 200, .w = 200, .h = 6 },
+    },
+  },
+
+  /* ------------------------------------------------------------------ */
+  /* LEVEL 2: "Split" — two emitters, two cups                          */
+  /* ------------------------------------------------------------------ */
+  [2] = {
+    .index = 2,
+    .emitter_count = 2,
+    .emitters = {
+      [0] = { .x = 160, .y = 30, .grains_per_second = 60 },
+      [1] = { .x = 480, .y = 30, .grains_per_second = 60 },
+    },
+    .cup_count = 2,
+    .cups = {
+      [0] = { .x = 80,  .y = 380, .w = 100, .h = 60,
+              .required_color = GRAIN_WHITE, .required_count = 100 },
+      [1] = { .x = 460, .y = 380, .w = 100, .h = 60,
+              .required_color = GRAIN_WHITE, .required_count = 100 },
+    },
+  },
+
+  /* Levels 3–29: fill in similarly — shown abbreviated here */
+  /* ... */
+};
 ```
 
-In Level 21: the emitter is at (320, 20). The cup is at the left. A grain falling straight down hits portal A at (320, 150) and pops out at portal B (100, 350) — just above the cup.
-
----
-
-## Step 8 — `render_teleporters()`: pulsing circles
-
-Portals pulse in size using `phase_timer` as a sine input:
-
-```c
-// game.c — render_playing() calls this
-static void render_teleporters(const GameState *state, GameBackbuffer *bb) {
-    for (int t = 0; t < state->level.teleporter_count; t++) {
-        Teleporter *tp = &state->level.teleporters[t];
-
-        // pulse: radius oscillates ±3 px at 2 Hz
-        float pulse = (float)tp->radius + 3.0f * sinf(state->phase_timer * 6.28f * 2.0f);
-        int   r     = (int)pulse;
-
-        draw_circle       (bb, tp->ax, tp->ay, r,   COLOR_PORTAL_A);
-        draw_circle_outline(bb, tp->ax, tp->ay, r+2, COLOR_PORTAL_A);
-
-        draw_circle       (bb, tp->bx, tp->by, r,   COLOR_PORTAL_B);
-        draw_circle_outline(bb, tp->bx, tp->by, r+2, COLOR_PORTAL_B);
-    }
-}
-```
-
-`sinf(phase_timer * 6.28f * 2.0f)`:
-- `phase_timer` counts seconds since the level started.
-- Multiply by `6.28 * 2` = 12.56 rad/s → 2 complete oscillations per second.
-- `sinf` returns -1 to +1 → radius varies from `tp->radius - 3` to `tp->radius + 3`.
-
-The fill circle and the outline circle draw at slightly different radii for a glowing halo effect.
-
----
-
-## Build & Run
+Add `src/levels.c` to the build script's `SHARED_SRCS`:
 
 ```bash
-clang -Wall -Wextra -O2 -o sugar \
-    src/main_x11.c src/game.c src/levels.c -lX11 -lm
-./sugar
+# build-dev.sh  —  update SHARED_SRCS
+SHARED_SRCS="src/game.c src/levels.c"
 ```
 
-**What you should see:**
-- **Level 13**: emitter at the bottom, cup at top. Press G — grains fly upward and fill the cup.
-- **Level 17**: grains fall off the bottom and reappear at the top in a continuous loop. Draw a ramp to steer them right.
-- **Level 21**: grains fall into the blue circle and exit the orange circle near the left cup. Two glowing rings pulse on screen.
+---
+
+## Step 3: `level_load()` — reset and stamp geometry
+
+```c
+/* src/game.c  —  level_load */
+
+static void level_load(GameState *state, int index) {
+  /* Copy the level definition from the read-only global array.
+   * 'state->level' is a live copy we can mutate (timers, collected counts). */
+  state->level = g_levels[index];
+  state->current_level = index;
+
+  /* Clear all grains and drawn lines — fresh slate for each level. */
+  memset(&state->grains, 0, sizeof(state->grains));
+  memset(&state->lines,  0, sizeof(state->lines));
+
+  /* Reset emitter spawn timers in the live copy. */
+  for (int i = 0; i < state->level.emitter_count; i++)
+    state->level.emitters[i].spawn_timer = 0.0f;
+
+  /* Reset cup collected counts in the live copy. */
+  for (int i = 0; i < state->level.cup_count; i++)
+    state->level.cups[i].collected = 0;
+
+  /* Normal gravity on every level load. */
+  state->gravity_sign = 1;
+
+  /* Stamp pre-set obstacles and cup walls into the line bitmap. */
+  stamp_obstacles(state);
+  stamp_cups(state);
+}
+
+/* stamp_obstacles: bake Obstacle rectangles into the line bitmap.
+ * Grains collide with these exactly like drawn lines. */
+static void stamp_obstacles(GameState *state) {
+  LevelDef *lv = &state->level;
+  for (int i = 0; i < lv->obstacle_count; i++) {
+    Obstacle *o = &lv->obstacles[i];
+    for (int py = o->y; py < o->y + o->h; py++)
+      for (int px = o->x; px < o->x + o->w; px++)
+        if (px >= 0 && px < CANVAS_W && py >= 0 && py < CANVAS_H)
+          state->lines.pixels[py * CANVAS_W + px] = 1;
+  }
+}
+
+/* stamp_cups: bake Cup walls into the line bitmap.
+ *
+ * Cup geometry (x, y, w, h):
+ *
+ *     x         x+w-1
+ *     |  (open)  |    ← y   (top is open — grains fall in)
+ *     |          |
+ *     |__________|    ← y+h-1 (solid bottom)
+ *
+ * We stamp left wall, right wall, and bottom.  The top is left open. */
+static void stamp_cups(GameState *state) {
+  LevelDef   *lv = &state->level;
+  LineBitmap *lb = &state->lines;
+
+  for (int c = 0; c < lv->cup_count; c++) {
+    Cup *cup = &lv->cups[c];
+    int cx = cup->x, cy = cup->y, cw = cup->w, ch = cup->h;
+
+    /* Left wall */
+    for (int py = cy; py < cy + ch; py++)
+      if (cx >= 0 && cx < CANVAS_W && py >= 0 && py < CANVAS_H)
+        lb->pixels[py * CANVAS_W + cx] = 1;
+
+    /* Right wall */
+    for (int py = cy; py < cy + ch; py++) {
+      int rx = cx + cw - 1;
+      if (rx >= 0 && rx < CANVAS_W && py >= 0 && py < CANVAS_H)
+        lb->pixels[py * CANVAS_W + rx] = 1;
+    }
+
+    /* Bottom wall */
+    for (int px = cx; px < cx + cw; px++) {
+      int by = cy + ch - 1;
+      if (px >= 0 && px < CANVAS_W && by >= 0 && by < CANVAS_H)
+        lb->pixels[by * CANVAS_W + px] = 1;
+    }
+  }
+}
+```
+
+Also update `spawn_grains` to use the level's emitters instead of a hardcoded position:
+
+```c
+/* src/game.c  —  spawn_grains: use level emitters */
+static void spawn_grains(GameState *state, float dt) {
+  LevelDef  *lv = &state->level;
+  GrainPool *p  = &state->grains;
+
+  for (int e = 0; e < lv->emitter_count; e++) {
+    Emitter *em = &lv->emitters[e];
+    em->spawn_timer += dt;
+    float interval = 1.0f / (float)em->grains_per_second;
+
+    while (em->spawn_timer >= interval) {
+      em->spawn_timer -= interval;
+      int slot = grain_alloc(p);
+      if (slot < 0) break;
+
+      /* Small spread so grains don't all pile on the exact same column */
+      int spread = (rand() % 7) - 3;
+
+      p->active[slot] = 1;
+      p->color[slot]  = GRAIN_WHITE;
+      p->still[slot]  = 0;
+      p->tpcd[slot]   = 0;
+      p->x[slot]      = (float)(em->x + spread);
+      p->y[slot]      = (float)em->y;
+      p->vx[slot]     = 0.0f;
+      p->vy[slot]     = (state->gravity_sign > 0) ? 40.0f : -40.0f;
+    }
+  }
+}
+```
 
 ---
 
-## Key Concepts
+## Step 4: Add `LevelDef level` to `GameState`
 
-- `gravity_sign` (+1 / -1): multiply into `GRAVITY` — one field flips all physics with no extra branches.
-- `UPDATE_BUTTON()` in `main_x11.c`: translates OS key events into platform-independent `GameInput`. The game only sees button state, never key codes.
-- `has_gravity_switch`: a feature flag in `LevelDef`. The game checks it before rendering the G button and before accepting G input.
-- **Cyclic wrap**: `if (iy >= CANVAS_H && is_cyclic) p->y[i] = 1.0f; continue;` — one `if` in the sub-step loop handles infinite recycling.
-- **Circle test without sqrt**: compare `dx² + dy²` to `radius²`. Integer multiply, no floating-point root.
-- `tpcd` (teleport cooldown): a per-grain frame counter. Prevents A→B→A→B re-entry by making the grain immune to teleportation for 8 frames.
-- `render_teleporters()` pulse: `sinf(timer * 2π * frequency)` drives size oscillation — same formula as any animation easing.
+```c
+/* src/game.h  —  add to GameState */
+typedef struct {
+  int should_quit;
+  GAME_PHASE phase;
+  float      phase_timer;
+  int        current_level;
+  int        unlocked_count;
+  LevelDef   level;          /* ← live copy of the active level */
+  GrainPool  grains;
+  LineBitmap lines;
+  int        gravity_sign;
+  int        title_hover;
+  int        reset_hover;
+  int        gravity_hover;
+} GameState;
+```
 
 ---
 
-## Exercise
+## Step 5: Wire `level_load` into the state machine
 
-Create a level with **two teleporters** where portal A₁ leads to B₁ and portal A₂ leads to B₂, forming an S-shaped route. Place the emitter at the top-center, portal A₁ at (320, 150), B₁ at (500, 300), A₂ at (500, 300), B₂ at (320, 400), and the cup at (278, 370). Add it as `g_levels[24]` (level 25). Does the grain travel the full chain? Why or why not? (Hint: what happens when two portals share the same point?)
+Update `update_title` to load the clicked level:
+
+```c
+/* src/game.c  —  update_title: layout constants + click logic */
+
+/* These constants are shared between update_title and render_title
+ * so hover detection always matches what's drawn on screen. */
+#define TITLE_BTN_W   70
+#define TITLE_BTN_H   40
+#define TITLE_BTN_GAP  8
+#define TITLE_COLS     6
+#define TITLE_GRID_X  \
+  ((CANVAS_W - (TITLE_COLS * (TITLE_BTN_W + TITLE_BTN_GAP) - TITLE_BTN_GAP)) / 2)
+#define TITLE_GRID_Y  160
+
+static void update_title(GameState *state, GameInput *input) {
+  int mx = input->mouse.x;
+  int my = input->mouse.y;
+  state->title_hover = -1;
+
+  for (int i = 0; i < TOTAL_LEVELS; i++) {
+    int col = i % TITLE_COLS, row = i / TITLE_COLS;
+    int bx = TITLE_GRID_X + col * (TITLE_BTN_W + TITLE_BTN_GAP);
+    int by = TITLE_GRID_Y + row * (TITLE_BTN_H + TITLE_BTN_GAP);
+
+    if (mx >= bx && mx < bx + TITLE_BTN_W &&
+        my >= by && my < by + TITLE_BTN_H) {
+      state->title_hover = i;
+
+      if (BUTTON_PRESSED(input->mouse.left) && i < state->unlocked_count) {
+        level_load(state, i);
+        change_phase(state, PHASE_PLAYING);
+      }
+    }
+  }
+
+  if (BUTTON_PRESSED(input->escape))
+    state->should_quit = 1;
+}
+```
+
+---
+
+## Build and run
+
+```bash
+./build-dev.sh -r
+```
+
+**Expected output:** The title screen shows a 6-column grid of 30 level buttons.  Level 1 is clickable; the rest are locked (greyed out — added in Lesson 13).  Clicking Level 1 starts the simulation with the emitter pouring from `(320, 30)` and a cup at the bottom center.
+
+---
+
+## Exercises
+
+1. Add Level 3 with two emitters, two colored cups (red and green), and a filter zone in the middle that turns grains red on the left half and green on the right.
+2. Change `required_count` for Level 0 to 5 and verify the level completes quickly.
+3. What happens if `stamp_cups` and `stamp_obstacles` are called in the wrong order?  (Hint: try calling `stamp_cups` first then placing an obstacle that overlaps a cup wall.)
+
+---
+
+## What's next
+
+In Lesson 10 we add win detection — checking cup fill percentages — and the
+`SOUND_CUP_FILL` / `SOUND_LEVEL_COMPLETE` audio triggers that make completing
+a level feel rewarding.

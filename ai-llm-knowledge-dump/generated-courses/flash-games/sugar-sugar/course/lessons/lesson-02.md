@@ -1,331 +1,253 @@
-# Lesson 02 — Mouse Input + Line Drawing
+# Lesson 02: Pixel Rendering — Backbuffer, Colors, and Drawing Primitives
 
-**By the end of this lesson you will have:**
-Hold the left mouse button and drag to draw dark lines anywhere on the canvas. The lines persist between frames. Press R to erase all lines and start fresh. The window still closes with Escape.
+## What we're building
+
+Move the raw pixel-write loop from `main()` into proper drawing functions, and
+give every color a name.  By the end you will have `draw_pixel`, `draw_rect`,
+`draw_rect_outline`, and the full color-constant table — the building blocks
+every later lesson uses.
+
+## What you'll learn
+
+- The `0xAARRGGBB` pixel format and why we chose it
+- How to write a bounds-checked `draw_pixel` with a single unsigned cast trick
+- How `draw_rect` clips to the canvas edge (so you can pass negative coordinates without crashing)
+- Why Raylib needs a R↔B swap but X11 does not
+- How to separate rendering from game logic using `game_render()`
+
+## Prerequisites
+
+- Lesson 01 complete and building on both backends
 
 ---
 
-## Step 1 — How Button State Works
+## Step 1: Expand `game.h` with colors and drawing stubs
 
-In JavaScript a keydown event fires once per physical press (plus repeat events). You track state yourself if you need "is it held right now?"
+```c
+/* src/game.h  (Lesson 02 additions — show only the new/changed parts) */
 
-In our engine every button carries two pieces of information:
+/* -----------------------------------------------------------------------
+ * COLOR SYSTEM  —  pixel format 0xAARRGGBB
+ *
+ * In memory on a little-endian CPU the bytes are stored as [B, G, R, A].
+ * X11's XImage reads them in that order (BGR), ignoring alpha — exactly right.
+ * Raylib's GPU texture uses RGBA order, so we swap R↔B before calling
+ * UpdateTexture and swap back afterward (see platform_display_backbuffer).
+ *
+ * JS analogy: like CSS hex color but with the alpha byte prepended:
+ *   CSS  #RRGGBB
+ *   ARGB 0xAARRGGBB
+ * ----------------------------------------------------------------------- */
+#define GAME_RGBA(r, g, b, a) \
+  (((uint32_t)(a) << 24) | ((uint32_t)(r) << 16) | \
+   ((uint32_t)(g) <<  8) |  (uint32_t)(b))
+#define GAME_RGB(r, g, b)  GAME_RGBA(r, g, b, 0xFF)
 
+/* Named color constants — one definition here, usable everywhere. */
+#define COLOR_BG           GAME_RGB(135, 195, 225)  /* sky blue canvas      */
+#define COLOR_LINE         GAME_RGB( 50,  50,  50)  /* player-drawn lines   */
+#define COLOR_OBSTACLE     GAME_RGB(130, 110,  80)  /* level obstacles      */
+#define COLOR_CUP_BORDER   GAME_RGB( 60,  60, 100)  /* cup outline          */
+#define COLOR_CUP_FILL     GAME_RGB(180, 210, 255)  /* cup fill bar         */
+#define COLOR_CUP_FILL_FULL GAME_RGB(80, 200, 100)  /* cup fully filled     */
+#define COLOR_CUP_EMPTY    GAME_RGB(220, 220, 240)  /* cup empty area       */
+#define COLOR_UI_TEXT      GAME_RGB( 50,  50,  50)  /* labels and numbers   */
+#define COLOR_BTN_NORMAL   GAME_RGB(210, 200, 190)  /* button background    */
+#define COLOR_BTN_HOVER    GAME_RGB(180, 170, 160)  /* button hover state   */
+#define COLOR_BTN_BORDER   GAME_RGB(120, 110, 100)  /* button outline       */
+#define COLOR_WHITE        GAME_RGB(255, 255, 255)
+#define COLOR_BLACK        GAME_RGB(  0,   0,   0)
+#define COLOR_RED          GAME_RGB(229,  57,  53)  /* grain / filter red   */
+#define COLOR_GREEN        GAME_RGB( 67, 160,  71)  /* grain / filter green */
+#define COLOR_ORANGE       GAME_RGB(251, 140,   0)  /* grain / filter orange*/
+#define COLOR_CREAM        GAME_RGB(232, 213, 183)  /* default grain color  */
+#define COLOR_PORTAL_A     GAME_RGB(100, 180, 255)  /* teleporter entry     */
+#define COLOR_PORTAL_B     GAME_RGB(255, 140,   0)  /* teleporter exit      */
+#define COLOR_COMPLETE     GAME_RGB( 76, 175,  80)  /* level-complete panel */
 ```
-GameButtonState {
-    half_transition_count   ← how many state changes happened this frame
-    ended_down              ← is the key currently held? (1 or 0)
+
+**What's happening:**
+
+- `GAME_RGBA` builds a 32-bit value by shifting each channel into its byte position.  `GAME_RGB` just fixes alpha to 0xFF.
+- All constants live in the header so any `.c` file that `#include`s `game.h` gets them automatically — no duplication.
+
+---
+
+## Step 2: Drawing primitives in `game.c`
+
+These are `static` functions (internal to `game.c`) until you decide they need to be shared across files.
+
+```c
+/* src/game.c  —  drawing primitives (add near the top, after includes) */
+
+/* draw_pixel: write a single pixel.
+ *
+ * The unsigned cast trick:
+ *   (unsigned)x < (unsigned)width
+ * When x is negative, casting to unsigned wraps it to a huge positive number
+ * (e.g. -1 → 4294967295), which is always >= width.  So one comparison handles
+ * both "x < 0" and "x >= width" without a branch.
+ *
+ * JS analogy: like ctx.fillRect(x, y, 1, 1) but O(1) and zero-overhead. */
+static void draw_pixel(GameBackbuffer *bb, int x, int y, uint32_t color) {
+  if ((unsigned)x < (unsigned)bb->width &&
+      (unsigned)y < (unsigned)bb->height)
+    bb->pixels[y * bb->width + x] = color;
 }
-```
 
-`half_transition_count` is called "half" because a full press-and-release cycle is **two** transitions: down → up.
-
-Examples for one frame:
-
-```
-Key tapped quickly:
-  half_transition_count = 2   (down, then up)
-  ended_down            = 0   (released by frame end)
-
-Key just pressed, still held:
-  half_transition_count = 1
-  ended_down            = 1
-
-Key held from last frame, still held:
-  half_transition_count = 0   (no change this frame)
-  ended_down            = 1
-
-Key not touched at all:
-  half_transition_count = 0
-  ended_down            = 0
-```
-
-The two macros you'll use constantly:
-
-```c
-#define BUTTON_PRESSED(b)   ((b).half_transition_count > 0 && (b).ended_down)
-#define BUTTON_RELEASED(b)  ((b).half_transition_count > 0 && !(b).ended_down)
-```
-
-`BUTTON_PRESSED` is true only on the **first frame** the button goes down — like `mousedown`, not `mousemove`. This is what you want for "toggle gravity once per press."
-
----
-
-## Step 2 — UPDATE_BUTTON: Recording a Transition
-
-`platform_get_input` calls this macro when X11 reports a key or mouse event:
-
-```c
-#define UPDATE_BUTTON(button, is_down)                     \
-    do {                                                   \
-        if ((button).ended_down != (is_down)) {            \
-            (button).half_transition_count++;              \
-            (button).ended_down = (is_down);               \
-        }                                                  \
-    } while(0)
-```
-
-Read it step by step for a KeyPress event (is_down = 1):
-
-```
-Before:  ended_down=0, half_transition_count=0
-Check:   0 != 1  → true, so we enter the if
-After:   ended_down=1, half_transition_count=1
-```
-
-For a KeyRelease event (is_down = 0) on the same frame (rare but possible):
-
-```
-Before:  ended_down=1, half_transition_count=1
-Check:   1 != 0  → true
-After:   ended_down=0, half_transition_count=2
-```
-
-The `do { ... } while(0)` wrapper makes the macro safe inside an `if` without braces. This is a standard C macro idiom — it forces the macro to behave like a single statement.
-
----
-
-## Step 3 — prepare_input_frame: Reset Per-Frame Data
-
-At the start of each frame we zero the transition counts but **keep** `ended_down`:
-
-```c
-/* Already in game.c from lesson 01: */
-void prepare_input_frame(GameInput *input) {
-    input->mouse.left.half_transition_count  = 0;
-    input->mouse.right.half_transition_count = 0;
-    input->escape.half_transition_count      = 0;
-    input->reset.half_transition_count       = 0;
-    input->gravity.half_transition_count     = 0;
-    input->mouse.prev_x = input->mouse.x;
-    input->mouse.prev_y = input->mouse.y;
+/* draw_rect: fill an axis-aligned rectangle.
+ *
+ * Clips against the canvas edge so callers can pass coordinates that
+ * partially exceed the canvas without crashing.  The inner loop writes
+ * a whole row at once — the compiler will vectorise this with SIMD. */
+static void draw_rect(GameBackbuffer *bb, int x, int y, int w, int h,
+                      uint32_t color) {
+  /* Clamp to canvas bounds — don't let the fill overflow the pixel array. */
+  int x0 = (x < 0)             ? 0          : x;
+  int y0 = (y < 0)             ? 0          : y;
+  int x1 = (x + w > bb->width) ? bb->width  : x + w;
+  int y1 = (y + h > bb->height)? bb->height : y + h;
+  for (int py = y0; py < y1; py++) {
+    uint32_t *row = bb->pixels + py * bb->width;
+    for (int px = x0; px < x1; px++)
+      row[px] = color;
+  }
 }
-```
 
-Why not reset `ended_down`? Because if you're holding a key, the OS only sends one KeyPress event. It does NOT re-send it every frame. So if we zeroed `ended_down`, the key would appear "released" on every frame after the first.
+/* draw_rect_outline: four 1-pixel-thick edges. */
+static void draw_rect_outline(GameBackbuffer *bb, int x, int y, int w, int h,
+                               uint32_t color) {
+  draw_rect(bb, x,         y,         w, 1, color); /* top    */
+  draw_rect(bb, x,         y + h - 1, w, 1, color); /* bottom */
+  draw_rect(bb, x,         y,         1, h, color); /* left   */
+  draw_rect(bb, x + w - 1, y,         1, h, color); /* right  */
+}
 
-The loop is:
-
-```
-Frame N:   KeyPress arrives  → UPDATE_BUTTON sets ended_down=1, count=1
-Frame N+1: prepare clears count to 0, ended_down stays 1
-           No new KeyPress → count stays 0, ended_down stays 1
-Frame N+2: same
-...
-Frame M:   KeyRelease arrives → UPDATE_BUTTON sets ended_down=0, count=1
-```
-
-So `ended_down = 1` means "held right now." `count > 0` means "changed this frame."
-
----
-
-## Step 4 — LineBitmap: A 1-Bit Canvas
-
-We need to store which pixels have been drawn on. We do NOT store the color — line pixels are always `COLOR_LINE`. We only need a flag.
-
-```c
-/* Already defined in game.h: */
-typedef struct {
-    uint8_t pixels[CANVAS_W * CANVAS_H];
-} LineBitmap;
-```
-
-`uint8_t` is an unsigned 8-bit integer (0–255). We use it as a boolean: 0 = empty, 1 = has line.
-
-Memory: 640 × 480 × 1 byte = **307,200 bytes = 300 KB**. Small enough to live inside `GameState` without a heap allocation.
-
-Address formula — same pattern as the backbuffer:
-
-```
-index = y * CANVAS_W + x
-
-Pixel at (5, 2):
-  index = 2 * 640 + 5 = 1285
-```
-
-To set a pixel: `lb->pixels[y * CANVAS_W + x] = 1;`
-To clear all:   `memset(lb->pixels, 0, sizeof(lb->pixels));`
-
----
-
-## Step 5 — Bresenham Line: stamp_circle + draw_brush_line
-
-A mouse drag goes from `(prev_x, prev_y)` to `(x, y)`. If you just stamp a circle at the endpoint you get gaps when the mouse moves fast. We need to fill every pixel along the path.
-
-Bresenham's line algorithm walks from one point to another in integer steps, always choosing the pixel closest to the ideal line. No division, no floating point.
-
-Here is the algorithm with a concrete example first:
-
-```
-Draw a line from (2,1) to (6,4):
-  dx = 6-2 = 4
-  dy = 4-1 = 3
-  Step in x (longer axis).
-  For each x from 2 to 6, compute the nearest y.
-
-  x=2, y=1   ← start
-  x=3, y=2
-  x=4, y=2
-  x=5, y=3
-  x=6, y=4   ← end
-
-The algorithm uses integer error accumulation instead of floats.
-```
-
-Now the brush version. Instead of setting one pixel per step, we stamp a filled circle (radius = brush size):
-
-Add these functions to `game.c`:
-
-```c
-static void stamp_circle(LineBitmap *lb, int cx, int cy, int r, uint8_t val) {
-    /*
-     * r*r test avoids sqrt — just compare squared distances.
-     * For r=3: pixels within 9 units² of center are filled.
-     */
-    for (int dy = -r; dy <= r; dy++) {
-        for (int dx = -r; dx <= r; dx++) {
-            if (dx*dx + dy*dy <= r*r) {
-                int px = cx + dx;
-                int py = cy + dy;
-                if (px >= 0 && px < CANVAS_W && py >= 0 && py < CANVAS_H) {
-                    lb->pixels[py * CANVAS_W + px] = val;
-                }
-            }
-        }
+/* draw_rect_blend: alpha-blend a rectangle over the existing pixels.
+ *
+ * out_channel = (src * alpha + dst * (255 - alpha)) >> 8
+ *
+ * alpha = 0   → completely transparent (nothing drawn)
+ * alpha = 255 → completely opaque (same as draw_rect)
+ * alpha = 128 → 50% blend
+ *
+ * Use for translucent overlays (e.g. the level-complete panel). */
+static void draw_rect_blend(GameBackbuffer *bb, int x, int y, int w, int h,
+                             uint32_t color, int alpha) {
+  uint32_t sr = (color >> 16) & 0xFF;
+  uint32_t sg = (color >>  8) & 0xFF;
+  uint32_t sb =  color        & 0xFF;
+  int x0 = (x < 0)             ? 0          : x;
+  int y0 = (y < 0)             ? 0          : y;
+  int x1 = (x + w > bb->width) ? bb->width  : x + w;
+  int y1 = (y + h > bb->height)? bb->height : y + h;
+  for (int py = y0; py < y1; py++) {
+    uint32_t *row = bb->pixels + py * bb->width;
+    for (int px = x0; px < x1; px++) {
+      uint32_t d  = row[px];
+      uint32_t dr = (d >> 16) & 0xFF;
+      uint32_t dg = (d >>  8) & 0xFF;
+      uint32_t db =  d        & 0xFF;
+      row[px] = GAME_RGB(
+          (sr * alpha + dr * (255 - alpha)) >> 8,
+          (sg * alpha + dg * (255 - alpha)) >> 8,
+          (sb * alpha + db * (255 - alpha)) >> 8);
     }
-}
-
-static void draw_brush_line(LineBitmap *lb,
-                             int x0, int y0,
-                             int x1, int y1,
-                             int radius) {
-    /*
-     * Bresenham's line algorithm.
-     * Walks from (x0,y0) to (x1,y1) one pixel at a time.
-     * At each step, stamps a circle of the given radius.
-     */
-    int dx =  abs(x1 - x0);
-    int dy = -abs(y1 - y0);
-    int sx = x0 < x1 ? 1 : -1;   /* step direction: +1 or -1 */
-    int sy = y0 < y1 ? 1 : -1;
-    int err = dx + dy;            /* error accumulator */
-
-    while (1) {
-        stamp_circle(lb, x0, y0, radius, 1);
-
-        if (x0 == x1 && y0 == y1) break;
-
-        int e2 = 2 * err;
-        if (e2 >= dy) { err += dy; x0 += sx; }
-        if (e2 <= dx) { err += dx; y0 += sy; }
-        /*
-         * e2 = 2*err is compared against dy and dx to decide
-         * whether to step in x, y, or both.
-         * This keeps the line as straight as possible.
-         */
-    }
+  }
 }
 ```
 
+**What's happening:**
+
+- The unsigned cast in `draw_pixel` is a classic C micro-optimisation: one comparison instead of two.  You'll see it everywhere in systems code.
+- `draw_rect` clamps to the canvas edge so you never need to check bounds before calling it.  Passing `x = -5, w = 100` is fine — it draws only the visible part.
+- `draw_rect_blend` does the standard `src over dst` alpha blend in integer arithmetic (no floats).  Shifting right by 8 is an integer divide by 256 — close enough to 255 for visual purposes and much cheaper.
+
 ---
 
-## Step 6 — Rendering Lines
+## Step 3: `game_render()` — centralise all drawing
 
-When we render, we scan every pixel in the LineBitmap. If it is non-zero, we write `COLOR_LINE` to the backbuffer at the same position.
-
-Add this to `game.c`:
+Move the canvas-clear from `main()` into a proper `game_render` function:
 
 ```c
-static void render_lines(const LineBitmap *lb, GameBackbuffer *bb) {
-    /*
-     * Scan all 307,200 pixels.
-     * Branchy, but modern CPUs handle this well.
-     * Optimization (if ever needed): SIMD or dirty-rect tracking.
-     */
-    for (int y = 0; y < CANVAS_H; y++) {
-        for (int x = 0; x < CANVAS_W; x++) {
-            if (lb->pixels[y * CANVAS_W + x]) {
-                bb->pixels[y * bb->width + x] = COLOR_LINE;
-            }
-        }
-    }
+/* src/game.c  —  game_render (Lesson 02 version) */
+
+void game_render(const GameState *state, GameBackbuffer *bb) {
+  /* Clear canvas to sky-blue each frame.
+   * We do this by filling the entire pixel array with the background color.
+   * In later lessons this loop gets replaced by a single draw_rect call. */
+  int total = bb->width * bb->height;
+  for (int i = 0; i < total; i++)
+    bb->pixels[i] = COLOR_BG;
+
+  /* Draw a demo rectangle so we can see the drawing primitives work. */
+  draw_rect(bb, 200, 150, 240, 180, GAME_RGB(255, 220, 100));  /* gold fill  */
+  draw_rect_outline(bb, 200, 150, 240, 180, COLOR_LINE);        /* dark border */
 }
 ```
 
----
-
-## Step 7 — Wire It All Together
-
-Update `game_update` and `game_render` in `game.c`:
+Update `game.h` to declare `game_render`:
 
 ```c
-#define BRUSH_RADIUS 4
-
-void game_update(GameState *state, GameInput *input, float delta_time) {
-    (void)delta_time;
-
-    /* Escape → quit */
-    if (BUTTON_PRESSED(input->escape)) {
-        state->should_quit = 1;
-        return;
-    }
-
-    /* R key → clear all lines */
-    if (BUTTON_PRESSED(input->reset)) {
-        memset(state->lines.pixels, 0, sizeof(state->lines.pixels));
-    }
-
-    /* Left mouse held → draw a line from prev to current position */
-    if (input->mouse.left.ended_down) {
-        draw_brush_line(
-            &state->lines,
-            input->mouse.prev_x, input->mouse.prev_y,
-            input->mouse.x,      input->mouse.y,
-            BRUSH_RADIUS
-        );
-    }
-}
-
-void game_render(const GameState *state, GameBackbuffer *backbuffer) {
-    /* 1. Fill background */
-    draw_rect(backbuffer, 0, 0, backbuffer->width, backbuffer->height, COLOR_BG);
-
-    /* 2. Draw lines on top */
-    render_lines(&state->lines, backbuffer);
-}
+/* src/game.h  —  function declarations (add) */
+void game_render(const GameState *state, GameBackbuffer *backbuffer);
 ```
 
-Note the render order: background first, then lines. Each frame we re-fill the background and then re-draw the lines from the LineBitmap. This is the **double-buffer, clear-and-redraw** pattern — every frame is a fresh paint.
+Update the main loop in both backends — replace the manual clear loop with:
+
+```c
+/* in main(), inside the game loop — both backends */
+game_render(&state, &bb);
+platform_display_backbuffer(&bb);
+```
 
 ---
 
-## Build & Run
+## Step 4: Why the R↔B swap matters (Raylib only)
+
+Here is what happens to a pure-red pixel `GAME_RGB(255, 0, 0) = 0xFFFF0000`:
+
+| Stage | Value | Bytes in memory (little-endian) |
+|-------|-------|---------------------------------|
+| After `GAME_RGB(255,0,0)` | `0xFFFF0000` | `[0x00, 0x00, 0xFF, 0xFF]` = B,G,R,A |
+| Raylib reads as RGBA      | R=0x00, G=0x00, B=0xFF, A=0xFF | Appears **blue** |
+| After R↔B swap: `0xFF0000FF` | `[0xFF, 0x00, 0x00, 0xFF]` | R=0xFF → **red** ✓ |
+
+X11 reads XImage bytes natively as BGR — matching our [B,G,R,A] storage — so no swap is needed there.
+
+**Rule:** Test with a bright-red rectangle on both backends to confirm colors are correct before adding game content.
+
+---
+
+## Build and run
 
 ```bash
-cd course
-clang -Wall -Wextra -O2 -o sugar \
-    src/main_x11.c src/game.c src/levels.c \
-    -lX11 -lm
-./sugar
+# Raylib
+clang -Wall -Wextra -std=c99 -O0 -g -DDEBUG -fsanitize=address,undefined \
+      -o build/game src/main_raylib.c src/game.c \
+      -lraylib -lm -lpthread -ldl
+./build/game
+
+# X11
+clang -Wall -Wextra -std=c99 -O0 -g -DDEBUG -fsanitize=address,undefined \
+      -o build/game src/main_x11.c src/game.c \
+      -lX11 -lm
+./build/game
 ```
 
-**What you should see:**
-Hold the left mouse button and drag — dark lines appear. Draw ramps, bowls, anything. Press R to erase everything. Lines persist across frames until erased.
+**Expected output:** A sky-blue canvas with a gold rectangle centered on screen with a dark border.
 
 ---
 
-## Key Concepts
+## Exercises
 
-- `GameButtonState`: two fields — `ended_down` (is it held?) and `half_transition_count` (did it change this frame?). The pair together tell you everything about a button.
-- `BUTTON_PRESSED(b)`: true only on the frame the button first goes down. Use for one-shot actions (toggle, reset).
-- `ended_down` is **not** reset by `prepare_input_frame` — the OS only sends one KeyPress event per press, so we must remember the held state ourselves.
-- `LineBitmap pixels[y*W+x]`: 1 byte per canvas pixel used as a boolean. Zero = empty, non-zero = line.
-- Bresenham's line: integer-only line rasterisation. Avoids floating-point by tracking an integer error term.
-- `stamp_circle` with `dx*dx + dy*dy <= r*r`: fills a circle without `sqrt`. The squared-distance comparison is faster and exact.
-- Clear-and-redraw: every frame starts by filling the backbuffer with the background color. Persistent state lives in `LineBitmap` (and later `GrainPool`), not in the pixels themselves.
+1. Call `draw_rect_blend` to draw a semi-transparent black overlay over the whole canvas (use `alpha = 100`).  What does the sky-blue look like at 40% opacity?
+2. Write a `draw_circle` function using the same `draw_pixel` helper.  The formula for a filled circle is `dx*dx + dy*dy <= r*r`.
+3. Experiment: pass `x = -50` to `draw_rect` with `w = 100`.  Verify only the right 50 pixels are drawn (no crash, no garbage).
 
 ---
 
-## Exercise
+## What's next
 
-Change `BRUSH_RADIUS` to `8` and rebuild. Lines will be much thicker. Then try `1` for a single-pixel pen. Notice that at radius 1 fast mouse movement leaves gaps — that's exactly what `draw_brush_line` (vs just stamping at the endpoint) is solving.
+In Lesson 03 we add the full input system — mouse position, left-button state,
+and keyboard keys — using the `GameInput` double-buffer pattern.

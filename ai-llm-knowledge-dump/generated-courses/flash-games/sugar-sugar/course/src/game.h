@@ -15,6 +15,27 @@
 #define GAME_H
 
 #include <stdint.h> /* uint32_t, uint8_t  — like TypeScript's number types */
+#include "utils/audio.h" /* GameAudioState, SOUND_ID, AudioOutputBuffer     */
+
+/* ===================================================================
+ * DEBUG HELPERS
+ *
+ * ASSERT(expr) — traps the debugger if expr is false (debug builds only).
+ * DEBUG_TRAP() — unconditional breakpoint.
+ *
+ * In release builds (-DDEBUG not set) both expand to nothing → zero cost.
+ * In debug builds (-DDEBUG set via build-dev.sh) they call __builtin_trap()
+ * which halts the program and lets you inspect the call stack.
+ *
+ * JS analogy: like `console.assert(expr)` but fatal.
+ * =================================================================== */
+#ifdef DEBUG
+  #define DEBUG_TRAP() __builtin_trap()
+  #define ASSERT(expr) do { if (!(expr)) { DEBUG_TRAP(); } } while (0)
+#else
+  #define DEBUG_TRAP() ((void)0)
+  #define ASSERT(expr) ((void)(expr))
+#endif
 
 /* ===================================================================
  * COLOR SYSTEM
@@ -355,6 +376,9 @@ typedef struct {
 
   /* ---- quit signal ---- */
   int should_quit; /* set to 1 by game_update to request exit  */
+
+  /* ---- audio ---- */
+  GameAudioState audio; /* procedural sound + music state           */
 } GameState;
 
 /* ===================================================================
@@ -383,5 +407,26 @@ void game_render(const GameState *state, GameBackbuffer *backbuffer);
 /* Level definitions — defined in levels.c, referenced in game.c */
 #define TOTAL_LEVELS 30
 extern LevelDef g_levels[TOTAL_LEVELS];
+
+/* ===================================================================
+ * AUDIO API  (implemented in audio.c)
+ *
+ * game_audio_init        — zero audio state, wire sample rate (call from game_init)
+ * game_play_sound        — fire-and-forget SFX at center pan
+ * game_play_sound_at     — fire-and-forget SFX with stereo position
+ * game_music_play_title    — start dreamy title-screen music (fades in)
+ * game_music_play_gameplay — start upbeat gameplay music (fades in)
+ * game_music_stop        — stop all music (fades out cleanly in sample loop)
+ * game_audio_update      — advance music sequencers + fade volumes (1× per frame)
+ * game_get_audio_samples — fill platform audio buffer (called by platform)
+ * =================================================================== */
+void game_audio_init(GameAudioState *audio, int samples_per_second);
+void game_play_sound(GameAudioState *audio, SOUND_ID sound);
+void game_play_sound_at(GameAudioState *audio, SOUND_ID sound, float pan);
+void game_music_play_title(GameAudioState *audio);
+void game_music_play_gameplay(GameAudioState *audio);
+void game_music_stop(GameAudioState *audio);
+void game_audio_update(GameAudioState *audio, float delta_time);
+void game_get_audio_samples(GameState *state, AudioOutputBuffer *buffer);
 
 #endif /* GAME_H */

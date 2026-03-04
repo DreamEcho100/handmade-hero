@@ -1,314 +1,295 @@
-# Lesson 12 — Audio: Platform Sound API
+# Lesson 12: Teleporters, Gravity Flip, and UI Buttons
 
-**By the end of this lesson you will have:**
-(Raylib backend only.) A short chime plays when a cup fills to 100%. A fanfare plays when all cups are filled and the level completes. Ambient music loops in the background during gameplay. The X11 backend compiles and runs silently — audio is purely additive.
+## What we're building
 
----
+Add the final two physics gadgets — teleporters (circle-triggered instant transport)
+and gravity flip (inverts all grain movement) — and the on-screen Reset and Gravity
+buttons in the HUD strip at the bottom of the playing screen.
 
-## Step 1 — The audio extension to `platform.h`
+## What you'll learn
 
-`platform.h` already declares three audio functions:
+- Circle distance test for teleporter entry detection
+- Teleport cooldown (`tpcd`) — prevents a grain from immediately re-entering the portal it just exited
+- `gravity_sign` — a single integer `±1` that inverts the entire physics engine
+- On-screen button hit testing with shared layout constants (prevents hover/render mismatch)
+- The reset shortcut (R key) and gravity shortcut (G key)
 
-```c
-// platform.h — already written
-void platform_play_sound(int sound_id);
-void platform_play_music(int music_id);
-void platform_stop_music(void);
-```
+## Prerequisites
 
-These are optional. A platform backend that doesn't support audio provides empty function bodies:
-
-```c
-// main_x11.c — stub implementations
-void platform_play_sound(int sound_id) { (void)sound_id; }
-void platform_play_music(int music_id) { (void)music_id; }
-void platform_stop_music(void)         { }
-```
-
-`(void)sound_id` suppresses the "unused parameter" compiler warning. The function body is empty. The binary compiles. No audio plays. The game still runs correctly.
-
-JS analogy: this is like providing a no-op implementation of an interface:
-```js
-const AudioBackend = {
-  playSound: (id) => {},   // stub — no-op
-  playMusic: (id) => {},
-  stopMusic: ()  => {},
-};
-```
+- Lesson 11 complete (color filters and multi-stream levels working)
 
 ---
 
-## Step 2 — `SOUND_ID` and `MUSIC_ID` enums in `sounds.h`
+## Step 1: Teleporters inside `update_grains`
+
+Add after the color-filter check (and before the settle check):
 
 ```c
-// sounds.h — already written
-typedef enum {
-    SOUND_CUP_FILL,       // short chime when one cup reaches 100%
-    SOUND_LEVEL_COMPLETE, // fanfare when all cups are filled
-    SOUND_COUNT
-} SOUND_ID;
+/* src/game.c  —  teleporter check inside update_grains */
 
-typedef enum {
-    MUSIC_GAMEPLAY,       // ambient loop during active levels
-    MUSIC_COUNT
-} MUSIC_ID;
+/* ---- Teleporter check (circle distance) ----
+ *
+ * Each Teleporter has two portals A and B.  When a grain comes within
+ * tp->radius pixels of portal A it is teleported to portal B (and vice versa).
+ *
+ * Cooldown: after teleporting, tpcd[i] is set to 6 frames.  On each frame
+ * it decrements toward 0.  While > 0 the grain is ineligible for teleport.
+ * Without cooldown, a grain at portal B would immediately be caught by the
+ * same teleporter (if B is also within the trigger radius) and bounce forever. */
+if (p->tpcd[i] > 0) {
+  p->tpcd[i]--;
+}
+
+{
+  int gx = (int)p->x[i], gy = (int)p->y[i];
+
+  if (p->tpcd[i] == 0) {
+    for (int t = 0; t < lv->teleporter_count; t++) {
+      Teleporter *tp = &lv->teleporters[t];
+
+      /* Squared distance to portal A */
+      int da = (gx - tp->ax) * (gx - tp->ax) + (gy - tp->ay) * (gy - tp->ay);
+      /* Squared distance to portal B */
+      int db = (gx - tp->bx) * (gx - tp->bx) + (gy - tp->by) * (gy - tp->by);
+      int r2 = tp->radius * tp->radius;
+
+      if (da <= r2) {
+        /* Grain is inside portal A → teleport to portal B */
+        p->x[i]   = (float)tp->bx;
+        p->y[i]   = (float)tp->by;
+        p->tpcd[i] = 6;
+        break;
+      }
+      if (db <= r2) {
+        /* Grain is inside portal B → teleport to portal A */
+        p->x[i]   = (float)tp->ax;
+        p->y[i]   = (float)tp->ay;
+        p->tpcd[i] = 6;
+        break;
+      }
+    }
+  }
+}
 ```
 
-The game calls `platform_play_sound(SOUND_CUP_FILL)`. It passes an `int` (the enum value) to the platform. The platform maps that integer to a specific audio file. The game never knows the filename, the sample rate, or the audio library.
+Add cooldown decrement at the top of each grain's update (before sub-steps):
 
-Adding a new sound: add a constant here and add a case in the Raylib backend. Zero changes to `game.c`.
+```c
+/* Near the top of the per-grain loop, before sub-steps */
+if (p->tpcd[i] > 0) p->tpcd[i]--;
+```
 
 ---
 
-## Step 3 — Where to call `platform_play_sound(SOUND_CUP_FILL)`
+## Step 2: Gravity flip
 
-A cup fills the moment `cup->collected` reaches `cup->required_count`. That happens inside `update_grains()` in `game.c`:
+`gravity_sign` is already in `GameState` (`+1` or `-1`).  The physics engine already
+uses it via `float grav = GRAVITY * (float)state->gravity_sign;`.
+
+Wire the G key and the on-screen button:
 
 ```c
-// game.c — inside update_grains(), cup AABB check
-if (color_ok && cup->collected < cup->required_count) {
-    cup->collected++;
+/* src/game.c  —  update_playing: gravity flip input */
+
+/* G key shortcut */
+if (state->level.has_gravity_switch && BUTTON_PRESSED(input->gravity)) {
+  state->gravity_sign = -state->gravity_sign;
+  /* SFX trigger added in Lesson 15 */
+}
+```
+
+Also handle the cyclic (wrap-around) behavior for levels where grains should
+re-enter from the opposite edge instead of disappearing:
+
+```c
+/* src/game.c  —  update_grains: replace "remove grain at floor" with: */
+
+if (iy >= H) {
+  if (lv->is_cyclic) {
+    /* Wrap to top of screen — sugar falls in a loop */
+    p->y[i] = 1.0f;
+    p->x[i] = nx;
+    continue;
+  } else {
     p->active[i] = 0;
-
-    // play chime exactly when the cup just reached 100%
-    if (cup->collected == cup->required_count) {
-        platform_play_sound(SOUND_CUP_FILL);
-    }
+    goto next_grain;
+  }
 }
-```
-
-The `if (cup->collected == cup->required_count)` guard fires exactly once per cup — on the frame the last grain lands. Not on every grain, not on every frame the cup is full.
-
----
-
-## Step 4 — Where to call level-complete and gameplay music
-
-`platform_play_sound(SOUND_LEVEL_COMPLETE)` fires when `check_win()` first returns true:
-
-```c
-// game.c — update_playing()
-if (check_win(state)) {
-    platform_play_sound(SOUND_LEVEL_COMPLETE);
-    platform_stop_music();              // silence the ambient loop
-    change_phase(state, PHASE_LEVEL_COMPLETE);
-}
-```
-
-`platform_play_music(MUSIC_GAMEPLAY)` fires once when a level starts:
-
-```c
-// game.c — change_phase()
-static void change_phase(GameState *state, GAME_PHASE next) {
-    state->phase       = next;
-    state->phase_timer = 0.0f;
-
-    if (next == PHASE_PLAYING || next == PHASE_FREEPLAY) {
-        platform_play_music(MUSIC_GAMEPLAY);
-    }
-    if (next == PHASE_TITLE) {
-        platform_stop_music();
-    }
-}
-```
-
-Music starts when entering `PHASE_PLAYING`. It stops when winning (above) or when going back to the title. Restarting a level calls `change_phase(state, PHASE_PLAYING)` which calls `platform_play_music()` again — Raylib restarts the stream from the beginning.
-
----
-
-## Step 5 — Why audio lives in `platform`, not `game`
-
-The game logic knows *when* to play a sound (cup fills, level ends). It does not know *how* — that depends on the OS, the audio library, the hardware.
-
-```
-game.c                    platform.h contract         main_raylib.c
-──────────────────────    ────────────────────────    ───────────────────────
-cup fills         ──────► platform_play_sound()  ──►  PlaySound(g_sounds[id])
-level completes   ──────► platform_play_sound()  ──►  PlaySound(g_sounds[id])
-level starts      ──────► platform_play_music()  ──►  PlayMusicStream(g_music)
-                          platform_stop_music()  ──►  StopMusicStream(g_music)
-```
-
-JS analogy: game code calls `audioContext.play(id)`. Whether that means WebAudio API, HTML5 `<audio>`, or a mock in tests is the platform's concern.
-
-If you port Sugar Sugar to SDL3 or WebAssembly, you write a new `main_sdl3.c` or `main_wasm.c` with the four mandatory functions plus the three audio functions. `game.c` is unchanged.
-
----
-
-## Step 6 — Raylib audio implementation
-
-Open `src/main_raylib.c`. The audio setup:
-
-```c
-// main_raylib.c — already written
-#include "raylib.h"
-#include "sounds.h"
-
-static Sound g_sounds[SOUND_COUNT];
-static Music g_music[MUSIC_COUNT];
-
-void platform_init(const char *title, int width, int height) {
-    InitWindow(width, height, title);
-    SetTargetFPS(60);
-
-    InitAudioDevice();  // must call before loading any audio
-
-    g_sounds[SOUND_CUP_FILL]       = LoadSound("assets/cup_fill.wav");
-    g_sounds[SOUND_LEVEL_COMPLETE]  = LoadSound("assets/level_complete.wav");
-    g_music[MUSIC_GAMEPLAY]         = LoadMusicStream("assets/gameplay.ogg");
-}
-```
-
-Sound effects vs. music streams:
-- `Sound` = entire audio file loaded into memory. Plays with `PlaySound()`. Good for short clips (< 2 s).
-- `Music` = streamed from disk frame-by-frame. Plays with `PlayMusicStream()` + `UpdateMusicStream()` every frame. Good for long loops.
-
-```c
-// main_raylib.c — audio function implementations
-void platform_play_sound(int sound_id) {
-    if (sound_id >= 0 && sound_id < SOUND_COUNT)
-        PlaySound(g_sounds[sound_id]);
-}
-
-void platform_play_music(int music_id) {
-    if (music_id >= 0 && music_id < MUSIC_COUNT) {
-        StopMusicStream(g_music[music_id]);  // reset to start
-        PlayMusicStream(g_music[music_id]);
-    }
-}
-
-void platform_stop_music(void) {
-    for (int i = 0; i < MUSIC_COUNT; i++)
-        StopMusicStream(g_music[i]);
-}
-```
-
-`UpdateMusicStream()` must be called every frame inside the game loop:
-
-```c
-// main_raylib.c — game loop
-while (!WindowShouldClose() && !state.should_quit) {
-    // ... input, update, render ...
-    for (int i = 0; i < MUSIC_COUNT; i++)
-        UpdateMusicStream(g_music[i]); // refills the audio buffer
-}
-```
-
-Without `UpdateMusicStream()` the music buffer runs dry and playback stops after a few seconds.
-
-Cleanup on exit:
-
-```c
-for (int i = 0; i < SOUND_COUNT; i++) UnloadSound(g_sounds[i]);
-for (int i = 0; i < MUSIC_COUNT; i++) UnloadMusicStream(g_music[i]);
-CloseAudioDevice();
 ```
 
 ---
 
-## Step 7 — Free CC0 sounds: freesound.org
+## Step 3: On-screen HUD buttons
 
-1. Go to [freesound.org](https://freesound.org).
-2. Search for "chime" or "bell ding". Filter by **CC0** license (Creative Commons Zero — no attribution required).
-3. Download as `.wav` (not `.mp3` — some builds of Raylib don't include an MP3 decoder).
-4. Place in `course/assets/cup_fill.wav`.
+Layout constants shared between update and render so hit tests always match:
 
-For the ambient loop, search "ambient music loop CC0", download as `.ogg` (Ogg Vorbis — universal Raylib support), place in `course/assets/gameplay.ogg`.
+```c
+/* src/game.c  —  UI layout constants (near top of file, after includes) */
+#define UI_BTN_Y    (CANVAS_H - 38)  /* y position of button row        */
+#define UI_BTN_H    28               /* button height                   */
+#define UI_RESET_X  10               /* x of Reset button               */
+#define UI_RESET_W  70               /* width of Reset button           */
+#define UI_GRAV_X   88               /* x of Gravity button             */
+#define UI_GRAV_W   100              /* width of Gravity button         */
+```
 
-Verify file names match what `platform_init()` loads.
+Add hover detection to `update_playing`:
+
+```c
+/* src/game.c  —  update_playing: button hover + click */
+
+int mx = input->mouse.x, my = input->mouse.y;
+
+/* Hover state (updated every frame for rendering) */
+state->reset_hover =
+  (mx >= UI_RESET_X && mx < UI_RESET_X + UI_RESET_W &&
+   my >= UI_BTN_Y   && my < UI_BTN_Y  + UI_BTN_H);
+
+state->gravity_hover =
+  state->level.has_gravity_switch &&
+  (mx >= UI_GRAV_X && mx < UI_GRAV_X + UI_GRAV_W &&
+   my >= UI_BTN_Y  && my < UI_BTN_Y  + UI_BTN_H);
+
+/* Click handling */
+if (BUTTON_PRESSED(input->mouse.left)) {
+  if (state->reset_hover) {
+    level_load(state, state->current_level);
+    return;  /* level_load resets everything; don't continue this frame */
+  }
+  if (state->gravity_hover) {
+    state->gravity_sign = -state->gravity_sign;
+    /* Don't return — other input can still run */
+  }
+}
+
+/* R key shortcut for reset */
+if (BUTTON_PRESSED(input->reset)) {
+  level_load(state, state->current_level);
+  return;
+}
+```
+
+Guard drawing so the player can't draw into the button strip:
+
+```c
+/* src/game.c  —  drawing guard in update_playing */
+
+/* Don't draw into the bottom UI strip */
+int over_ui = (my >= UI_BTN_Y - 4);
+if (input->mouse.left.ended_down && !over_ui) {
+  draw_brush_line(&state->lines,
+                  input->mouse.prev_x, input->mouse.prev_y,
+                  input->mouse.x, input->mouse.y, BRUSH_RADIUS);
+}
+```
 
 ---
 
-## Step 8 — Embedding sound as a C array with `xxd`
+## Step 4: Render teleporters
 
-If you want a single self-contained binary with no `assets/` folder:
+```c
+/* src/game.c  —  render_teleporters */
+
+static void render_teleporters(const LevelDef *lv, GameBackbuffer *bb) {
+  for (int t = 0; t < lv->teleporter_count; t++) {
+    const Teleporter *tp = &lv->teleporters[t];
+    int r = tp->radius;
+
+    /* Portal A — cyan */
+    draw_circle(bb,         tp->ax, tp->ay, r, COLOR_PORTAL_A);
+    draw_circle_outline(bb, tp->ax, tp->ay, r + 2, COLOR_PORTAL_A);
+
+    /* Portal B — orange */
+    draw_circle(bb,         tp->bx, tp->by, r, COLOR_PORTAL_B);
+    draw_circle_outline(bb, tp->bx, tp->by, r + 2, COLOR_PORTAL_B);
+  }
+}
+```
+
+---
+
+## Step 5: Render UI buttons
+
+```c
+/* src/game.c  —  render_ui_buttons */
+
+static void render_ui_buttons(const GameState *state, GameBackbuffer *bb) {
+  /* ---- Reset button ---- */
+  uint32_t reset_bg = state->reset_hover ? COLOR_BTN_HOVER : COLOR_BTN_NORMAL;
+  draw_rect(bb, UI_RESET_X, UI_BTN_Y, UI_RESET_W, UI_BTN_H, reset_bg);
+  draw_rect_outline(bb, UI_RESET_X, UI_BTN_Y, UI_RESET_W, UI_BTN_H,
+                    COLOR_BTN_BORDER);
+  /* Label added in Lesson 13 (font system) */
+
+  /* ---- Gravity button (only if level supports it) ---- */
+  if (state->level.has_gravity_switch) {
+    uint32_t grav_bg = state->gravity_hover ? COLOR_BTN_HOVER : COLOR_BTN_NORMAL;
+    draw_rect(bb, UI_GRAV_X, UI_BTN_Y, UI_GRAV_W, UI_BTN_H, grav_bg);
+    draw_rect_outline(bb, UI_GRAV_X, UI_BTN_Y, UI_GRAV_W, UI_BTN_H,
+                      COLOR_BTN_BORDER);
+  }
+}
+```
+
+Add to `render_playing`:
+
+```c
+render_teleporters(&state->level, bb);
+render_filters(&state->level, bb);
+render_cups(&state->level, bb);
+/* render grains */
+render_ui_buttons(state, bb);
+```
+
+---
+
+## Example level with teleporters and gravity flip
+
+```c
+/* src/levels.c  —  Level 8: "Teleport + Gravity" */
+[8] = {
+  .index = 8,
+  .emitter_count = 1,
+  .emitters = {
+    [0] = { .x = 320, .y = 30, .grains_per_second = 70 },
+  },
+  .cup_count = 1,
+  .cups = {
+    [0] = { .x = 270, .y = 380, .w = 100, .h = 60,
+            .required_color = GRAIN_WHITE, .required_count = 120 },
+  },
+  .teleporter_count = 1,
+  .teleporters = {
+    [0] = { .ax = 100, .ay = 240, .bx = 540, .by = 240, .radius = 15 },
+  },
+  .has_gravity_switch = 1,
+},
+```
+
+---
+
+## Build and run
 
 ```bash
-xxd -i cup_fill.wav > cup_fill_data.h
+./build-dev.sh -r
 ```
 
-This generates a file like:
-
-```c
-// cup_fill_data.h — generated by xxd -i cup_fill.wav
-unsigned char cup_fill_wav[] = {
-  0x52, 0x49, 0x46, 0x46, 0xac, 0x58, 0x00, 0x00,  // RIFF....
-  0x57, 0x41, 0x56, 0x45, 0x66, 0x6d, 0x74, 0x20,  // WAVEfmt
-  // ... thousands more bytes ...
-};
-unsigned int cup_fill_wav_len = 22700;
-```
-
-Load it in Raylib using `LoadSoundFromMemory()`:
-
-```c
-#include "cup_fill_data.h"
-
-// in platform_init():
-Wave w = LoadWaveFromMemory(".wav", cup_fill_wav, (int)cup_fill_wav_len);
-g_sounds[SOUND_CUP_FILL] = LoadSoundFromWave(w);
-UnloadWave(w); // the Sound has its own copy now; we can free the Wave
-```
-
-The `.wav` file bytes are compiled directly into the binary. No separate `assets/` directory is needed at runtime.
+**Expected output:**
+- Levels with teleporters show cyan and orange circles.  Grains entering one circle appear at the other.
+- Levels with `has_gravity_switch = 1` show the Gravity button in the HUD.  Clicking it (or pressing G) flips grain gravity.
+- The Reset button clears the level and all drawn lines.
 
 ---
 
-## Step 9 — X11 stubs compile and run silently
+## Exercises
 
-The X11 backend in `main_x11.c` already contains the three stub implementations shown in Step 1. The key point: **all three functions must exist** even if empty, because `game.c` calls them and the linker must resolve those symbols.
-
-```
-Linker's view:
-  game.o        → calls platform_play_sound (unresolved)
-  main_x11.o    → defines platform_play_sound = empty function (resolved ✓)
-```
-
-If you remove the stub and build:
-```
-undefined reference to `platform_play_sound'
-```
-
-The stubs make audio an additive feature — add it when you have a backend that supports it, leave the stubs when you don't.
+1. Create a level where the solution requires exactly one gravity flip: grains fall down, you flip, they fill a cup above the emitter.
+2. What happens if `tpcd` is set to 0 instead of 6?  Run the simulation with `teleporter_count = 1` and `ax == bx, ay == by` (same position for both portals) to visualise the infinite-loop bug.
+3. Add a visual indicator on the Gravity button that shows the current gravity direction (e.g., draw a small down-arrow or up-arrow).
 
 ---
 
-## Build & Run (X11 — no audio)
+## What's next
 
-```bash
-clang -Wall -Wextra -O2 -o sugar \
-    src/main_x11.c src/game.c src/levels.c -lX11 -lm
-./sugar
-```
-
-**What you should see:** full game, no audio. No errors, no warnings about missing audio.
-
-## Build & Run (Raylib — with audio)
-
-```bash
-# Requires raylib installed; see build_raylib.sh
-bash build_raylib.sh
-./sugar_raylib
-```
-
-**What you should see:** same game, plus:
-- A chime plays the moment each cup hits 100%.
-- A fanfare plays on level complete; ambient music stops.
-- Ambient music loops continuously during gameplay.
-
----
-
-## Key Concepts
-
-- `platform_play_sound(int)` / `platform_play_music(int)` / `platform_stop_music()`: the three audio functions in `platform.h`. The game calls them; the platform implements them.
-- `SOUND_ID` / `MUSIC_ID` enums in `sounds.h`: typed constants that map sound names to integer IDs. The platform converts IDs to file loads.
-- **Stub = empty function body**: `void platform_play_sound(int id) { (void)id; }` compiles and links. Audio is additive — the game doesn't break without it.
-- `Sound` vs. `Music` in Raylib: `Sound` is fully loaded into memory (short clips). `Music` is streamed; call `UpdateMusicStream()` every frame.
-- `xxd -i file.wav > data.h`: converts a binary file to a C array. Embed audio directly in the binary with `LoadSoundFromWave(LoadWaveFromMemory(...))`.
-- Audio belongs in `platform`, not `game`: the game knows *when* to play; the platform knows *how*. Same separation-of-concerns principle as rendering.
-- Play-on-transition: call `platform_play_music()` inside `change_phase()` when entering `PHASE_PLAYING`. Stop on win and on title return.
-
----
-
-## Exercise
-
-Add a second sound, `SOUND_GRAIN_LAND`, that plays a soft tick when any grain is deactivated inside a cup (not just on the cup-full event). In `sounds.h`, add `SOUND_GRAIN_LAND` before `SOUND_COUNT`. In `main_x11.c`, add a stub. In `main_raylib.c`, load a short tick sound (`assets/grain_land.wav`) at index `SOUND_GRAIN_LAND`. In `game.c`, call `platform_play_sound(SOUND_GRAIN_LAND)` every time `p->active[i] = 0` inside the cup collection block. Build and run — you should hear a rapid ticking as grains fall into cups.
+In Lesson 13 we add the bitmap font system and the complete HUD — level numbers,
+button labels, and the title-screen level-select grid with proper text.

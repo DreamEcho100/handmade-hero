@@ -1,81 +1,124 @@
-# Snake — Javidx9 Course Port
+# Snake in C — A Handmade Hero-Style Game Course
 
-## What is this?
+Build a complete Snake clone from a blank window to a polished, playable game with audio —
+while learning the C patterns used in Casey Muratori's Handmade Hero series.
 
-A C port of [javidx9's (OneLoneCoder) Snake tutorial](https://github.com/OneLoneCoder/videos/blob/master/OneLoneCoder_Snake.cpp) from Windows/C++/console to Linux/C with two rendering backends: X11 and Raylib. The port follows the Handmade Hero philosophy — all OS-specific code lives in thin platform backends (`main_x11.c`, `main_raylib.c`), while `snake.c` / `snake.h` are pure C with no platform dependencies.
+---
 
-## How to play
+## Prerequisites
+
+- Basic C syntax: variables, loops, functions, structs
+- Ability to read pointer notation (`*ptr`, `ptr->field`)
+- Linux with `clang` installed
+- One of the two display backends (see Build section)
+
+No prior game programming or graphics experience required.
+
+---
+
+## What you'll build
+
+- 60×20 cell grid, 20 px cells → 1200×460 px window
+- CPU pixel buffer rendered to GPU texture each frame
+- Ring-buffer snake: no `memmove`, no linked list, no `malloc` in the game loop
+- Delta-time tick-based movement with speed scaling
+- Score + best-score header panel
+- Wall and self-collision with game-over overlay
+- Procedural sound effects for food-eaten and game-over (no audio files needed)
+- Restart preserving best score
+- Two backends: X11/GLX (Linux native) and Raylib (portable)
+
+---
+
+## Build instructions
+
+### X11/GLX backend
+
+```bash
+sudo apt install libx11-dev libxkbcommon-dev libasound2-dev
+cd course/
+chmod +x build-dev.sh
+./build-dev.sh --backend x11
+./build/snake_x11
+```
+
+### Raylib backend
+
+```bash
+sudo apt install libraylib-dev   # Ubuntu 22.04+
+# or build from source: https://github.com/raysan5/raylib
+cd course/
+./build-dev.sh --backend raylib
+./build/snake_raylib
+```
+
+### Debug build (AddressSanitizer + UBSanitizer)
+
+```bash
+./build-dev.sh --backend x11 --debug
+```
+
+### Controls
 
 | Key | Action |
 |-----|--------|
-| `←` / `A` | Turn counter-clockwise (relative left) |
-| `→` / `D` | Turn clockwise (relative right) |
-| `R` / `Space` | Restart after game over |
-| `Q` / `Esc` | Quit |
+| Left / A | Turn left (CCW) |
+| Right / D | Turn right (CW) |
+| R / Space | Restart after game over |
+| Q / Escape | Quit |
 
-The snake moves continuously. Eat red food to grow (+5 segments). Hit a wall or yourself and it's game over. Speed increases every 3 points.
+---
 
-## How to build
+## Lesson list
 
-**X11 backend**
-```bash
-# Install dependencies (Ubuntu/Debian)
-sudo apt install libx11-dev libxkbcommon-dev
+| # | File | Summary |
+|---|------|---------|
+| 01 | `01-window-and-backbuffer.md` | Open a window; allocate a CPU pixel buffer; upload to GPU each frame |
+| 02 | `02-drawing-primitives-and-grid.md` | `draw_rect`; colour packing with `GAME_RGB`; pixel-index math; draw grid border |
+| 03 | `03-input.md` | `GameButtonState`; `UPDATE_BUTTON`; double-buffered `GameInput inputs[2]` |
+| 04 | `04-game-structure.md` | Split into `game.h` / `game.c`; `GameState`; init/update/render stubs |
+| 05 | `05-snake-data-and-ring-buffer.md` | `Segment[MAX_SNAKE]` ring buffer; `head` / `tail` / `length` wrap arithmetic |
+| 06 | `06-snake-movement.md` | Delta-time accumulator; `SNAKE_DIR` enum; `DX`/`DY`; `move_interval` |
+| 07 | `07-turn-input.md` | `next_direction` staging; modular turn formula; 180° U-turn guard |
+| 08 | `08-food-spawning.md` | `snake_spawn_food`; retry loop; `srand`; eat → `grow_pending` → score |
+| 09 | `09-collision-detection.md` | Wall + self collision; `game_over`; `draw_text` + 5×7 bitmap font |
+| 10 | `10-restart-and-speed-scaling.md` | R restarts; `best_score` preserved; speed decay; `HEADER_ROWS` panel |
+| 11 | `11-audio.md` | `SoundInstance` phase accumulator; food-eaten + game-over SFX; volume ramping |
+| 12 | `12-polish-and-utils-refactor.md` | `draw_rect_blend` overlay; refactor draw utils into `utils/`; final game |
 
-cd course
-chmod +x build_x11.sh
-./build_x11.sh
-./build/x11
-```
-
-**Raylib backend**
-```bash
-# Install dependencies (Ubuntu 22.04+)
-sudo apt install libraylib-dev
-
-cd course
-chmod +x build_raylib.sh
-./build_raylib.sh
-./build/raylib
-```
-
-Both binaries are written to `course/build/`.
+---
 
 ## Architecture
 
 ```
-snake.h / snake.c            — pure game logic, zero OS dependencies
-platform.h                   — platform API contract
-main_x11.c                   — X11 + OpenGL/GLX backend
-main_raylib.c                — Raylib backend
+game.c  ──▶  SnakeBackbuffer (CPU RAM)  ──▶  GPU texture  ──▶  screen
+audio.c ──▶  AudioOutputBuffer          ──▶  ALSA / Raylib ──▶  speakers
 ```
 
-The game renders into a `SnakeBackbuffer` — a CPU-side `uint32_t *pixels` array in `0xAARRGGBB` format. Each frame, the platform layer uploads that buffer to the GPU. No platform drawing API is ever called from game code.
+`game.c` and `audio.c` never call X11 or Raylib. The platform backends
+(`main_x11.c`, `main_raylib.c`) are thin translators: OS events → `GameInput`,
+OS timer → `delta_time`, CPU pixels → GPU texture, CPU audio → OS audio.
 
-The snake body is stored as a **ring buffer** (`segments[MAX_SNAKE]` with `head`, `tail`, and `length`), replacing the original C++ `std::list`. New head positions are written at `(head+1) % MAX_SNAKE`; the tail advances unless `grow_pending > 0`.
+---
 
-The main loop is **delta-time driven**: `snake_update(state, input, delta_time)` accumulates `move_timer` each frame and fires a move step when `move_timer >= move_interval`. Subtracting (not zeroing) `move_interval` preserves sub-frame overshoot for consistent speed at any framerate.
+## What you'll have achieved by the end
 
-Input uses `GameButtonState` (from Casey Muratori's Handmade Hero): direction turns fire only on "just pressed" (`ended_down && half_transition_count > 0`), preventing held-key drift.
+- A **complete, playable Snake game** compiled from first principles
+- Deep understanding of the **CPU backbuffer → GPU texture pipeline**
+- Working mental model of **ring buffers** (no `memmove`, no linked list)
+- Familiarity with the **platform-independence pattern** from Handmade Hero
+- Experience with **delta-time accumulation**, enums, fixed arrays, manual alpha blending
+- Introduction to **procedural audio** (phase accumulators, volume ramping, click prevention)
+- A clear map from JS patterns (`requestAnimationFrame`, `Array`, event listeners) to C equivalents
+- Foundation for the companion **Tetris course**, which extends this with a full MIDI sequencer
 
-## Lessons
+---
 
-| # | Title | What you learn |
-|---|-------|----------------|
-| 1 | Open a window (X11 + Raylib) | Black window, Q to quit; platform loop skeleton |
-| 2 | Draw the arena | `SnakeBackbuffer`, `draw_rect`, header rows, border walls |
-| 3 | Snake ring buffer — draw static snake | `segments[]` ring buffer, `head`/`tail`/`length`, drawing body cells |
-| 4 | Movement — snake advances each tick | Delta-time `move_timer`, advancing head, advancing tail |
-| 5 | Input — turn left/right | `GameButtonState`, `UPDATE_BUTTON`, CW/CCW turn math `(dir±1)%4` |
-| 6 | Collision — walls + self | Wall bounds check, ring-buffer self-collision walk, `game_over` flag |
-| 7 | Food — spawn, eat, grow | `snake_spawn_food()`, `grow_pending`, food-not-on-snake placement loop |
-| 8 | Score + death screen + restart | Score counter, `best_score` preservation, game over overlay, restart key |
-| 9 | File split: snake.h/c + platform.h | Clean header/impl separation, same behavior, `prepare_input_frame` |
-| 10 | Speed scaling + polish | `move_interval` decrease every 3 points, 0.05s floor, final Valgrind clean |
+## Companion course
 
-## Original source
+**Tetris** — extends this architecture with:
+- Full MIDI music sequencer in `audio.c`
+- More complex piece-rotation game logic
+- `COURSE-BUILDER-IMPROVEMENTS.md` comparing both courses
 
-Original C++ Windows console implementation by **javidx9 / OneLoneCoder**:
-- Video: [Snake, but Simple! (javidx9)](https://www.youtube.com/watch?v=d1F_1ADp9iY)
-- Code: [`OneLoneCoder_Snake.cpp`](https://github.com/OneLoneCoder/videos/blob/master/OneLoneCoder_Snake.cpp)
-- License: OLC-3 (see original repo)
+Located at: `ai-llm-knowledge-dump/generated-courses/javidx9/tetris/`

@@ -12,8 +12,7 @@
  */
 
 #include "game.h"
-#include "font.h"
-#include "sounds.h"
+#include "utils/font.h"
 
 #include <math.h>   /* fabsf()         */
 #include <stdlib.h> /* rand()          */
@@ -145,6 +144,9 @@ void game_update(GameState *state, GameInput *input, float dt) {
   case PHASE_COUNT:
     break; /* unreachable — satisfies the compiler */
   }
+
+  /* Advance the music sequencer each frame */
+  game_audio_update(&state->audio, dt);
 }
 
 void game_render(const GameState *state, GameBackbuffer *bb) {
@@ -173,6 +175,26 @@ void game_render(const GameState *state, GameBackbuffer *bb) {
 static void change_phase(GameState *state, GAME_PHASE next) {
   state->phase = next;
   state->phase_timer = 0.0f;
+
+  /* Audio: trigger sounds / music appropriate for the new phase */
+  switch (next) {
+    case PHASE_TITLE:
+      game_music_play_title(&state->audio);
+      break;
+    case PHASE_PLAYING:
+      game_music_play_gameplay(&state->audio);
+      game_play_sound(&state->audio, SOUND_TITLE_SELECT);
+      break;
+    case PHASE_LEVEL_COMPLETE:
+      game_music_stop(&state->audio);
+      game_play_sound(&state->audio, SOUND_LEVEL_COMPLETE);
+      break;
+    case PHASE_FREEPLAY:
+      game_music_play_gameplay(&state->audio);
+      break;
+    case PHASE_COUNT:
+      break;
+  }
 }
 
 /* ===================================================================
@@ -334,17 +356,20 @@ static void update_playing(GameState *state, GameInput *input, float dt) {
   /* ---- On-screen button clicks (mouse left press this frame) ---- */
   if (BUTTON_PRESSED(input->mouse.left)) {
     if (state->reset_hover) {
+      game_play_sound(&state->audio, SOUND_RESET);
       level_load(state, state->current_level);
       return;
     }
     if (state->gravity_hover) {
       state->gravity_sign = -state->gravity_sign;
+      game_play_sound(&state->audio, SOUND_GRAVITY_FLIP);
       /* Don't return — other logic can still run this frame */
     }
   }
 
   /* ---- Reset (R key shortcut) ---- */
   if (BUTTON_PRESSED(input->reset)) {
+    game_play_sound(&state->audio, SOUND_RESET);
     level_load(state, state->current_level);
     return;
   }
@@ -358,6 +383,7 @@ static void update_playing(GameState *state, GameInput *input, float dt) {
   /* ---- Gravity flip (G key shortcut) ---- */
   if (state->level.has_gravity_switch && BUTTON_PRESSED(input->gravity)) {
     state->gravity_sign = -state->gravity_sign;
+    game_play_sound(&state->audio, SOUND_GRAVITY_FLIP);
   }
 
   /* ---- Mouse drawing ----
@@ -746,7 +772,12 @@ static void update_grains(GameState *state, float dt) {
                              p->color[i] == (uint8_t)cup->required_color);
           if (right_color && cup->collected < cup->required_count) {
             /* Absorb: count this grain, clear its occupancy, remove from sim. */
+            int was_full_before = (cup->collected + 1 >= cup->required_count);
             cup->collected++;
+            if (was_full_before) {
+              /* Cup just reached 100% — play chime */
+              game_play_sound(&state->audio, SOUND_CUP_FILL);
+            }
             s_occ[gy * W + gx] = 0; /* clear occupancy — grain is gone now */
             p->active[i] = 0;
             goto next_grain;

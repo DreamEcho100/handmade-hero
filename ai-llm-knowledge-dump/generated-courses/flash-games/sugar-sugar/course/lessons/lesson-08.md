@@ -1,315 +1,350 @@
-# Lesson 08 — Color System: Filters and Colored Cups
+# Lesson 08: The State Machine — GAME_PHASE and change_phase()
 
-**By the end of this lesson you will have:**
-A level where white sugar pours from the emitter. A red-tinted band sits in the path. Grains passing through the band turn red. A red cup on the left accepts only red grains. A white cup on the right accepts only white grains. Both cups must be filled to win.
+## What we're building
+
+Introduce the `GAME_PHASE` enum and a `change_phase()` function that centralises
+all transitions between game states.  The game now has four phases: title screen,
+playing, level-complete celebration, and freeplay (post-credits sandbox).
+
+## What you'll learn
+
+- Finite State Machines in C — enum + switch pattern
+- Why one `change_phase()` function beats scattered boolean flags
+- `phase_timer` — per-phase elapsed seconds for timed transitions
+- How `game_update` dispatches to per-phase update functions
+- How `game_render` dispatches to per-phase render functions
+- Escape handling: playing → title, title → quit
+
+## Prerequisites
+
+- Lesson 07 complete (settle + bake working)
 
 ---
 
-## Step 1 — `GRAIN_COLOR` enum: typed constants beat raw integers
-
-In JavaScript you might write:
-
-```js
-const GRAIN_WHITE  = 0;
-const GRAIN_RED    = 1;
-const GRAIN_GREEN  = 2;
-const GRAIN_ORANGE = 3;
-```
-
-In C, use an `enum` instead:
+## Step 1: `GAME_PHASE` enum in `game.h`
 
 ```c
-// game.h — already written
+/* src/game.h  —  GAME_PHASE */
+
+/* JS analogy: like React's useReducer "action type" enum.
+ * Each value names a distinct mutually-exclusive screen/mode.
+ * switch(state.phase) replaces nested if/else chains. */
 typedef enum {
-    GRAIN_WHITE  = 0,
-    GRAIN_RED    = 1,
-    GRAIN_GREEN  = 2,
-    GRAIN_ORANGE = 3,
-    GRAIN_COLOR_COUNT
-} GRAIN_COLOR;
-```
-
-Why is this better than plain `int` constants?
-
-1. The compiler knows `GRAIN_COLOR` is a restricted set. Pass `17` to a function expecting `GRAIN_COLOR` and you get a warning.
-2. `GRAIN_COLOR_COUNT` always equals the number of enum members. Use it to size arrays — add a new color, the array grows automatically.
-3. A debugger can show `GRAIN_RED` instead of `1`.
-
-`GRAIN_COLOR_COUNT` is a common C idiom: put a sentinel at the end of an enum to count its members.
-
----
-
-## Step 2 — `color[]` in `GrainPool`: one byte per grain
-
-`GrainPool` uses Struct-of-Arrays layout (covered in Lesson 04). The color field is:
-
-```c
-uint8_t color[MAX_GRAINS]; // one byte per grain, value is a GRAIN_COLOR
-```
-
-`uint8_t` is an unsigned 8-bit integer (0–255). A `GRAIN_COLOR` value fits in one byte. Storing color separately from `x`, `y`, `vx`, `vy` means the physics loop never touches color memory — only the color-check loop does.
-
-To assign a color when spawning a grain:
-
-```c
-// inside spawn_grains()
-int slot = p->count++;
-p->x[slot]      = (float)em->x;
-p->y[slot]      = (float)em->y;
-p->vx[slot]     = jitter;
-p->vy[slot]     = 0.0f;
-p->color[slot]  = GRAIN_WHITE;   // all grains start white
-p->active[slot] = 1;
-p->tpcd[slot]   = 0;
+  PHASE_TITLE,           /* title screen + level select grid */
+  PHASE_PLAYING,         /* active puzzle: simulation + drawing */
+  PHASE_LEVEL_COMPLETE,  /* brief celebration before advancing */
+  PHASE_FREEPLAY,        /* sandbox after completing all levels */
+  PHASE_COUNT            /* not a valid phase; used for array sizing */
+} GAME_PHASE;
 ```
 
 ---
 
-## Step 3 — `g_grain_colors[]`: `GRAIN_COLOR` → pixel color
-
-Drawing a grain requires a `uint32_t` pixel color (0xAARRGGBB). A lookup table converts the enum to a pixel value in O(1):
+## Step 2: Expand `GameState`
 
 ```c
-// game.c — already written
-static const uint32_t g_grain_colors[GRAIN_COLOR_COUNT] = {
-    [GRAIN_WHITE]  = COLOR_CREAM,    // 0xFFE8D5B7 — warm off-white
-    [GRAIN_RED]    = COLOR_RED,      // 0xFFE53935
-    [GRAIN_GREEN]  = COLOR_GREEN,    // 0xFF43A047
-    [GRAIN_ORANGE] = COLOR_ORANGE,   // 0xFFFF8C00
-};
+/* src/game.h  —  updated GameState */
+typedef struct {
+  int should_quit;
+
+  /* State machine */
+  GAME_PHASE phase;
+  float      phase_timer;  /* seconds elapsed in the current phase */
+
+  /* Level progress (Lesson 09 fills in the level details) */
+  int current_level;
+  int unlocked_count;
+
+  /* Simulation */
+  GrainPool  grains;
+  LineBitmap lines;
+  int gravity_sign;     /* +1 = down (normal), -1 = up (flipped) */
+
+  /* Input-driven UI hover state — set in game_update, read in game_render */
+  int title_hover;      /* which level button is hovered (-1 = none) */
+  int reset_hover;
+  int gravity_hover;
+
+  /* Audio (added in Lesson 15) */
+  /* GameAudioState audio; */
+} GameState;
 ```
 
-Designated array initializers again: `[GRAIN_RED] = COLOR_RED` sets slot 1. Add a new enum member and a new entry — everything else is automatic.
+---
 
-Usage in `render_playing()`:
+## Step 3: `change_phase()` — the single transition point
 
 ```c
-for (int i = 0; i < p->count; i++) {
+/* src/game.c  —  change_phase (forward-declared at top of file) */
+static void change_phase(GameState *state, GAME_PHASE next);
+
+/* change_phase is called from:
+ *   game_init       → initial phase (TITLE)
+ *   update_title    → when a level is clicked (PLAYING)
+ *   update_playing  → when Escape pressed (TITLE) or win detected (LEVEL_COMPLETE)
+ *   update_level_complete → advance to next level or FREEPLAY
+ *
+ * Having a SINGLE function for all transitions means:
+ *   - Audio triggers live in ONE place (added in Lesson 15)
+ *   - Reset logic (phase_timer = 0) is always correct
+ *   - Adding a new phase only requires extending this switch
+ */
+static void change_phase(GameState *state, GAME_PHASE next) {
+  state->phase       = next;
+  state->phase_timer = 0.0f;
+
+  /* Audio triggers will be added here in Lesson 15. */
+}
+```
+
+---
+
+## Step 4: `game_init` starts in PHASE_TITLE
+
+```c
+/* src/game.c  —  game_init */
+void game_init(GameState *state, GameBackbuffer *backbuffer) {
+  memset(state, 0, sizeof(*state));
+
+  backbuffer->width  = CANVAS_W;
+  backbuffer->height = CANVAS_H;
+  backbuffer->pitch  = CANVAS_W * 4;
+
+  state->unlocked_count = 1;  /* only level 1 accessible at start */
+  state->gravity_sign   = 1;  /* normal downward gravity          */
+  state->title_hover    = -1; /* nothing hovered yet              */
+
+  change_phase(state, PHASE_TITLE);
+}
+```
+
+---
+
+## Step 5: Per-phase update functions
+
+```c
+/* src/game.c  —  update functions (one per phase) */
+
+/* Forward declarations — defined later in file */
+static void update_title(GameState *state, GameInput *input);
+static void update_playing(GameState *state, GameInput *input, float dt);
+static void update_level_complete(GameState *state, GameInput *input, float dt);
+static void update_freeplay(GameState *state, GameInput *input, float dt);
+
+void game_update(GameState *state, GameInput *input, float dt) {
+  if (dt > 0.1f) dt = 0.1f;
+
+  switch (state->phase) {
+  case PHASE_TITLE:
+    update_title(state, input);
+    break;
+  case PHASE_PLAYING:
+    update_playing(state, input, dt);
+    break;
+  case PHASE_LEVEL_COMPLETE:
+    update_level_complete(state, input, dt);
+    break;
+  case PHASE_FREEPLAY:
+    update_freeplay(state, input, dt);
+    break;
+  case PHASE_COUNT:
+    break; /* satisfies -Wswitch; never reached */
+  }
+}
+
+/* Title screen — no simulation; just wait for a level click (Lesson 09). */
+static void update_title(GameState *state, GameInput *input) {
+  state->title_hover = -1;
+
+  /* For now: press any key to start level 0 */
+  if (BUTTON_PRESSED(input->enter) || BUTTON_PRESSED(input->mouse.left)) {
+    /* level_load(state, 0); */  /* added in Lesson 09 */
+    change_phase(state, PHASE_PLAYING);
+  }
+
+  if (BUTTON_PRESSED(input->escape))
+    state->should_quit = 1;
+}
+
+/* Playing — simulation + drawing + win detection (Lessons 09–12). */
+static void update_playing(GameState *state, GameInput *input, float dt) {
+  state->phase_timer += dt;
+
+  /* Escape → back to title */
+  if (BUTTON_PRESSED(input->escape)) {
+    change_phase(state, PHASE_TITLE);
+    return;
+  }
+
+  /* Mouse drawing */
+  if (input->mouse.left.ended_down) {
+    draw_brush_line(&state->lines,
+                    input->mouse.prev_x, input->mouse.prev_y,
+                    input->mouse.x, input->mouse.y, BRUSH_RADIUS);
+  }
+
+  spawn_grains(state, dt);
+  update_grains(state, dt);
+
+  /* Win detection added in Lesson 10 */
+}
+
+/* Level-complete: brief pause then advance. */
+static void update_level_complete(GameState *state, GameInput *input, float dt) {
+  state->phase_timer += dt;
+
+  int advance = (state->phase_timer > 2.0f)  /* auto-advance after 2 s */
+             || BUTTON_PRESSED(input->mouse.left)
+             || BUTTON_PRESSED(input->enter);
+
+  if (advance) {
+    /* Go back to title for now; Lesson 09 adds real level progression. */
+    change_phase(state, PHASE_TITLE);
+  }
+}
+
+/* Freeplay — same as playing but never triggers win detection. */
+static void update_freeplay(GameState *state, GameInput *input, float dt) {
+  state->phase_timer += dt;
+
+  if (BUTTON_PRESSED(input->escape))
+    change_phase(state, PHASE_TITLE);
+
+  if (input->mouse.left.ended_down) {
+    draw_brush_line(&state->lines,
+                    input->mouse.prev_x, input->mouse.prev_y,
+                    input->mouse.x, input->mouse.y, BRUSH_RADIUS);
+  }
+
+  spawn_grains(state, dt);
+  update_grains(state, dt);
+}
+```
+
+---
+
+## Step 6: Per-phase render dispatch
+
+```c
+/* src/game.c  —  game_render dispatch */
+
+static void render_title(const GameState *state, GameBackbuffer *bb);
+static void render_playing(const GameState *state, GameBackbuffer *bb);
+static void render_level_complete(const GameState *state, GameBackbuffer *bb);
+static void render_freeplay(const GameState *state, GameBackbuffer *bb);
+
+void game_render(const GameState *state, GameBackbuffer *bb) {
+  switch (state->phase) {
+  case PHASE_TITLE:
+    render_title(state, bb);
+    break;
+  case PHASE_PLAYING:
+    render_playing(state, bb);
+    break;
+  case PHASE_LEVEL_COMPLETE:
+    render_level_complete(state, bb);
+    break;
+  case PHASE_FREEPLAY:
+    render_freeplay(state, bb);
+    break;
+  case PHASE_COUNT:
+    break;
+  }
+}
+
+static void render_title(const GameState *state, GameBackbuffer *bb) {
+  (void)state;
+  /* Clear to background — full title screen added in Lesson 13. */
+  int total = bb->width * bb->height;
+  for (int i = 0; i < total; i++) bb->pixels[i] = COLOR_BG;
+
+  /* Placeholder title text — proper font rendering added in Lesson 13. */
+  draw_rect(bb, CANVAS_W/2 - 80, 80, 160, 30, COLOR_BTN_NORMAL);
+  draw_rect_outline(bb, CANVAS_W/2 - 80, 80, 160, 30, COLOR_BTN_BORDER);
+}
+
+static void render_playing(const GameState *state, GameBackbuffer *bb) {
+  /* Clear */
+  int total = bb->width * bb->height;
+  for (int i = 0; i < total; i++) bb->pixels[i] = COLOR_BG;
+
+  /* Draw lines + grains (same code as Lesson 06–07) */
+  const uint8_t *lp = state->lines.pixels;
+  for (int py = 0; py < CANVAS_H; py++) {
+    for (int px = 0; px < CANVAS_W; px++) {
+      uint8_t v = lp[py * CANVAS_W + px];
+      if (!v) continue;
+      if (v == 1 || v == 255) draw_pixel(bb, px, py, COLOR_LINE);
+      else if (v >= 2 && v < 2 + GRAIN_COLOR_COUNT)
+        draw_pixel(bb, px, py, g_grain_colors[v - 2]);
+    }
+  }
+
+  const GrainPool *p = &state->grains;
+  for (int i = 0; i < p->count; i++) {
     if (!p->active[i]) continue;
-    uint32_t col = g_grain_colors[p->color[i]];
-    draw_pixel(bb, (int)p->x[i], (int)p->y[i], col);
+    draw_pixel(bb, (int)p->x[i], (int)p->y[i], g_grain_colors[p->color[i]]);
+  }
+}
+
+static void render_level_complete(const GameState *state, GameBackbuffer *bb) {
+  render_playing(state, bb);  /* show the final state underneath */
+  /* Semi-transparent green overlay — real text added in Lesson 13. */
+  draw_rect_blend(bb, 0, CANVAS_H/2 - 30, CANVAS_W, 60, COLOR_COMPLETE, 180);
+}
+
+static void render_freeplay(const GameState *state, GameBackbuffer *bb) {
+  render_playing(state, bb);  /* freeplay looks identical to playing */
 }
 ```
 
-`p->color[i]` is a `uint8_t` used as an array index. Valid because `GRAIN_COLOR_COUNT == 4` and the table has 4 slots.
+---
+
+## State machine diagram
+
+```
+game_init()
+    └─ change_phase(PHASE_TITLE)
+           │
+           ▼
+      PHASE_TITLE ──[level click]──► PHASE_PLAYING
+           │                              │
+           └──[Escape]──► quit            ├──[Escape]──────────► PHASE_TITLE
+                                          ├──[win detected]────► PHASE_LEVEL_COMPLETE
+                                          └──[R or button]────► reload level (stay)
+                                                   │
+                                                   ▼
+                                        PHASE_LEVEL_COMPLETE
+                                                   │
+                                          [click / 2s timer]
+                                                   │
+                                     ┌─────────────┴────────────────┐
+                              more levels                      all levels done
+                                     │                              │
+                               PHASE_PLAYING               PHASE_FREEPLAY
+```
 
 ---
 
-## Step 4 — `ColorFilter` AABB check: change color, don't deactivate
-
-A `ColorFilter` is a rectangle in the level:
-
-```c
-typedef struct {
-    int         x, y, w, h;
-    GRAIN_COLOR output_color;
-} ColorFilter;
-```
-
-Each frame, `update_grains()` checks every active grain against every filter. The check is an **AABB** (Axis-Aligned Bounding Box) test — the same rectangle overlap check used for cups:
-
-```c
-// inside update_grains(), after moving the grain
-int gx = (int)p->x[i];
-int gy = (int)p->y[i];
-
-for (int f = 0; f < lv->filter_count; f++) {
-    ColorFilter *flt = &lv->filters[f];
-    if (gx >= flt->x && gx < flt->x + flt->w &&
-        gy >= flt->y && gy < flt->y + flt->h) {
-        p->color[i] = flt->output_color;  // change color in-place
-        // grain stays active — it keeps moving
-    }
-}
-```
-
-The grain is **not** removed. It continues through the filter and keeps falling. Only `color[i]` changes. This is different from the cup check, which deactivates the grain.
-
-Concrete example with Level 9 filter `FILTER(60, 180, 100, 22, GRAIN_RED)`:
-- A grain at `gx=100, gy=190`
-- Check: `100 >= 60` ✓, `100 < 160` ✓, `190 >= 180` ✓, `190 < 202` ✓
-- Result: `p->color[i] = GRAIN_RED`
-
----
-
-## Step 5 — Cup color check: `GRAIN_WHITE` means "accept any"
-
-A `Cup` has a `required_color` field:
-
-```c
-typedef struct {
-    int         x, y, w, h;
-    GRAIN_COLOR required_color; // GRAIN_WHITE = accept any
-    int         required_count;
-    int         collected;
-} Cup;
-```
-
-The cup AABB check adds one extra condition:
-
-```c
-for (int c = 0; c < lv->cup_count; c++) {
-    Cup *cup = &lv->cups[c];
-    if (gx >= cup->x && gx < cup->x + cup->w &&
-        gy >= cup->y && gy < cup->y + cup->h) {
-
-        // color gate — GRAIN_WHITE means "I accept everything"
-        int color_ok = (cup->required_color == GRAIN_WHITE) ||
-                       (cup->required_color == p->color[i]);
-
-        if (color_ok && cup->collected < cup->required_count) {
-            cup->collected++;
-            p->active[i] = 0;  // consume the grain
-        }
-        // wrong color: grain just falls through, stays active
-    }
-}
-```
-
-"Accept any" is encoded as `required_color == GRAIN_WHITE`. A level designer doesn't need a special `GRAIN_ANY` constant — they reuse `GRAIN_WHITE` since white grains haven't been transformed.
-
-If the color is wrong the grain passes straight through the cup AABB and keeps falling. No special "reject" code is needed; the `if (color_ok)` branch simply doesn't execute.
-
----
-
-## Step 6 — Level 9 definition: two cups, one filter
-
-Open `src/levels.c` and find level 9:
-
-```c
-// levels.c — already written
-[8] = {
-    .index         = 8,
-    .emitter_count = 1,
-    .emitters      = { EMITTER(320, 20, 80) },
-    .cup_count     = 2,
-    .cups = {
-        CUP( 60, 370, 85, 100, GRAIN_RED,   100),  // left: red only
-        CUP(490, 370, 85, 100, GRAIN_WHITE,  100),  // right: any (white)
-    },
-    .filter_count = 1,
-    .filters = { FILTER(60, 180, 100, 22, GRAIN_RED) },
-},
-```
-
-The layout:
-
-```
-        [EMITTER at 320,20]
-               |
-               | white grains fall
-               |
-    [RED FILTER at 60,180]          ← 100px wide, 22px tall
-    |||||||||||||||
-         |                               |
-    turns red                        still white
-         |                               |
-  [RED CUP 60,370]            [WHITE CUP 490,370]
-```
-
-The player must draw a line that splits the stream: some grains go left through the filter, some go right and miss it.
-
----
-
-## Step 7 — `render_filters()`: semi-transparent colored bands
-
-Filters are rendered as semi-transparent rectangles so the player can see through them:
-
-```c
-// game.c — render_playing()
-static void render_filters(const GameState *state, GameBackbuffer *bb) {
-    for (int f = 0; f < state->level.filter_count; f++) {
-        ColorFilter *flt = &state->level.filters[f];
-
-        // pick a visual color matching the output
-        uint32_t col = g_grain_colors[flt->output_color];
-
-        // alpha-blend at ~50% opacity so lines underneath show through
-        draw_rect_blend(bb, flt->x, flt->y, flt->w, flt->h, col, 128);
-
-        // solid border so the filter boundary is clearly visible
-        draw_rect_outline(bb, flt->x, flt->y, flt->w, flt->h, col);
-    }
-}
-```
-
-`draw_rect_blend(bb, x, y, w, h, color, alpha)` blends each pixel:
-
-```
-out = (src * alpha + dst * (255 - alpha)) >> 8
-```
-
-With alpha = 128 (≈50%):
-```
-out = (src * 128 + dst * 127) >> 8
-    ≈ (src + dst) / 2
-```
-
-This is the same formula as CSS `opacity: 0.5`, done manually per pixel.
-
----
-
-## Step 8 — Multi-color levels: routing two streams
-
-For levels with two emitters and two filters, the principle is identical — the level definition just adds more entries:
-
-```c
-// hypothetical level with two emitters, two filters, two colored cups
-[XX] = {
-    .emitter_count = 2,
-    .emitters = {
-        EMITTER(160, 20, 60),   // left emitter
-        EMITTER(480, 20, 60),   // right emitter
-    },
-    .cup_count = 2,
-    .cups = {
-        CUP( 60, 370, 85, 100, GRAIN_RED,   100),
-        CUP(490, 370, 85, 100, GRAIN_GREEN,  100),
-    },
-    .filter_count = 2,
-    .filters = {
-        FILTER( 60, 180, 100, 22, GRAIN_RED),
-        FILTER(480, 180, 100, 22, GRAIN_GREEN),
-    },
-},
-```
-
-The `update_grains()` loop checks every grain against every filter on each frame. With 2 filters and 4096 possible grains that is 2 × 4096 = 8192 AABB tests per frame — trivial for a modern CPU.
-
----
-
-## Build & Run
+## Build and run
 
 ```bash
-clang -Wall -Wextra -O2 -o sugar \
-    src/main_x11.c src/game.c src/levels.c -lX11 -lm
-./sugar
+./build-dev.sh -r
 ```
 
-Navigate to level 9 from the title screen.
-
-**What you should see:**
-- White grains fall from the centre.
-- A red-tinted horizontal band sits left of centre.
-- Grains passing through the band turn red.
-- The red cup (left) fills only when red grains fall in.
-- The white cup (right) fills only when uncolored grains fall in.
-- Level completes when both cups reach 100%.
+**Expected output:** On startup you see a placeholder title screen (a rectangle).  Press Enter or click to enter PHASE_PLAYING — the simulation runs.  Press Escape to return to the title screen.
 
 ---
 
-## Key Concepts
+## Exercises
 
-- `GRAIN_COLOR` enum: a typed set of constants. `GRAIN_COLOR_COUNT` at the end gives the count automatically — use it to size lookup tables.
-- `uint8_t color[MAX_GRAINS]`: one byte per grain in the SoA layout — cheap to read, never pollutes physics cache.
-- `g_grain_colors[]`: a lookup table indexed by `GRAIN_COLOR`. O(1) conversion from enum to pixel color.
-- **ColorFilter AABB**: same rectangle test as a cup, but changes `p->color[i]` instead of deactivating the grain.
-- **Cup color gate**: `required_color == GRAIN_WHITE` accepts any grain color — "white" doubles as "unfiltered / accept all".
-- `draw_rect_blend()`: alpha-blend formula `(src*a + dst*(255-a)) >> 8`. Use alpha 128 for ~50% transparency.
-- Wrong-color grains fall through cups silently — no explicit rejection code; the `if (color_ok)` branch just doesn't run.
+1. Add a `PHASE_PAUSED` state.  Wire `P` key to toggle between `PHASE_PLAYING` and `PHASE_PAUSED` without resetting the simulation.
+2. Why does `update_level_complete` use `phase_timer > 2.0f` instead of a frame count?  What would break if you used `frame_count > 120`?
+3. Change the auto-advance timer to 3 seconds and verify it works at both 30 fps and 120 fps.  (Hint: it should work correctly already — why?)
 
 ---
 
-## Exercise
+## What's next
 
-Add a second filter to level 9 at position `FILTER(480, 250, 100, 22, GRAIN_GREEN)` and change the right cup to `CUP(490, 370, 85, 100, GRAIN_GREEN, 100)`. Verify that now you must route one stream through the red filter and another through the green filter to win.
+In Lesson 09 we build the full level system — `LevelDef`, `Emitter`, `Cup`, and
+`levels.c` — so the game actually has something to play.

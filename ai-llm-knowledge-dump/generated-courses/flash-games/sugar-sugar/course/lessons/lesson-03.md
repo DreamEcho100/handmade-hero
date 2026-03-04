@@ -1,176 +1,254 @@
-# Lesson 03 — Single Grain + Gravity
+# Lesson 03: Mouse Input — Double-Buffering, UPDATE_BUTTON, and Letterbox Transform
 
-**By the end of this lesson you will have:**
-One grain spawns at position (320, 20) when the game starts. It falls downward under gravity, accelerating as it goes. When it exits the bottom of the screen it disappears. Press R to reset the grain to the start position.
+## What we're building
 
----
+Draw a small circle that follows the mouse cursor, and fill a circle on the canvas when
+the left mouse button is held.  This proves the full input pipeline works — OS events →
+`GameInput` → `game_update` → visible change — on both Raylib and X11.
 
-## Step 1 — Why Float, Not Int
+## What you'll learn
 
-Grain position needs to be `float`, not `int`. Here is why.
+- The `GameButtonState` double-buffer pattern (origin: Handmade Hero ep. 4)
+- Why `ended_down` and `half_transition_count` are both needed
+- The `UPDATE_BUTTON` and `BUTTON_PRESSED` convenience macros
+- `prepare_input_frame` — why you reset counters but not button state
+- How Raylib's letterbox scaling affects mouse coordinates (and how to fix it)
+- Why X11 needs a start-of-frame `prev_x` snapshot before the event loop
 
-At 60 fps, `dt ≈ 0.0167` seconds. Starting from rest, after one frame:
+## Prerequisites
 
-```
-velocity  = 0 + GRAVITY * dt
-          = 0 + 280 * 0.0167
-          = 4.68 px/frame   ← first frame
-
-But on frame 1 from rest:
-  vy     = 0 + 280 * 0.0167 = 4.68
-  y_new  = 0 + 4.68 * 0.0167 = 0.078 pixels
-
-0.08 pixels.
-```
-
-If `y` were an `int`, `0.14` would truncate to `0`. The grain would not move for many frames. With `float`, sub-pixel movement accumulates correctly. By frame 7 the grain has moved about 5 pixels — smooth.
-
-In TypeScript you never think about this because JS numbers are always 64-bit floats. In C you choose: `int` = integer, `float` = 32-bit float, `double` = 64-bit float. `float` is fine here — 24 bits of mantissa gives sub-pixel precision well beyond what a 640-pixel screen needs.
+- Lesson 02 complete (drawing primitives working on both backends)
 
 ---
 
-## Step 2 — Semi-Implicit Euler Integration
-
-This is the physics update. Two lines of math:
+## Step 1: Input types in `game.h`
 
 ```c
-vy += GRAVITY * gravity_sign * dt;   /* acceleration → velocity */
-y  += vy * dt;                       /* velocity → position     */
+/* src/game.h  —  Input system (replaces the stub GameInput) */
+
+/* -----------------------------------------------------------------------
+ * GameButtonState
+ *
+ * JS analogy: imagine you have BOTH onKeyDown and onKeyUp handlers that
+ * both fire into this struct.  At the start of each frame you ask:
+ *   "was it pressed this frame?"  → BUTTON_PRESSED(b)
+ *   "is it currently held?"       → b.ended_down
+ *   "was it released this frame?" → BUTTON_RELEASED(b)
+ *
+ * half_transition_count counts state changes (press=+1, release=+1).
+ * Two changes in one frame = pressed and released in the same frame.
+ * That would be lost if we only stored ended_down — hence the counter.
+ * ----------------------------------------------------------------------- */
+typedef struct {
+  int half_transition_count; /* +1 for every press OR release this frame */
+  int ended_down;            /* 1 = currently held, 0 = currently released */
+} GameButtonState;
+
+/* Call this for every OS press/release event.
+ * Only increments the counter when the state ACTUALLY changes —
+ * prevents auto-repeat events from inflating the count. */
+#define UPDATE_BUTTON(button, is_down)                      \
+  do {                                                      \
+    if ((button).ended_down != (is_down)) {                 \
+      (button).half_transition_count++;                     \
+      (button).ended_down = (is_down);                      \
+    }                                                       \
+  } while (0)
+
+/* "Pressed this frame" = at least one transition AND currently held. */
+#define BUTTON_PRESSED(b)  ((b).half_transition_count > 0 && (b).ended_down)
+/* "Released this frame" = at least one transition AND not held. */
+#define BUTTON_RELEASED(b) ((b).half_transition_count > 0 && !(b).ended_down)
+
+/* Mouse state — position + left and right buttons. */
+typedef struct {
+  int x, y;             /* current canvas-space position this frame   */
+  int prev_x, prev_y;   /* position last frame (for drawing lines)    */
+  GameButtonState left;
+  GameButtonState right;
+} MouseInput;
+
+/* Full input state — one GameInput lives in main(), reset each frame. */
+typedef struct {
+  MouseInput mouse;
+  GameButtonState escape;   /* Escape — quit / back to title  */
+  GameButtonState reset;    /* R key  — restart level         */
+  GameButtonState gravity;  /* G key  — flip gravity          */
+  GameButtonState enter;    /* Enter / Space — confirm        */
+} GameInput;
+
+/* -----------------------------------------------------------------------
+ * prepare_input_frame
+ * Call at the TOP of each frame, BEFORE platform_get_input().
+ * Resets half_transition_count on every button so "pressed this frame"
+ * semantics are fresh.  Does NOT reset ended_down — that is persistent state.
+ * ----------------------------------------------------------------------- */
+void prepare_input_frame(GameInput *input);
 ```
-
-"Semi-implicit Euler" means we update velocity first, then use the **new** velocity to update position. This is slightly more stable than using the old velocity for both.
-
-Concrete numbers for one frame at 60 fps (dt = 0.01667, starting from rest at y = 20):
-
-```
-Frame 1:
-  vy = 0    + 280 * 1 * 0.01667 = 4.67
-  y  = 20   + 4.67 * 0.01667   = 20.08
-
-Frame 2:
-  vy = 4.67 + 280 * 0.01667    = 9.34
-  y  = 20.08 + 9.34 * 0.01667 = 20.24
-
-Frame 10:
-  vy ≈ 46.7 px/s
-  y  ≈ 23.9
-```
-
-After ~0.5 seconds the grain is clearly falling. After ~1.3 seconds it has crossed most of the screen. The lighter gravity gives a relaxed, floaty pour matching the original Sugar, Sugar game.
 
 ---
 
-## Step 3 — Terminal Velocity Cap
-
-Without a cap, a grain falling for 5 seconds reaches `vy = 280 * 5 = 1400 px/s`. The sub-step collision (Lesson 04) handles this, but capping is still good practice:
+## Step 2: `prepare_input_frame` in `game.c`
 
 ```c
-#define GRAVITY        280.0f
-#define TERM_VEL       400.0f
-```
-
-After integrating velocity, clamp it:
-
-```c
-if (vy >  TERM_VEL) vy =  TERM_VEL;
-if (vy < -TERM_VEL) vy = -TERM_VEL;
-```
-
-At `TERM_VEL = 600`, a grain moves at most 10 pixels per frame (600/60). The sub-step in Lesson 04 will handle up to 10 collision checks per frame — exactly matching.
-
----
-
-## Step 4 — Single Grain in game.c
-
-For this lesson we use a single local grain struct inside `game_update`. We will replace this with `GrainPool` in Lesson 05. The single-grain version lets you understand the physics before adding the complexity of managing many grains.
-
-Add these constants near the top of `game.c`:
-
-```c
-#define GRAVITY   280.0f
-#define TERM_VEL  400.0f
-```
-
-Add a temporary grain to `GameState` by adding these fields. Open `game.h` and add them inside `GameState` (just after `gravity_sign`):
-
-```c
-    /* Lesson 03 temporary single-grain (removed in lesson 05) */
-    float grain_x, grain_y;
-    float grain_vx, grain_vy;
-    int   grain_active;
-```
-
-Update `game_init` in `game.c` to spawn the grain:
-
-```c
-void game_init(GameState *state, GameBackbuffer *backbuffer) {
-    (void)backbuffer;
-    memset(state, 0, sizeof(*state));
-    state->gravity_sign = 1;
-    state->unlocked_count = 1;
-
-    /* Spawn single grain */
-    state->grain_x      = 320.0f;
-    state->grain_y      = 20.0f;
-    state->grain_vx     = 0.0f;
-    state->grain_vy     = 0.0f;
-    state->grain_active = 1;
+/* src/game.c */
+void prepare_input_frame(GameInput *input) {
+  /* Reset "transitions this frame" counters — leave ended_down alone.
+   *
+   * Why NOT reset ended_down?
+   *   ended_down tracks whether the key is physically held right now.
+   *   That state is persistent across frames.  If we zeroed it, a held
+   *   key would look released every frame — input would stop working. */
+  input->mouse.left.half_transition_count  = 0;
+  input->mouse.right.half_transition_count = 0;
+  input->escape.half_transition_count  = 0;
+  input->reset.half_transition_count   = 0;
+  input->gravity.half_transition_count = 0;
+  input->enter.half_transition_count   = 0;
 }
 ```
 
 ---
 
-## Step 5 — Update the Grain
-
-Replace `game_update` in `game.c`:
+## Step 3: Raylib input — filling `platform_get_input`
 
 ```c
-void game_update(GameState *state, GameInput *input, float delta_time) {
-    if (BUTTON_PRESSED(input->escape)) {
-        state->should_quit = 1;
-        return;
-    }
+/* src/main_raylib.c  —  replace the stub platform_get_input */
 
-    /* R → reset grain and clear lines */
-    if (BUTTON_PRESSED(input->reset)) {
-        memset(state->lines.pixels, 0, sizeof(state->lines.pixels));
-        state->grain_x      = 320.0f;
-        state->grain_y      = 20.0f;
-        state->grain_vx     = 0.0f;
-        state->grain_vy     = 0.0f;
-        state->grain_active = 1;
-    }
+void platform_get_input(GameInput *input) {
+    /* ---------------------------------------------------------------
+     * Mouse position — transform from window-space to canvas-space.
+     *
+     * GetMousePosition() returns window-space coordinates.  When the
+     * window is resized the canvas is letterboxed (scaled to fit with
+     * black borders).  We must undo scale + offset to get the true
+     * canvas pixel.
+     *
+     * g_scale and g_offset_* are updated in platform_display_backbuffer
+     * on every frame before this function is called.
+     * --------------------------------------------------------------- */
+    Vector2 pos = GetMousePosition();
 
-    /* Draw lines with mouse */
-    if (input->mouse.left.ended_down) {
-        draw_brush_line(
-            &state->lines,
-            input->mouse.prev_x, input->mouse.prev_y,
-            input->mouse.x,      input->mouse.y,
-            BRUSH_RADIUS
-        );
-    }
+    /* Save last-frame position before overwriting. */
+    input->mouse.prev_x = input->mouse.x;
+    input->mouse.prev_y = input->mouse.y;
 
-    /* Update single grain */
-    if (state->grain_active) {
-        /* 1. Integrate */
-        state->grain_vy += GRAVITY * (float)state->gravity_sign * delta_time;
-        state->grain_vx += 0.0f;   /* no horizontal force yet */
+    /* Map window → canvas.  Clamp so out-of-canvas coords stay on edge. */
+    int cx = (int)((pos.x - (float)g_offset_x) / g_scale);
+    int cy = (int)((pos.y - (float)g_offset_y) / g_scale);
+    if (cx < 0) cx = 0;
+    if (cy < 0) cy = 0;
+    if (cx >= CANVAS_W) cx = CANVAS_W - 1;
+    if (cy >= CANVAS_H) cy = CANVAS_H - 1;
+    input->mouse.x = cx;
+    input->mouse.y = cy;
 
-        /* 2. Clamp to terminal velocity */
-        if (state->grain_vy >  TERM_VEL) state->grain_vy =  TERM_VEL;
-        if (state->grain_vy < -TERM_VEL) state->grain_vy = -TERM_VEL;
+    /* Buttons — Raylib is poll-based, so we call UPDATE_BUTTON each frame
+     * with the current button state (down or up). */
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
+        UPDATE_BUTTON(input->mouse.left, 1);
+    if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT))
+        UPDATE_BUTTON(input->mouse.left, 0);
 
-        /* 3. Move */
-        state->grain_y += state->grain_vy * delta_time;
-        state->grain_x += state->grain_vx * delta_time;
+    /* Keys */
+    if (IsKeyPressed(KEY_ESCAPE))   UPDATE_BUTTON(input->escape,  1);
+    if (IsKeyReleased(KEY_ESCAPE))  UPDATE_BUTTON(input->escape,  0);
+    if (IsKeyPressed(KEY_R))        UPDATE_BUTTON(input->reset,   1);
+    if (IsKeyReleased(KEY_R))       UPDATE_BUTTON(input->reset,   0);
+    if (IsKeyPressed(KEY_G))        UPDATE_BUTTON(input->gravity, 1);
+    if (IsKeyReleased(KEY_G))       UPDATE_BUTTON(input->gravity, 0);
+    if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE))
+        UPDATE_BUTTON(input->enter, 1);
+    if (IsKeyReleased(KEY_ENTER) || IsKeyReleased(KEY_SPACE))
+        UPDATE_BUTTON(input->enter, 0);
+}
+```
 
-        /* 4. Deactivate when off-screen */
-        if (state->grain_y > (float)CANVAS_H ||
-            state->grain_y < 0.0f            ||
-            state->grain_x < 0.0f            ||
-            state->grain_x > (float)CANVAS_W) {
-            state->grain_active = 0;
+**What's happening:**
+
+- Raylib sends distinct `Pressed` / `Released` events per frame.  We translate each into an `UPDATE_BUTTON` call which only increments the counter when the state actually changes.
+- The letterbox transform: `canvas_x = (window_x - g_offset_x) / g_scale`.  Without it, clicking in the black border area would give coordinates outside the canvas.
+
+---
+
+## Step 4: X11 input — event loop with prev_x snapshot
+
+```c
+/* src/main_x11.c  —  replace the stub platform_get_input */
+
+void platform_get_input(GameInput *input) {
+    Atom wm_delete = XInternAtom(g_display, "WM_DELETE_WINDOW", False);
+
+    /* ---------------------------------------------------------------
+     * Snapshot prev position BEFORE processing events.
+     *
+     * X11 queues many MotionNotify events between frames (e.g. 10+
+     * when the mouse moves fast).  If we updated prev_x inside the
+     * event loop, by the end prev_x would hold the second-to-last
+     * event's position — all earlier positions are lost.
+     *
+     * We draw brush lines from (prev_x, prev_y) to (x, y).  With the
+     * snapshot approach, that line covers the ENTIRE path the mouse
+     * traveled this frame — gapless, regardless of event count.
+     * --------------------------------------------------------------- */
+    input->mouse.prev_x = input->mouse.x;
+    input->mouse.prev_y = input->mouse.y;
+
+    while (XPending(g_display)) {
+        XEvent event;
+        XNextEvent(g_display, &event);
+
+        switch (event.type) {
+
+        case MotionNotify:
+            /* Update current position only — prev is already snapshotted. */
+            input->mouse.x = event.xmotion.x;
+            input->mouse.y = event.xmotion.y;
+            break;
+
+        case ButtonPress:
+            if (event.xbutton.button == Button1) {
+                /* On click, align prev to click pos so the first brush
+                 * stamp is right where the user clicked, not where the
+                 * mouse was before the button went down. */
+                input->mouse.prev_x = event.xbutton.x;
+                input->mouse.prev_y = event.xbutton.y;
+                input->mouse.x      = event.xbutton.x;
+                input->mouse.y      = event.xbutton.y;
+                UPDATE_BUTTON(input->mouse.left, 1);
+            }
+            break;
+
+        case ButtonRelease:
+            if (event.xbutton.button == Button1)
+                UPDATE_BUTTON(input->mouse.left, 0);
+            break;
+
+        case KeyPress: {
+            KeySym sym = XLookupKeysym(&event.xkey, 0);
+            if (sym == XK_Escape)                    UPDATE_BUTTON(input->escape,  1);
+            if (sym == XK_r || sym == XK_R)          UPDATE_BUTTON(input->reset,   1);
+            if (sym == XK_g || sym == XK_G)          UPDATE_BUTTON(input->gravity, 1);
+            if (sym == XK_Return || sym == XK_space) UPDATE_BUTTON(input->enter,   1);
+            break;
+        }
+
+        case KeyRelease: {
+            KeySym sym = XLookupKeysym(&event.xkey, 0);
+            if (sym == XK_Escape)                    UPDATE_BUTTON(input->escape,  0);
+            if (sym == XK_r || sym == XK_R)          UPDATE_BUTTON(input->reset,   0);
+            if (sym == XK_g || sym == XK_G)          UPDATE_BUTTON(input->gravity, 0);
+            if (sym == XK_Return || sym == XK_space) UPDATE_BUTTON(input->enter,   0);
+            break;
+        }
+
+        case ClientMessage:
+            if ((Atom)event.xclient.data.l[0] == wm_delete)
+                g_should_quit = 1;
+            break;
+
+        default:
+            break;
         }
     }
 }
@@ -178,64 +256,112 @@ void game_update(GameState *state, GameInput *input, float delta_time) {
 
 ---
 
-## Step 6 — Render the Grain
+## Step 5: Wire input into the game loop (both backends)
 
-The grain's position is a `float`. We cast to `int` to get a pixel address:
+Update `game.c` to add a minimal `game_update` that uses the input:
 
 ```c
-void game_render(const GameState *state, GameBackbuffer *backbuffer) {
-    /* 1. Background */
-    draw_rect(backbuffer, 0, 0, backbuffer->width, backbuffer->height, COLOR_BG);
+/* src/game.c  —  minimal game_update for Lesson 03 */
+void game_update(GameState *state, GameInput *input, float delta_time) {
+  (void)delta_time; /* unused in this lesson */
 
-    /* 2. Lines */
-    render_lines(&state->lines, backbuffer);
-
-    /* 3. Single grain — draw as 1 cream/tan pixel */
-    if (state->grain_active) {
-        int px = (int)state->grain_x;
-        int py = (int)state->grain_y;
-        /*
-         * The cast truncates toward zero.
-         * grain_x = 320.73  →  px = 320
-         * grain_x = 319.99  →  px = 319
-         *
-         * This is correct: sub-pixel position is kept in the float;
-         * we only round to a pixel for rendering.
-         */
-        draw_pixel(backbuffer, px, py, GAME_RGB(210, 180, 140));  /* tan/wheat */
-    }
+  /* Quit on Escape */
+  if (BUTTON_PRESSED(input->escape))
+    state->should_quit = 1;
 }
 ```
 
----
+Update `game_render` to draw a cursor circle:
 
-## Build & Run
+```c
+/* src/game.c  —  game_render for Lesson 03 */
+void game_render(const GameState *state, GameBackbuffer *bb) {
+  /* Clear canvas */
+  int total = bb->width * bb->height;
+  for (int i = 0; i < total; i++)
+    bb->pixels[i] = COLOR_BG;
 
-```bash
-cd course
-clang -Wall -Wextra -O2 -o sugar \
-    src/main_x11.c src/game.c src/levels.c \
-    -lX11 -lm
-./sugar
+  /* Draw a small circle at the mouse position to verify input works.
+   * We store mouse position in state for rendering — add a mouse_x/y field
+   * to GameState, or pass input separately.  For simplicity, keep it in
+   * GameState in this lesson. */
+  draw_circle(bb, state->mouse_x, state->mouse_y, 5, COLOR_LINE);
+}
 ```
 
-**What you should see:**
-A single tan pixel appears near the top-center of the window and falls downward, accelerating as it goes. When it exits the bottom of the screen it disappears. Draw a horizontal line and... the grain passes right through it (collision comes in Lesson 04). Press R to reset the grain and clear lines.
+Store mouse position in `GameState` (add two `int` fields and update `game_update`):
+
+```c
+/* src/game.h  —  add to GameState */
+typedef struct {
+  int should_quit;
+  int mouse_x, mouse_y;   /* current canvas-space mouse position */
+} GameState;
+
+/* src/game.c  —  game_update: copy mouse coords into state */
+void game_update(GameState *state, GameInput *input, float delta_time) {
+  (void)delta_time;
+  state->mouse_x = input->mouse.x;
+  state->mouse_y = input->mouse.y;
+  if (BUTTON_PRESSED(input->escape))
+    state->should_quit = 1;
+}
+```
+
+Update `main()` in both backends:
+
+```c
+/* In main(), inside the game loop */
+prepare_input_frame(&input);
+platform_get_input(&input);
+game_update(&state, &input, delta_time);
+game_render(&state, &bb);
+platform_display_backbuffer(&bb);
+```
 
 ---
 
-## Key Concepts
+## Platform Coverage Checklist
 
-- `float` vs `int` for position: use `float` so sub-pixel movement accumulates. An `int` position would truncate `0.14 px` to `0` and the grain would stick for several frames.
-- Semi-implicit Euler: update `vy` first, then use the new `vy` to update `y`. Two lines: `vy += a*dt;  y += vy*dt;`. Sufficient for a game — no need for Runge-Kutta.
-- `GRAVITY = 280.0f`: pixels per second per second. Lighter than a naive "real-world" scaling — gives grains a floaty, sugar-like feel. After one second of free fall, `vy = 280 px/s` and the grain has travelled ~140 px.
-- `(int)grain_x`: truncating cast. The float stores the "true" sub-pixel position; the int is only used for pixel-grid operations (rendering, collision).
-- Terminal velocity cap: without it, grains build up unbounded speed during the first frame after a debug pause. The cap at 600 px/s keeps speed reasonable.
-- Deactivation on exit: we check all four screen edges. `grain_active = 0` prevents further updates and rendering without "removing" anything from memory.
-- **`input->mouse.prev_x` must be set ONCE per frame, not once per event.** If we update `prev_x = x` inside the event loop on each `MotionNotify`, after processing N events `prev_x` holds only the position from event N-1. `draw_brush_line(prev_x, prev_y, x, y)` then draws only the last tiny segment, leaving visible gaps when the mouse moves fast. The fix: set `prev_x = mouse.x` at the TOP of `platform_get_input`, BEFORE the event while-loop. Only `mouse.x/y` are updated inside the loop. This way Bresenham always interpolates the full start-of-frame → end-of-frame path.
+| Concern | Raylib | X11 |
+|---------|--------|-----|
+| Mouse position | `GetMousePosition()` → letterbox transform | `event.xmotion.x/y` |
+| Mouse click | `IsMouseButtonPressed/Released` | `ButtonPress/ButtonRelease` event |
+| Key press/release | `IsKeyPressed/Released` | `KeyPress/KeyRelease` event + `XLookupKeysym` |
+| Prev position snapshot | Before `GetMousePosition` call | Before event loop |
+| Window close | `WindowShouldClose()` | `WM_DELETE_WINDOW` ClientMessage |
 
 ---
 
-## Exercise
+## Build and run
 
-Add a horizontal force so the grain drifts right as it falls. In `game_update`, set `state->grain_vx = 30.0f` immediately after the grain spawns (in the `game_init` call or the reset block), then observe the curved path. Notice how the float position naturally produces a parabolic arc.
+```bash
+# Raylib (add src/game.c to the compile command now)
+clang -Wall -Wextra -std=c99 -O0 -g -DDEBUG -fsanitize=address,undefined \
+      -o build/game src/main_raylib.c src/game.c \
+      -lraylib -lm -lpthread -ldl
+./build/game
+
+# X11
+clang -Wall -Wextra -std=c99 -O0 -g -DDEBUG -fsanitize=address,undefined \
+      -o build/game src/main_x11.c src/game.c \
+      -lX11 -lm
+./build/game
+```
+
+**Expected output:** A sky-blue canvas with a small dark circle that follows the mouse cursor.  Press Escape to quit.
+
+---
+
+## Exercises
+
+1. Add a "left button held" indicator: draw a bright-orange circle at the cursor only when `input->mouse.left.ended_down` is true.
+2. What happens if you hold a key, alt-tab away, and come back?  Test it — does `ended_down` get stuck?  (Hint: X11 sends a `FocusOut` event you can use to reset all buttons.)
+3. Add a `GameButtonState` for the right mouse button and light up a red circle when it is pressed.
+
+---
+
+## What's next
+
+In Lesson 04 we spawn a single grain of sand, give it gravity, velocity, and a
+floor collision — the foundation of the entire simulation.

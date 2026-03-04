@@ -1,362 +1,273 @@
-# Lesson 04 — Grain vs Line Collision + Slide
+# Lesson 04: One Falling Grain — Gravity, Velocity, and Floor Collision
 
-**By the end of this lesson you will have:**
-Draw any line or bowl shape. The single grain falls, hits the line, and slides down the slope. Draw a bowl and the grain rolls down one side, up the other, and settles at the bottom. Press R to reset.
+## What we're building
+
+A single grain of sugar that spawns at the top center of the screen, accelerates
+downward under gravity, bounces lightly off the floor, and disappears when it
+leaves the canvas.  No other grains yet — just one particle, but with the full
+physics loop that will run thousands of them.
+
+## What you'll learn
+
+- Delta-time integration: `velocity += gravity * dt`, `position += velocity * dt`
+- Why we cap both `delta_time` and terminal velocity
+- Simple floor collision with a coefficient of restitution (bounce)
+- Sub-step integration — preventing fast particles from "tunneling" through thin surfaces
+- The `Grain` type and why floats (not ints) store positions
+
+## Prerequisites
+
+- Lesson 03 complete (input working on both backends)
 
 ---
 
-## Step 1 — The Collision Check: O(1) Lookup
-
-How do you know if a grain has hit a drawn line?
-
-The `LineBitmap` already has the answer. Every pixel on the canvas is either empty (`0`) or has a line (`1`). Checking if position `(x, y)` is occupied is one array read:
+## Step 1: Physics constants and the Grain type
 
 ```c
-int has_line = lb->pixels[iy * CANVAS_W + ix];
-/*
- * iy = (int)grain_y     ← truncated to pixel row
- * ix = (int)grain_x     ← truncated to pixel column
+/* src/game.h  —  physics constants (add after color defines) */
+
+/* Gravity — pixels per second² downward.
+ * 280 px/s² feels like light sugar: slow enough to follow drawn lines
+ * without racing off-screen, fast enough to look like a real pour.
+ * (Earth gravity at 1 px = 1 cm would be 980 px/s² — far too fast.) */
+#define GRAVITY     280.0f
+
+/* Terminal velocity cap — without this, a grain in freefall forever would
+ * eventually move thousands of pixels per frame and tunnel through walls. */
+#define MAX_VY      600.0f
+#define MAX_VX      200.0f
+
+/* Bounce coefficient: fraction of |vy| preserved on a floor hit.
+ * 0.25 gives a small satisfying pop before the grain settles.
+ * Only applied when |vy| > GRAIN_BOUNCE_MIN so micro-taps don't prevent settling. */
+#define GRAIN_BOUNCE      0.25f
+#define GRAIN_BOUNCE_MIN  20.0f
+
+/* src/game.h  —  Grain type (single grain for now) */
+
+/* Why float positions, not int?
  *
- * Example: grain at (213.7, 145.2)
- *   iy = 145
- *   ix = 213
- *   index = 145 * 640 + 213 = 93013
- *   lb->pixels[93013] is 0 (empty) or 1 (line)
- */
+ * At 60 fps, dt ≈ 0.016 s.  gravity * dt ≈ 4.5 px/frame.  After 10 frames
+ * a falling grain has moved ~45 px.  If we stored position as int, the
+ * fractional part (0.3 px, 0.7 px…) would be truncated every frame —
+ * accumulated rounding error makes the simulation inconsistent at different
+ * frame rates.  Float keeps the sub-pixel precision intact.
+ *
+ * JS analogy: same reason you never truncate a scrollPosition to integer
+ * each frame in a smooth-scroll animation. */
+typedef struct {
+  float x, y;   /* position in pixels (sub-pixel precision) */
+  float vx, vy; /* velocity in pixels / second              */
+  int   active; /* 1 = in simulation, 0 = removed           */
+} Grain;
 ```
 
-This is O(1) — constant time regardless of how many lines you have drawn. No loops, no distance calculations. This is why we stored lines in a flat bitmap instead of a list of segments.
+---
 
-Compare to what you'd do in JavaScript:
+## Step 2: Add a single grain to `GameState`
 
-```js
-// Slow: loop over every segment
-for (const seg of drawnSegments) {
-  if (pointNearSegment(grain, seg)) { ... }
+```c
+/* src/game.h  —  GameState for Lesson 04 */
+typedef struct {
+  int should_quit;
+  int mouse_x, mouse_y;
+
+  /* Single grain for Lesson 04 */
+  Grain grain;
+} GameState;
+```
+
+---
+
+## Step 3: Spawn and update the grain
+
+```c
+/* src/game.c  —  game_init: spawn the grain */
+void game_init(GameState *state, GameBackbuffer *backbuffer) {
+  memset(state, 0, sizeof(*state));
+  backbuffer->width  = CANVAS_W;
+  backbuffer->height = CANVAS_H;
+  backbuffer->pitch  = CANVAS_W * 4;
+
+  /* Spawn one grain near the top center */
+  state->grain.x  = (float)(CANVAS_W / 2);
+  state->grain.y  = 20.0f;
+  state->grain.vx = 0.0f;
+  state->grain.vy = 0.0f;         /* starts at rest; gravity will pull it */
+  state->grain.active = 1;
 }
 
-// Fast equivalent: read one pixel from an ImageData
-const pixel = ctx.getImageData(grain.x|0, grain.y|0, 1, 1).data[3];
-```
-
-Our LineBitmap is the C equivalent of that fast approach.
-
----
-
-## Step 2 — Why We Need Sub-Steps (Tunneling)
-
-Without sub-steps, a fast grain can skip over thin lines entirely.
-
-Concrete example:
-
-```
-GRAVITY = 280 px/s²
-At frame 20 (≈0.33s after spawn): vy ≈ 93 px/s
-Displacement per frame: 93 * 0.0167 ≈ 1.6 pixels
-
-That's safe — the grain moves 1–2 pixels per frame, can't skip a 1-pixel line.
-
-But at TERM_VEL = 600 px/s:
-  600 * 0.0167 = 10 pixels per frame
-
-A grain could jump from y=139 to y=149, skipping y=144 entirely.
-If the line is at y=144, the grain passes through it — tunneling.
-```
-
-The fix: break each frame's movement into multiple small steps, each at most 1 pixel long.
-
-```
-Total movement: (dx, dy) = (0.0, 10.0) pixels
-Steps needed: ceil(|dx| + |dy|) = 10
-Step size: (0.0/10, 10.0/10) = (0.0, 1.0) per sub-step
-
-Check collision at each of the 10 sub-step positions.
-```
-
-The formula for step count:
-
-```c
-float abs_dx = dx < 0 ? -dx : dx;   /* fabsf(dx) */
-float abs_dy = dy < 0 ? -dy : dy;
-int steps = (int)(abs_dx + abs_dy) + 1;
-float sdx = dx / (float)steps;
-float sdy = dy / (float)steps;
-```
-
-`+1` ensures at least one step even when `dx = dy = 0`.
-
----
-
-## Step 3 — Slide Resolution
-
-When a grain hits a line, we don't just stop it. We try to slide it sideways.
-
-Strategy:
-
-```
-Grain is at (ix, iy) and the pixel below is occupied.
-
-Try sliding right: is (ix+1, iy+1) empty?
-  Yes → move grain there (slide right-down)
-
-Try sliding left: is (ix-1, iy+1) empty?
-  Yes → move grain there (slide left-down)
-
-Both blocked →
-  Zero velocity. Grain comes to rest.
-```
-
-This produces natural pile-up behavior. Grains stack on each other because each grain that comes to rest becomes an obstacle for the next one.
-
-The slide check happens at the bottom of the sub-step loop, only when a collision is detected.
-
----
-
-## Step 4 — The Full Collision + Slide Function
-
-Replace `game_update` in `game.c` with the version below. The new section is the sub-step loop inside `if (state->grain_active)`.
-
-```c
+/* src/game.c  —  game_update: integrate physics */
 void game_update(GameState *state, GameInput *input, float delta_time) {
-    if (BUTTON_PRESSED(input->escape)) {
-        state->should_quit = 1;
-        return;
+  /* Cap dt so a debugger pause doesn't send the grain across the universe. */
+  if (delta_time > 0.1f) delta_time = 0.1f;
+
+  state->mouse_x = input->mouse.x;
+  state->mouse_y = input->mouse.y;
+
+  if (BUTTON_PRESSED(input->escape))
+    state->should_quit = 1;
+
+  Grain *g = &state->grain;
+  if (!g->active) return;
+
+  /* --- Apply gravity (Euler integration) ---
+   *
+   * Euler: new_value = old_value + rate * dt
+   *
+   * Two steps:
+   *   1. velocity changes due to acceleration (gravity)
+   *   2. position changes due to velocity
+   *
+   * JS analogy: exactly like a CSS animation with a constant acceleration
+   * applied each requestAnimationFrame tick. */
+  g->vy += GRAVITY * delta_time;
+
+  /* Clamp to terminal velocity so the grain can never move faster than
+   * one canvas height per second — otherwise it could skip over thin lines. */
+  if (g->vy >  MAX_VY) g->vy =  MAX_VY;
+  if (g->vy < -MAX_VY) g->vy = -MAX_VY;
+  if (g->vx >  MAX_VX) g->vx =  MAX_VX;
+  if (g->vx < -MAX_VX) g->vx = -MAX_VX;
+
+  /* --- Sub-step integration ---
+   *
+   * Problem: a fast grain moves (600 px/s × 0.016 s) = 9.6 pixels per frame.
+   * If there is a 1-pixel-thick line 5 pixels below the grain, moving by
+   * 9.6 px in one step jumps over it entirely — the grain "tunnels through".
+   *
+   * Solution: split the total movement into sub-steps of at most 1 px each.
+   *
+   * Example: total displacement = 9.6 px → 10 sub-steps of 0.96 px each.
+   * Each sub-step checks for a collision before moving.  The grain stops
+   * at the first occupied pixel it encounters. */
+  float total_dy = g->vy * delta_time;
+  float abs_dy   = total_dy < 0 ? -total_dy : total_dy;
+  int   steps    = (int)abs_dy + 1;
+  if (steps > 32) steps = 32;        /* cap for performance */
+  float sdy = total_dy / (float)steps;
+
+  for (int s = 0; s < steps; s++) {
+    float ny = g->y + sdy;
+    int   iy = (int)ny;
+
+    /* --- Floor collision --- */
+    if (iy >= CANVAS_H) {
+      /* The grain hit the floor — bounce it upward. */
+      g->y = (float)(CANVAS_H - 1);
+      float impact = g->vy < 0 ? -g->vy : g->vy; /* |vy| at impact */
+      if (impact > GRAIN_BOUNCE_MIN) {
+        /* Strong enough hit → small bounce upward */
+        g->vy = -impact * GRAIN_BOUNCE;
+      } else {
+        /* Very slow tap (gravity accumulation) → just stop */
+        g->vy = 0.0f;
+      }
+      break; /* stop sub-stepping after collision */
     }
 
-    if (BUTTON_PRESSED(input->reset)) {
-        memset(state->lines.pixels, 0, sizeof(state->lines.pixels));
-        state->grain_x      = 320.0f;
-        state->grain_y      = 20.0f;
-        state->grain_vx     = 0.0f;
-        state->grain_vy     = 0.0f;
-        state->grain_active = 1;
+    /* --- Ceiling collision (for reversed gravity later) --- */
+    if (iy < 0) {
+      g->y  = 0.0f;
+      g->vy = 0.0f;
+      break;
     }
 
-    if (input->mouse.left.ended_down) {
-        draw_brush_line(
-            &state->lines,
-            input->mouse.prev_x, input->mouse.prev_y,
-            input->mouse.x,      input->mouse.y,
-            BRUSH_RADIUS
-        );
-    }
+    /* --- No collision — move the grain --- */
+    g->y = ny;
+  }
 
-    if (!state->grain_active) return;
+  /* Apply horizontal movement (no collisions yet — added in Lesson 06) */
+  g->x += g->vx * delta_time;
+  if (g->x < 0.0f)                  { g->x = 0.0f;               g->vx = 0.0f; }
+  if (g->x >= (float)CANVAS_W)      { g->x = (float)(CANVAS_W-1); g->vx = 0.0f; }
+}
+```
 
-    /* ── 1. Integrate velocity ──────────────────────── */
-    state->grain_vy += GRAVITY * (float)state->gravity_sign * delta_time;
-    if (state->grain_vy >  TERM_VEL) state->grain_vy =  TERM_VEL;
-    if (state->grain_vy < -TERM_VEL) state->grain_vy = -TERM_VEL;
+**What's happening — Euler integration:**
 
-    /* ── 2. Compute this frame's displacement ─────── */
-    float dx = state->grain_vx * delta_time;
-    float dy = state->grain_vy * delta_time;
+The "Euler method" is the simplest numerical integrator.  Each frame:
+1. Velocity += acceleration × dt  (acceleration changes velocity)
+2. Position += velocity × dt       (velocity changes position)
 
-    /* ── 3. Sub-step movement + collision ─────────── */
-    float abs_dx = dx < 0.0f ? -dx : dx;
-    float abs_dy = dy < 0.0f ? -dy : dy;
-    int steps = (int)(abs_dx + abs_dy) + 1;
-    float sdx = dx / (float)steps;
-    float sdy = dy / (float)steps;
+It accumulates tiny errors over time (a small phase drift) but for a grain-of-sand
+simulation that lasts a few seconds before settling, it is perfectly accurate.
 
-    LineBitmap *lb = &state->lines;
+---
 
-    for (int s = 0; s < steps; s++) {
-        float nx = state->grain_x + sdx;
-        float ny = state->grain_y + sdy;
+## Step 4: Render the grain
 
-        int ix = (int)nx;
-        int iy = (int)ny;
+```c
+/* src/game.c  —  game_render (Lesson 04) */
+void game_render(const GameState *state, GameBackbuffer *bb) {
+  /* Clear canvas */
+  int total = bb->width * bb->height;
+  for (int i = 0; i < total; i++)
+    bb->pixels[i] = COLOR_BG;
 
-        /* Off-screen → deactivate */
-        if (iy >= CANVAS_H || iy < 0 || ix < 0 || ix >= CANVAS_W) {
-            state->grain_active = 0;
-            return;
-        }
+  /* Draw the single grain as a 2×2 pixel square — 1 px is hard to see. */
+  if (state->grain.active) {
+    int gx = (int)state->grain.x;
+    int gy = (int)state->grain.y;
+    draw_rect(bb, gx, gy, 2, 2, COLOR_CREAM);
+  }
 
-        /* No collision → accept the move */
-        if (!lb->pixels[iy * CANVAS_W + ix]) {
-            state->grain_x = nx;
-            state->grain_y = ny;
-            continue;
-        }
-
-        /* ── Collision detected ──────────────────────────────────────────
-         *
-         * Sugar Sugar "follow the line" rule:
-         *
-         * The grain was at (grain_x, grain_y) and tried to step to (nx, ny).
-         * Position (ix, iy) is solid. We need to resolve in a way that lets
-         * the grain slide along the surface.
-         *
-         * Key insight: distinguish two cases:
-         *   (A) iy != cur_iy  →  grain was moving vertically into a surface
-         *       (falling onto a slope / horizontal line).
-         *       Resolution: try diagonal slide to (grain_x ± 1, iy).
-         *       Slide speed = max(|vy|, GRAIN_SLIDE_MIN) — ensures the grain
-         *       always moves fast enough to be detected as "moving" by the
-         *       displacement-based settle check, even on shallow re-contacts.
-         *       GRAIN_SLIDE_MIN only fires in this "free diagonal" branch;
-         *       when both diagonals are blocked the !slid path zeros velocity
-         *       normally — so flat piles still settle and bake correctly.
-         *
-         *   (B) iy == cur_iy  →  grain was moving only horizontally into a
-         *       vertical surface (wall). Resolution: kill vx, keep falling.
-         *
-         * Always BREAK after any collision so that sub-step deltas from BEFORE
-         * the collision are not re-used — that would cause jitter.
-         */
-        int cur_iy = (int)state->grain_y;
-        int cur_ix = (int)state->grain_x;
-
-        if (iy != cur_iy) {
-            /* --- Vertically-induced collision: try diagonal slide ---
-             * Check up to GRAIN_SLIDE_REACH (2) pixels in each direction.
-             * ±1 only gives 45° angle of repose; ±2 gives ~27°, which
-             * looks more like real sugar flowing off a heap.
-             * The path-clear guard ensures no pixel is skipped over solid. */
-            int d1 = (state->grain_vx >= 0.0f) ?  1 : -1;
-            int d2 = -d1;
-            int slid = 0;
-
-            for (int dist = 1; dist <= GRAIN_SLIDE_REACH && !slid; dist++) {
-                for (int attempt = 0; attempt < 2 && !slid; attempt++) {
-                    int d  = (attempt == 0) ? d1 : d2;
-                    int sx = cur_ix + d * dist;
-                    if (sx < 0 || sx >= CANVAS_W) continue;
-                    /* All pixels between cur_ix and sx must be free. */
-                    int ok = 1;
-                    for (int px = cur_ix + d; px != sx + d; px += d)
-                        if (lb->pixels[iy * CANVAS_W + px]) { ok = 0; break; }
-                    if (!ok || lb->pixels[iy * CANVAS_W + sx]) continue;
-                    float spd = state->grain_vy < 0 ? -state->grain_vy
-                                                    :  state->grain_vy;
-                    if (spd < GRAIN_SLIDE_MIN) spd = GRAIN_SLIDE_MIN;
-                    if (spd > MAX_VX) spd = MAX_VX;
-                    state->grain_vx = (float)d * spd;
-                    state->grain_vy = 0.0f;
-                    state->grain_x  = (float)sx;
-                    state->grain_y  = (float)iy;
-                    slid = 1;
-                }
-            }
-
-            if (!slid) {
-                /* Grain comes to rest (piled on horizontal surface). */
-                state->grain_vx = 0.0f;
-                state->grain_vy = 0.0f;
-            }
-        } else {
-            /* --- Pure horizontal collision: kill vx, keep falling --- */
-            state->grain_vx = 0.0f;
-        }
-
-        /* Stop sub-stepping this frame after a collision.
-         * The new velocity takes effect from the next frame cleanly. */
-        break;
-    }
+  /* Draw cursor circle */
+  draw_circle(bb, state->mouse_x, state->mouse_y, 5, COLOR_LINE);
 }
 ```
 
 ---
 
-## Step 5 — Why Grains Pile Up and Collide With Each Other
-
-### Pile-up on a surface
-
-When a grain settles (`vx = vy = 0`), gravity re-adds a tiny `vy` every frame:
-
-```
-vy = 0 + 280 * 0.0167 = 4.67 px/s
-ny = grain_y + 4.67 * 0.0167 = grain_y + 0.078
-```
-
-The grain tries to move 0.08 pixels. The next integer row is occupied (the line
-below). Collision → try diagonal → both blocked → bounce or zero velocity. Repeats 60×
-per second. The grain appears still because it is continuously blocked.
-
-### Grain-grain collision (occupancy bitmap)
-
-The `LineBitmap` only stores player-drawn lines. Two grains can occupy the same
-pixel without knowing it, so grains pass through each other and the pile-up
-looks wrong (grains overlap rather than stack).
-
-The fix is a **grain-occupancy bitmap** — a second `uint8_t[CANVAS_W*CANVAS_H]`
-array that is rebuilt every frame from the current grain positions:
+## Step 5: Add a `draw_circle` helper (if not already present)
 
 ```c
-/* In update_grains() — built once, at the top, each frame */
-static uint8_t s_occ[CANVAS_W * CANVAS_H]; /* static = BSS, not stack */
-memset(s_occ, 0, sizeof(s_occ));
-for (int i = 0; i < pool->count; i++) {
-    if (!pool->active[i]) continue;
-    int ix = (int)pool->x[i], iy = (int)pool->y[i];
-    s_occ[iy * CANVAS_W + ix] = 1;   /* mark this pixel as occupied */
+/* src/game.c  —  draw_circle */
+static void draw_circle(GameBackbuffer *bb, int cx, int cy, int r, uint32_t color) {
+  for (int dy = -r; dy <= r; dy++)
+    for (int dx = -r; dx <= r; dx++)
+      if (dx * dx + dy * dy <= r * r)
+        draw_pixel(bb, cx + dx, cy + dy, color);
 }
-
-/* Unified solid check used everywhere in the physics loop: */
-#define IS_SOLID(xx, yy) \
-    ((xx) < 0 || (xx) >= CANVAS_W || \
-     lines->pixels[(yy)*CANVAS_W+(xx)] || s_occ[(yy)*CANVAS_W+(xx)])
 ```
-
-Before updating grain `i`, unmark its current pixel (so it doesn't block
-itself), then re-mark the new pixel after movement:
-
-```c
-s_occ[old_y * W + old_x] = 0;   /* unmark self before move */
-/* ... move and resolve collision ... */
-s_occ[new_y * W + new_x] = 1;   /* re-mark at new position */
-```
-
-Result: the grain at the bottom of a pile is "solid" to the grain falling on
-top of it — natural stacking without any additional data structure.
-
-> ⚠️ **Why static, not a stack variable?**
-> `CANVAS_W * CANVAS_H = 640 * 480 = 307,200 bytes = 300 KB`.  Declaring that
-> on the stack would exceed typical stack limits and corrupt the program.
-> `static` inside a function puts the array in the BSS segment (zero-initialised
-> global storage) — same lifetime as the process, no stack cost.
 
 ---
 
-## Build & Run
+## Build and run
 
 ```bash
-cd course
-clang -Wall -Wextra -O2 -o sugar \
-    src/main_x11.c src/game.c src/levels.c \
-    -lX11 -lm
-./sugar
+# Raylib
+clang -Wall -Wextra -std=c99 -O0 -g -DDEBUG -fsanitize=address,undefined \
+      -o build/game src/main_raylib.c src/game.c \
+      -lraylib -lm -lpthread -ldl
+./build/game
 ```
 
-**What you should see:**
-Draw a diagonal line. The grain hits it and slides to the lower end. Draw a shallow U-shape (bowl). The grain falls in, slides down one side, up the other, settles at the bottom. Press R to reset grain and lines.
+**Expected output:** A single cream-colored 2×2 pixel square falls from near the top of the screen, accelerates, bounces once off the floor, and settles.
 
 ---
 
-## Key Concepts
+## Understanding the physics numbers
 
-- `lb->pixels[iy * CANVAS_W + ix]`: O(1) collision check — one array read. No loop over line segments.
-- **Tunneling**: a fast grain can skip over a 1-pixel line in a single frame. Sub-steps prevent this by keeping each step ≤1 pixel of movement.
-- `steps = (int)(|dx| + |dy|) + 1`: Manhattan distance gives the number of sub-steps needed. `+1` ensures at least one step.
-- **Slide resolution and angle of repose**: on a vertical collision (`iy != cur_iy`), try `(cur_x ± dist, iy)` for `dist = 1..GRAIN_SLIDE_REACH`. The outermost free pixel wins. Checking only ±1 gives a 45° pile (any 2-wide obstacle blocks). Checking ±2 gives ~27° — closer to real sugar. A **path-clear guard** checks all intermediate pixels so the grain can't teleport through a wall. On a pure horizontal collision (`iy == cur_iy`), kill `vx` only.
-- **`GRAIN_SLIDE_REACH (2)`**: maximum lateral distance checked for a diagonal slide. Increase to get a shallower, more fluid heap; decrease to get a steeper, more solid-looking pile. A reach of 1 = 45°, 2 = ~27°, 3 = ~18°.
-- **`EMITTER_JITTER (8 px/s)`**: random horizontal spread applied at spawn. ±3 px/s looked fine but produced a visually narrow stream — all grains fell nearly straight down and piled up in a single column. ±8 px/s creates a small natural fan width visible from the spout.
-- **Always `break` after a collision.** Sub-step deltas are computed before the velocity changes. Letting sub-steps continue after a collision re-uses stale deltas, causing jitter and tunnelling into the solid.
-- **Occupancy bitmap**: replace `lb->pixels[…]` with `IS_SOLID(x,y)` that checks *both* the line bitmap and a per-frame grain-occupancy bitmap. Without this, grains pass through each other.
-- **Horizontal damping**: multiply `vx` by `GRAIN_HORIZ_DRAG (0.97)` each frame. Grains decelerate naturally over ~1 s on a flat surface after sliding off a ramp.
-- **`GRAIN_BOUNCE (0.25)` and `GRAIN_BOUNCE_MIN (20 px/s)`**: when a grain hits a solid surface with `|vy| > GRAIN_BOUNCE_MIN`, reflect a fraction of `vy` upward: `vy_after = -|vy_impact| × GRAIN_BOUNCE`. This gives grains a lively, light-bouncing quality before they settle. At 0.25 restitution a grain landing at 200 px/s bounces to 50 px/s, then to 12.5 px/s (below GRAIN_BOUNCE_MIN → stops). The threshold prevents perpetual micro-bouncing from gravity re-accumulation (≈4.7 px/s << 20).
-- **`GRAIN_SLIDE_MIN (25 px/s)`**: the minimum slide speed assigned when a free diagonal pixel is found. Ensures grains always move with enough speed to be detected as "moving" by the displacement settle check. Safe to use here because the minimum only fires when a free diagonal exists — on a flat pile the `!slid` branch zeros velocity regardless. Value is 25 (not 50): at 50 px/s, slide-off grains flew far enough to create discrete "satellite" piles, producing three visually distinct streams. 25 px/s keeps sliding grains near the main pile.
-- **Displacement-based bake-and-free (frame-rate-independent)**: capture grain position before sub-steps (`pre_x, pre_y`). After sub-steps, compute displacement distance². Compare against a velocity-based threshold `(GRAIN_SETTLE_SPEED × dt)²`. If the grain's average speed this frame < `GRAIN_SETTLE_SPEED (10 px/s)` for `GRAIN_SETTLE_FRAMES (8)` consecutive frames, write the pixel into the line bitmap and free the pool slot.
-
-  - **Why velocity-based detection fails**: gravity re-adds ~8.3 px/s between frames — resetting the counter every single frame so stuck grains never baked.
-  - **Why a fixed-distance check fails**: at uncapped FPS (thousands of frames per second), `dt ≈ 0.0001 s`. A grain at 50 px/s moves only 0.005 px per frame. `dist² = 0.000025 < 0.04` → every grain is immediately marked "still" and bakes before it is even rendered.
-  - **The correct fix**: threshold scales with `dt²` so it is always *"moved less than GRAIN_SETTLE_SPEED × dt"* — the same speed check at 60 fps, 120 fps, or 10,000 fps. A free-falling grain (50 px/s) never triggers it; a truly blocked grain (0 px/s) always does.
-  - The frame rate cap in `main_x11.c` (60 fps via `nanosleep`) is still needed for visual stability, but the settle check is now robust to any dt.
+| Value | Expression | Meaning |
+|-------|------------|---------|
+| Max fall speed | 600 px/s | ~10 canvas heights/second |
+| Frame displacement at MAX_VY | 600 × 0.016 = 9.6 px | 10 sub-steps |
+| Bounce height at 600 px/s impact | 600 × 0.25 = 150 px/s | ~0.5 canvas |
+| Bounce threshold | 20 px/s | Below this, no bounce |
 
 ---
 
-## Exercise
+## Exercises
 
-Add a second obstacle: instead of resetting both lines and grain on R, only reset the grain (keep the lines). This lets you build a complex course, then press R repeatedly to watch the grain navigate it from the top. Hint: split the R handler into two key checks — R clears lines, Space resets grain only.
+1. Change `GRAIN_BOUNCE` to `0.8` and observe the grain bouncing high repeatedly.  Then try `0.0` (no bounce at all).
+2. Remove the `if (delta_time > 0.1f)` cap and observe what happens when you pause the debugger for a few seconds then resume.
+3. Add a `respawn` flag: when the grain settles on the floor (both `g->vy == 0` and `g->y >= CANVAS_H - 1`), reset it to the top center with `vy = 0`.
+
+---
+
+## What's next
+
+In Lesson 05 we replace the single `Grain` with a `GrainPool` — a fixed-size
+struct-of-arrays that holds 4096 grains simultaneously, and introduce
+`build-dev.sh` to simplify the compile command.

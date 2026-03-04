@@ -1,639 +1,472 @@
-# Lesson 01 — Window + Backbuffer Pipeline
+# Lesson 01: Window, Canvas, and the Game Loop
 
-**By the end of this lesson you will have:**
-A 640×480 window with a warm off-white background that stays open until you press Escape or click the close button. Nothing moves. The window just sits there, ready to be drawn on.
+## What we're building
+
+A window that opens, fills with a solid sky-blue color every frame, and closes cleanly
+when you press Escape or the window's × button.  Nothing simulates yet — this is pure
+proof-of-life.  By the end you will have the complete skeleton that all future lessons
+build upon, running on **both** Raylib and X11.
+
+## What you'll learn
+
+- How a bare-bones game loop works in C (compare with `requestAnimationFrame` in JS)
+- The **backbuffer pattern**: write pixels to a plain array, then let the platform blit it to the screen
+- `platform.h` — a thin contract that hides OS differences from game code
+- How `platform_init`, `platform_get_time`, and `platform_display_backbuffer` are implemented on Raylib and X11
+- How to build and run with a single `clang` command
+
+## Prerequisites
+
+- C99 basics (structs, pointers, `#include`, `typedef`)
+- Raylib installed (`brew install raylib` / `sudo apt install libraylib-dev`)
+- Optional: X11 (`sudo apt install libx11-dev`)
 
 ---
 
-## Step 1 — Why We Split Platform from Game
+## Step 1: The platform contract
 
-In React you separate business logic from UI components. Same idea here.
-
-The **platform layer** (`main_x11.c`) owns the OS window, the event loop, and the clock. The **game layer** (`game.c`) owns all logic and rendering. They talk through four functions defined in `platform.h`.
-
-This means you can swap the platform layer for Windows or macOS later without touching one line of game code.
-
-Create `course/src/platform.h`:
+Before writing any game code, decide what the platform must provide.  Put that
+contract in `src/platform.h`:
 
 ```c
+/* src/platform.h  —  Sugar, Sugar | Platform Contract */
 #ifndef PLATFORM_H
 #define PLATFORM_H
 
 #include "game.h"
 
+/* Open a window with the given title and pixel dimensions. */
 void   platform_init(const char *title, int width, int height);
+
+/* Return monotonic time in seconds (never jumps backward). */
 double platform_get_time(void);
+
+/* Read OS input events and fill *input with the current state. */
 void   platform_get_input(GameInput *input);
+
+/* Upload bb->pixels (ARGB uint32_t) to the display and flip. */
 void   platform_display_backbuffer(const GameBackbuffer *backbuffer);
-void   platform_play_sound(int sound_id);
-void   platform_play_music(int music_id);
-void   platform_stop_music(void);
 
-#endif
+/* Audio — stubbed out for now, added in Lesson 15. */
+void   platform_audio_init(GameState *state, int samples_per_second);
+void   platform_audio_update(GameState *state);
+void   platform_audio_shutdown(void);
+
+#endif /* PLATFORM_H */
 ```
 
-`GameInput` and `GameBackbuffer` are forward-declared in `game.h`, which we write next.
+**What's happening:**
+
+- Any future backend (SDL3, Win32, WASM) only needs to implement these six functions — `game.c` never changes.
+- `GameBackbuffer`, `GameInput`, and `GameState` are defined in `game.h` (written next).
+- The audio stubs keep the contract complete from day one; the implementations arrive in Lesson 15.
+
+JS analogy: `platform.h` is like a TypeScript interface — the platform backends are the concrete classes that `implements` it.
 
 ---
 
-## Step 2 — Color Encoding: 0xAARRGGBB
+## Step 2: Minimal `game.h`
 
-Every pixel is a single `uint32_t`. The 32 bits are split into four 8-bit channels:
-
-```
-Bit layout of 0xAARRGGBB:
-  bits 31-24 → Alpha  (0xFF = fully opaque)
-  bits 23-16 → Red
-  bits 15-8  → Green
-  bits  7-0  → Blue
-
-Example: pure red = 0xFFFF0000
-  FF → opaque
-  FF → red = 255
-  00 → green = 0
-  00 → blue = 0
-```
-
-The macro builds this from three numbers:
+For this first lesson `game.h` only needs three types:
 
 ```c
-#define GAME_RGB(r,g,b)  \
-    (((uint32_t)0xFF << 24) | \
-     ((uint32_t)(r)  << 16) | \
-     ((uint32_t)(g)  <<  8) | \
-      (uint32_t)(b))
-```
-
-Concrete example — `GAME_RGB(245, 242, 235)`:
-
-```
-0xFF  shifted left 24 = 0xFF000000
-0xF5  shifted left 16 = 0x00F50000   (245 decimal = 0xF5)
-0xF2  shifted left  8 = 0x0000F200   (242 decimal = 0xF2)
-0xEB  shifted left  0 = 0x000000EB   (235 decimal = 0xEB)
-OR all together      = 0xFFF5F2EB   ← warm off-white
-```
-
----
-
-## Step 3 — game.h: All Types in One Place
-
-Create `course/src/game.h`. We write all structs, enums, constants, and function declarations here. Every `.c` file includes this one header.
-
-```c
+/* src/game.h  —  Sugar, Sugar | Shared Game Types (Lesson 01 version) */
 #ifndef GAME_H
 #define GAME_H
 
-#include <stdint.h>
-#include <stddef.h>
+#include <stdint.h>   /* uint32_t */
 
-/* ── Canvas size ──────────────────────────────────────── */
+/* Canvas dimensions — fixed 640×480 logical resolution. */
 #define CANVAS_W 640
 #define CANVAS_H 480
 
-/* ── Color helpers ────────────────────────────────────── */
-#define GAME_RGB(r,g,b) \
-    (((uint32_t)0xFF<<24)|((uint32_t)(r)<<16)|((uint32_t)(g)<<8)|(uint32_t)(b))
-
-#define COLOR_BG   GAME_RGB(245, 242, 235)   /* warm off-white */
-#define COLOR_LINE GAME_RGB(50,  50,  50)    /* near-black     */
-
-/* ── Backbuffer ───────────────────────────────────────── */
-/*
- * Like a 2D canvas in JS, but flat:
- *   canvas[y][x]  in JS
- *   pixels[y*width + x]  in C
- *
- * pitch = bytes per row = width * sizeof(uint32_t)
- */
+/* -----------------------------------------------------------------------
+ * BACKBUFFER
+ * A flat array of ARGB pixels.  The game writes here; the platform reads it.
+ * JS analogy: this is the ImageData.data buffer behind a 2D <canvas>.
+ * ----------------------------------------------------------------------- */
 typedef struct {
-    uint32_t *pixels;
-    int       width;
-    int       height;
-    int       pitch;   /* bytes per row */
+  uint32_t *pixels; /* pixels[y * width + x] = 0xAARRGGBB color */
+  int width;
+  int height;
+  int pitch;        /* bytes per row = width * 4 */
 } GameBackbuffer;
 
-/* ── Button state ─────────────────────────────────────── */
-/*
- * half_transition_count: how many times the key changed state this frame.
- * ended_down: 1 if the key is currently held, 0 if released.
- *
- * A key tapped once in a frame: half_transition_count=2, ended_down=0
- * A key held:                   half_transition_count=1, ended_down=1
- */
-typedef struct {
-    int half_transition_count;
-    int ended_down;
-} GameButtonState;
+/* Minimal stubs so platform.h compiles — these grow in later lessons. */
+typedef struct { int placeholder; } GameInput;
+typedef struct { int should_quit; } GameState;
 
-#define UPDATE_BUTTON(button, is_down)                          \
-    do {                                                        \
-        if ((button).ended_down != (is_down)) {                 \
-            (button).half_transition_count++;                   \
-            (button).ended_down = (is_down);                    \
-        }                                                       \
-    } while(0)
+/* Color macro — 0xAARRGGBB format */
+#define GAME_RGB(r, g, b) \
+  (((uint32_t)0xFF << 24) | ((uint32_t)(r) << 16) | \
+   ((uint32_t)(g) << 8)  |  (uint32_t)(b))
 
-#define BUTTON_PRESSED(b)   ((b).half_transition_count > 0 && (b).ended_down)
-#define BUTTON_RELEASED(b)  ((b).half_transition_count > 0 && !(b).ended_down)
+#define COLOR_BG  GAME_RGB(135, 195, 225)  /* soft sky-blue */
 
-/* ── Mouse ────────────────────────────────────────────── */
-typedef struct {
-    int x, y;
-    int prev_x, prev_y;
-    GameButtonState left;
-    GameButtonState right;
-} MouseInput;
-
-/* ── Full input frame ─────────────────────────────────── */
-typedef struct {
-    MouseInput      mouse;
-    GameButtonState escape;
-    GameButtonState reset;
-    GameButtonState gravity;
-} GameInput;
-
-/* ── Grain colors ─────────────────────────────────────── */
-typedef enum {
-    GRAIN_WHITE  = 0,
-    GRAIN_RED    = 1,
-    GRAIN_GREEN  = 2,
-    GRAIN_ORANGE = 3,
-    GRAIN_COLOR_COUNT
-} GRAIN_COLOR;
-
-/* ── Grain pool (Struct of Arrays) ────────────────────── */
-#define MAX_GRAINS 4096
-typedef struct {
-    float   x[MAX_GRAINS];
-    float   y[MAX_GRAINS];
-    float   vx[MAX_GRAINS];
-    float   vy[MAX_GRAINS];
-    uint8_t color[MAX_GRAINS];
-    uint8_t active[MAX_GRAINS];
-    uint8_t tpcd[MAX_GRAINS];   /* teleport cooldown */
-    int     count;              /* high-watermark */
-} GrainPool;
-
-/* ── Level objects ────────────────────────────────────── */
-typedef struct {
-    int   x, y;
-    int   grains_per_second;
-    float spawn_timer;
-} Emitter;
-
-typedef struct {
-    int        x, y, w, h;
-    GRAIN_COLOR required_color;
-    int        required_count;
-    int        collected;
-} Cup;
-
-typedef struct {
-    int         x, y, w, h;
-    GRAIN_COLOR output_color;
-} ColorFilter;
-
-typedef struct {
-    int ax, ay;   /* portal A center */
-    int bx, by;   /* portal B center */
-    int radius;
-} Teleporter;
-
-typedef struct {
-    int x, y, w, h;
-} Obstacle;
-
-/* ── Level definition ─────────────────────────────────── */
-typedef struct {
-    int index;
-
-    Emitter    emitters[2];    int emitter_count;
-    Cup        cups[8];        int cup_count;
-    ColorFilter filters[4];   int filter_count;
-    Teleporter teleporters[2]; int teleporter_count;
-    Obstacle   obstacles[12]; int obstacle_count;
-
-    int has_gravity_switch;
-    int is_cyclic;
-} LevelDef;
-
-/* ── Line bitmap ──────────────────────────────────────── */
-/* 1 byte per pixel: 0 = empty, 1 = has line */
-typedef struct {
-    uint8_t pixels[CANVAS_W * CANVAS_H];
-} LineBitmap;
-
-/* ── Game phase FSM ───────────────────────────────────── */
-typedef enum {
-    PHASE_TITLE,
-    PHASE_PLAYING,
-    PHASE_LEVEL_COMPLETE,
-    PHASE_FREEPLAY,
-    PHASE_COUNT
-} GAME_PHASE;
-
-/* ── Master game state ────────────────────────────────── */
-typedef struct {
-    GAME_PHASE phase;
-    float      phase_timer;
-
-    int        current_level;
-    int        unlocked_count;
-
-    LevelDef   level;
-    GrainPool  grains;
-    LineBitmap lines;
-
-    int gravity_sign;   /* +1 = down, -1 = up */
-
-    int title_hover;
-    int reset_hover;
-    int gravity_hover;
-
-    int should_quit;
-} GameState;
-
-/* ── Public API ───────────────────────────────────────── */
-void game_init(GameState *state, GameBackbuffer *backbuffer);
-void prepare_input_frame(GameInput *input);
-void game_update(GameState *state, GameInput *input, float delta_time);
-void game_render(const GameState *state, GameBackbuffer *backbuffer);
-
-extern LevelDef g_levels[30];
-
-#endif
+#endif /* GAME_H */
 ```
+
+**What's happening:**
+
+- `pixels[y * width + x]` — a single flat array.  Row `y` starts at index `y * width`.
+  There is no 2-D array; you compute the index yourself.
+- `0xAARRGGBB` — Alpha in the highest byte, Blue in the lowest.  X11 uses BGR internally
+  (alpha ignored), so the bytes land in exactly the right places with no extra swap.
+- `pitch` = bytes per row = `width × 4`.  It exists for completeness; for a packed
+  (no padding) buffer it always equals `width * 4`.
 
 ---
 
-## Step 4 — game.c: Init and a Blank Render
-
-Create `course/src/game.c`. For now it only fills the screen with the background color.
+## Step 3: Raylib backend
 
 ```c
-#include <string.h>
-#include <stdlib.h>
-#include "game.h"
-
-/* ── Drawing helpers ──────────────────────────────────── */
-
-static void draw_pixel(GameBackbuffer *bb, int x, int y, uint32_t color) {
-    if (x < 0 || x >= bb->width || y < 0 || y >= bb->height) return;
-    bb->pixels[y * bb->width + x] = color;
-    /*          ^^^^^^^^^^^^^^^^^^^^^^
-     * The flat-array index formula.
-     * Row y starts at byte offset (y * width).
-     * Column x adds x more slots.
-     *
-     * Example: pixel at (10, 3) in a 640-wide buffer:
-     *   index = 3 * 640 + 10 = 1930
-     */
-}
-
-static void draw_rect(GameBackbuffer *bb,
-                      int x, int y, int w, int h,
-                      uint32_t color) {
-    /* Clamp to screen bounds so we never write out of range */
-    int x0 = x < 0 ? 0 : x;
-    int y0 = y < 0 ? 0 : y;
-    int x1 = (x + w) > bb->width  ? bb->width  : (x + w);
-    int y1 = (y + h) > bb->height ? bb->height : (y + h);
-
-    for (int row = y0; row < y1; row++) {
-        for (int col = x0; col < x1; col++) {
-            bb->pixels[row * bb->width + col] = color;
-        }
-    }
-}
-
-/* ── Public API ───────────────────────────────────────── */
-
-/*
- * memset(&state, 0, ...) is safe here because:
- *   - All int fields: 0 is a valid "not set" value
- *   - All float fields: 0.0f in IEEE 754 is all-zero bits
- *   - All pointer fields: NULL is all-zero bits on every platform we target
- *   - Enum fields: 0 maps to PHASE_TITLE, GRAIN_WHITE — both correct defaults
- *
- * In JS you'd write: const state = { phase: 'title', grains: [], ... }
- * In C, zeroing the struct gives us the same "blank slate".
- */
-void game_init(GameState *state, GameBackbuffer *backbuffer) {
-    (void)backbuffer;   /* unused in lesson 01 */
-    memset(state, 0, sizeof(*state));
-    state->gravity_sign   = 1;       /* gravity pulls down */
-    state->unlocked_count = 1;       /* first level unlocked */
-}
-
-void prepare_input_frame(GameInput *input) {
-    /* Reset transition counts at the start of every frame.
-     * We keep ended_down — it remembers if the key is still held.
-     * We zero half_transition_count — it's fresh per-frame event data. */
-    input->mouse.left.half_transition_count  = 0;
-    input->mouse.right.half_transition_count = 0;
-    input->escape.half_transition_count      = 0;
-    input->reset.half_transition_count       = 0;
-    input->gravity.half_transition_count     = 0;
-    input->mouse.prev_x = input->mouse.x;
-    input->mouse.prev_y = input->mouse.y;
-}
-
-void game_update(GameState *state, GameInput *input, float delta_time) {
-    (void)delta_time;  /* unused in lesson 01 */
-
-    if (BUTTON_PRESSED(input->escape)) {
-        state->should_quit = 1;
-    }
-}
-
-void game_render(const GameState *state, GameBackbuffer *backbuffer) {
-    (void)state;   /* unused in lesson 01 */
-
-    /* Fill every pixel with the background color */
-    draw_rect(backbuffer, 0, 0, backbuffer->width, backbuffer->height, COLOR_BG);
-}
-```
-
----
-
-## Step 5 — levels.c: Stub for Now
-
-Create `course/src/levels.c`. It must exist so the linker is happy:
-
-```c
-#include "game.h"
-
-LevelDef g_levels[30] = { 0 };
-```
-
----
-
-## Step 6 — main_x11.c: The Platform Layer
-
-Create `course/src/main_x11.c`. Read it section by section.
-
-```c
-#include <X11/Xlib.h>
-#include <X11/keysym.h>
-#include <time.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdio.h>
+/* src/main_raylib.c  —  Sugar, Sugar | Raylib Platform Backend (Lesson 01) */
+#include "raylib.h"
+#include <stdlib.h>  /* malloc, free */
+#include <string.h>  /* memset       */
 #include "platform.h"
 
-/* ── X11 globals ──────────────────────────────────────── */
-static Display *g_display;   /* connection to the X server  */
-static Window   g_window;    /* our OS window handle        */
-static GC       g_gc;        /* graphics context (pen)      */
-static XImage  *g_ximage;    /* wraps our pixel buffer      */
-static int      g_width;
-static int      g_height;
-static int      g_should_quit = 0;
+/* Texture lives in GPU memory; we update it each frame from the pixel array. */
+static Texture2D g_texture;
 
-/*
- * X11 in one sentence:
- *   XOpenDisplay   → open a socket to the display server
- *   XCreateSimpleWindow → ask the server to make a window
- *   XSelectInput   → say which events we want
- *   XMapWindow     → make it visible
- *   XPending       → non-blocking: any events waiting?
- *   XNextEvent     → pull one event off the queue
- *   XPutImage      → blit our pixel buffer to the window
- */
+/* Letterbox scale and offset — needed in Lesson 03 for mouse transforms.
+ * Kept as globals here so they are already in place. */
+static float g_scale    = 1.0f;
+static int   g_offset_x = 0;
+static int   g_offset_y = 0;
 
-/* ── platform_init ────────────────────────────────────── */
 void platform_init(const char *title, int width, int height) {
-    g_width  = width;
-    g_height = height;
+    SetTraceLogLevel(LOG_WARNING);      /* suppress Raylib log spam   */
+    SetConfigFlags(FLAG_WINDOW_RESIZABLE);
+    InitWindow(width, height, title);
 
-    g_display = XOpenDisplay(NULL);
-    if (!g_display) {
-        fprintf(stderr, "Cannot open display\n");
-        exit(1);
-    }
-
-    int screen = DefaultScreen(g_display);
-
-    g_window = XCreateSimpleWindow(
-        g_display,
-        RootWindow(g_display, screen),
-        0, 0,              /* x, y position (window manager may ignore) */
-        (unsigned)width,
-        (unsigned)height,
-        0,                 /* border width */
-        BlackPixel(g_display, screen),
-        BlackPixel(g_display, screen)
-    );
-
-    XStoreName(g_display, g_window, title);
-
-    /* Ask for these event types */
-    XSelectInput(g_display, g_window,
-        ExposureMask       |   /* window uncovered / needs redraw */
-        KeyPressMask       |
-        KeyReleaseMask     |
-        ButtonPressMask    |
-        ButtonReleaseMask  |
-        PointerMotionMask
-    );
-
-    /* Listen for the WM_DELETE_WINDOW message (close button) */
-    Atom wm_delete = XInternAtom(g_display, "WM_DELETE_WINDOW", False);
-    XSetWMProtocols(g_display, g_window, &wm_delete, 1);
-
-    g_gc = XCreateGC(g_display, g_window, 0, NULL);
-    XMapWindow(g_display, g_window);   /* make visible */
-    XFlush(g_display);
-}
-
-/* ── platform_get_time ────────────────────────────────── */
-double platform_get_time(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
-    /*
-     * CLOCK_MONOTONIC never jumps backwards.
-     * Date.now() in JS can jump (NTP, DST).
-     * This is the safe equivalent for frame timing.
-     */
-}
-
-/* ── platform_get_input ───────────────────────────────── */
-/*
- * X11 events come from a queue.
- * XPending() checks if there are any — non-blocking, returns count.
- * XNextEvent() pulls one event and blocks if queue is empty.
- * We drain the queue each frame with the while(XPending) loop.
- */
-void platform_get_input(GameInput *input) {
-    static Atom wm_delete = 0;
-    if (!wm_delete)
-        wm_delete = XInternAtom(g_display, "WM_DELETE_WINDOW", False);
-
-    while (XPending(g_display)) {
-        XEvent ev;
-        XNextEvent(g_display, &ev);
-
-        switch (ev.type) {
-        case ClientMessage:
-            if ((Atom)ev.xclient.data.l[0] == wm_delete)
-                g_should_quit = 1;
-            break;
-
-        case KeyPress: {
-            KeySym sym = XLookupKeysym(&ev.xkey, 0);
-            if (sym == XK_Escape) UPDATE_BUTTON(input->escape,  1);
-            if (sym == XK_r)      UPDATE_BUTTON(input->reset,   1);
-            if (sym == XK_g)      UPDATE_BUTTON(input->gravity, 1);
-            break;
-        }
-        case KeyRelease: {
-            KeySym sym = XLookupKeysym(&ev.xkey, 0);
-            if (sym == XK_Escape) UPDATE_BUTTON(input->escape,  0);
-            if (sym == XK_r)      UPDATE_BUTTON(input->reset,   0);
-            if (sym == XK_g)      UPDATE_BUTTON(input->gravity, 0);
-            break;
-        }
-        case ButtonPress:
-            if (ev.xbutton.button == Button1)
-                UPDATE_BUTTON(input->mouse.left,  1);
-            if (ev.xbutton.button == Button3)
-                UPDATE_BUTTON(input->mouse.right, 1);
-            break;
-        case ButtonRelease:
-            if (ev.xbutton.button == Button1)
-                UPDATE_BUTTON(input->mouse.left,  0);
-            if (ev.xbutton.button == Button3)
-                UPDATE_BUTTON(input->mouse.right, 0);
-            break;
-        case MotionNotify:
-            input->mouse.x = ev.xmotion.x;
-            input->mouse.y = ev.xmotion.y;
-            break;
-        }
-    }
-}
-
-/* ── platform_display_backbuffer ──────────────────────── */
-/*
- * XImage wraps our pixel array without copying it.
- * XPutImage blits the XImage to the window via the X server.
- *
- * In JS terms: ctx.putImageData(imageData, 0, 0)
- */
-void platform_display_backbuffer(const GameBackbuffer *bb) {
-    if (!g_ximage) {
-        g_ximage = XCreateImage(
-            g_display,
-            DefaultVisual(g_display, DefaultScreen(g_display)),
-            (unsigned)DefaultDepth(g_display, DefaultScreen(g_display)),
-            ZPixmap,    /* pixel format */
-            0,          /* offset */
-            (char *)bb->pixels,
-            (unsigned)bb->width,
-            (unsigned)bb->height,
-            32,         /* bitmap_pad: 32-bit aligned rows */
-            bb->pitch   /* bytes_per_line */
-        );
-    } else {
-        g_ximage->data = (char *)bb->pixels;
-    }
-
-    XPutImage(g_display, g_window, g_gc, g_ximage,
-              0, 0, 0, 0,
-              (unsigned)bb->width,
-              (unsigned)bb->height);
-    XFlush(g_display);
-}
-
-/* ── Stub sound functions ─────────────────────────────── */
-void platform_play_sound(int id)  { (void)id; }
-void platform_play_music(int id)  { (void)id; }
-void platform_stop_music(void)    {}
-
-/* ── main ─────────────────────────────────────────────── */
-int main(void) {
-    /* 1. Allocate the pixel buffer on the heap.
-     *    640 * 480 * 4 bytes = 1,228,800 bytes ≈ 1.2 MB.
-     *    The stack is typically 8 MB — fine, but heap is cleaner for large buffers. */
-    uint32_t *pixels = calloc((size_t)(CANVAS_W * CANVAS_H), sizeof(uint32_t));
-    if (!pixels) { fprintf(stderr, "Out of memory\n"); return 1; }
-
-    GameBackbuffer bb = {
-        .pixels = pixels,
-        .width  = CANVAS_W,
-        .height = CANVAS_H,
-        .pitch  = CANVAS_W * (int)sizeof(uint32_t)
+    /* Create a texture the same size as the canvas.
+     * PIXELFORMAT_UNCOMPRESSED_R8G8B8A8 = 4 bytes per pixel (RGBA order).
+     * We swap R↔B before each upload so our ARGB pixels hit the right channels. */
+    Image img = {
+        .data    = NULL,
+        .width   = width,
+        .height  = height,
+        .mipmaps = 1,
+        .format  = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8,
     };
+    g_texture = LoadTextureFromImage(img);
+    SetTargetFPS(60);
+}
 
-    /* 2. Open window */
+double platform_get_time(void) {
+    return GetTime(); /* Raylib monotonic clock, returns seconds */
+}
+
+void platform_get_input(GameInput *input) {
+    (void)input; /* stubbed — added in Lesson 03 */
+}
+
+void platform_display_backbuffer(const GameBackbuffer *backbuffer) {
+    /* Pixel format fix: our pixels are 0xAARRGGBB stored little-endian as
+     * [B, G, R, A].  Raylib RGBA reads those same bytes as [R=B, G=G, B=R, A=A]
+     * — red and blue swap.  We fix this with an in-place swap before upload
+     * and a matching swap-back so game state is unaffected. */
+    uint32_t *px    = backbuffer->pixels;
+    int        total = backbuffer->width * backbuffer->height;
+    for (int i = 0; i < total; i++) {
+        uint32_t c = px[i];
+        px[i] = (c & 0xFF00FF00u)
+              | ((c & 0x00FF0000u) >> 16)
+              | ((c & 0x000000FFu) << 16);
+    }
+    UpdateTexture(g_texture, backbuffer->pixels);
+    for (int i = 0; i < total; i++) {     /* swap back */
+        uint32_t c = px[i];
+        px[i] = (c & 0xFF00FF00u)
+              | ((c & 0x00FF0000u) >> 16)
+              | ((c & 0x000000FFu) << 16);
+    }
+
+    /* Letterbox: scale canvas to fit window with black bars. */
+    int   win_w  = GetScreenWidth();
+    int   win_h  = GetScreenHeight();
+    float scaleX = (float)win_w / (float)CANVAS_W;
+    float scaleY = (float)win_h / (float)CANVAS_H;
+    g_scale    = (scaleX < scaleY) ? scaleX : scaleY;
+    int dst_w  = (int)((float)CANVAS_W * g_scale);
+    int dst_h  = (int)((float)CANVAS_H * g_scale);
+    g_offset_x = (win_w - dst_w) / 2;
+    g_offset_y = (win_h - dst_h) / 2;
+
+    BeginDrawing();
+    ClearBackground(BLACK);
+    DrawTextureEx(g_texture,
+                  (Vector2){(float)g_offset_x, (float)g_offset_y},
+                  0.0f, g_scale, WHITE);
+    EndDrawing();
+}
+
+/* Audio stubs — implemented in Lesson 15 */
+void platform_audio_init(GameState *s, int hz)  { (void)s; (void)hz; }
+void platform_audio_update(GameState *s)         { (void)s; }
+void platform_audio_shutdown(void)               {}
+
+/* -----------------------------------------------------------------------
+ * MAIN LOOP
+ * ----------------------------------------------------------------------- */
+int main(void) {
+    static GameState      state;
+    static GameBackbuffer bb;
+
+    /* Allocate the pixel buffer on the heap (640×480×4 ≈ 1.2 MB).
+     * Declared static so the struct itself doesn't eat the stack, but
+     * pixels must be heap-allocated so the platform can reference it
+     * across function calls. */
+    bb.pixels = (uint32_t *)malloc((size_t)(CANVAS_W * CANVAS_H) * sizeof(uint32_t));
+    if (!bb.pixels) return 1;
+    bb.width  = CANVAS_W;
+    bb.height = CANVAS_H;
+    bb.pitch  = CANVAS_W * 4;
+
     platform_init("Sugar, Sugar", CANVAS_W, CANVAS_H);
 
-    /* 3. Init game state */
-    GameState state;
-    GameInput input;
-    memset(&input, 0, sizeof(input));
-    game_init(&state, &bb);
-
-    /* 4. Delta-time game loop
-     *
-     *    prev_time ─────────────────────────── curr_time
-     *    |← dt (e.g. 0.016 s at 60 fps) ────→|
-     *
-     *    dt is the real elapsed seconds since last frame.
-     *    We cap it at 0.1 s so a debugger breakpoint doesn't
-     *    send grains flying through walls.
-     */
     double prev_time = platform_get_time();
 
-    while (!g_should_quit && !state.should_quit) {
-        double curr_time = platform_get_time();
-        float  dt        = (float)(curr_time - prev_time);
-        prev_time        = curr_time;
-        if (dt > 0.1f) dt = 0.1f;   /* clamp: max 100 ms per frame */
+    while (!WindowShouldClose() && !state.should_quit) {
+        double curr_time  = platform_get_time();
+        float  delta_time = (float)(curr_time - prev_time);
+        prev_time = curr_time;
+        if (delta_time > 0.1f) delta_time = 0.1f; /* clamp large dt */
 
-        prepare_input_frame(&input);
-        platform_get_input(&input);
-        game_update(&state, &input, dt);
-        game_render(&state, &bb);
+        /* Clear canvas to sky blue every frame */
+        int total = CANVAS_W * CANVAS_H;
+        for (int i = 0; i < total; i++)
+            bb.pixels[i] = COLOR_BG;
+
         platform_display_backbuffer(&bb);
     }
 
-    free(pixels);
+    UnloadTexture(g_texture);
+    CloseWindow();
+    free(bb.pixels);
     return 0;
 }
 ```
 
+**What's happening:**
+
+- `malloc(CANVAS_W * CANVAS_H * sizeof(uint32_t))` — allocates once at startup.  No allocations in the loop.
+- `delta_time = curr_time - prev_time` — the frame budget.  Capping at 0.1 s prevents a debugger pause from giving the simulation a huge time step.
+- The pixel-clear loop writes `COLOR_BG` to every pixel each frame.  In later lessons, `game_render()` will do this.
+- The R↔B swap is explained in the comments; don't try to avoid it — the channel order difference between our internal format and Raylib's GPU format is real and unavoidable.
+
 ---
 
-## Build & Run
+## Step 4: X11 backend
 
-```bash
-cd course
-clang -Wall -Wextra -O2 -o sugar \
-    src/main_x11.c src/game.c src/levels.c \
-    -lX11 -lm
-./sugar
+X11 is more verbose but the structure is identical.
+
+```c
+/* src/main_x11.c  —  Sugar, Sugar | X11 Platform Backend (Lesson 01) */
+#define _POSIX_C_SOURCE 199309L   /* expose clock_gettime, nanosleep */
+
+#include <X11/Xlib.h>
+#include <X11/Xutil.h>
+#include <time.h>     /* clock_gettime */
+#include <stdlib.h>   /* malloc, free  */
+#include <string.h>   /* memset        */
+#include "platform.h"
+
+/* Platform globals — game.c never sees these. */
+static Display *g_display;
+static Window   g_window;
+static GC       g_gc;
+static XImage  *g_ximage;
+static int      g_screen;
+static int      g_should_quit;
+static uint32_t *g_pixel_data;
+static int       g_pixel_w;
+static int       g_pixel_h;
+
+void platform_init(const char *title, int width, int height) {
+    g_display = XOpenDisplay(NULL);
+    if (!g_display) return; /* no X server — fail silently */
+    g_screen = DefaultScreen(g_display);
+
+    g_window = XCreateSimpleWindow(
+        g_display, RootWindow(g_display, g_screen),
+        0, 0, (unsigned)width, (unsigned)height,
+        1, BlackPixel(g_display, g_screen), WhitePixel(g_display, g_screen));
+
+    /* Lock window size — X11 has no built-in XImage scaling. */
+    XSizeHints *hints = XAllocSizeHints();
+    if (hints) {
+        hints->flags = PMinSize | PMaxSize;
+        hints->min_width  = hints->max_width  = width;
+        hints->min_height = hints->max_height = height;
+        XSetWMNormalHints(g_display, g_window, hints);
+        XFree(hints);
+    }
+
+    /* Register for the events we care about */
+    XSelectInput(g_display, g_window,
+                 ExposureMask | KeyPressMask | KeyReleaseMask |
+                 ButtonPressMask | ButtonReleaseMask |
+                 PointerMotionMask | Button1MotionMask |
+                 StructureNotifyMask);
+
+    /* Wire the window-close button (the ✕ in the title bar) */
+    Atom wm_delete = XInternAtom(g_display, "WM_DELETE_WINDOW", False);
+    XSetWMProtocols(g_display, g_window, &wm_delete, 1);
+
+    XStoreName(g_display, g_window, title);
+    XMapWindow(g_display, g_window);
+    XFlush(g_display);
+
+    g_gc = XCreateGC(g_display, g_window, 0, NULL);
+}
+
+double platform_get_time(void) {
+    /* CLOCK_MONOTONIC never jumps backward — correct for delta-time. */
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+}
+
+void platform_get_input(GameInput *input) {
+    (void)input; /* stubbed — added in Lesson 03 */
+    Atom wm_delete = XInternAtom(g_display, "WM_DELETE_WINDOW", False);
+    while (XPending(g_display)) {
+        XEvent event;
+        XNextEvent(g_display, &event);
+        if (event.type == ClientMessage &&
+            (Atom)event.xclient.data.l[0] == wm_delete)
+            g_should_quit = 1;
+    }
+}
+
+void platform_display_backbuffer(const GameBackbuffer *backbuffer) {
+    if (!g_display) return;
+
+    /* Create XImage once, pointing directly at the pixel buffer. */
+    if (!g_ximage || g_pixel_w != backbuffer->width) {
+        if (g_ximage) { g_ximage->data = NULL; XDestroyImage(g_ximage); }
+        g_pixel_data = backbuffer->pixels;
+        g_pixel_w    = backbuffer->width;
+        g_pixel_h    = backbuffer->height;
+        /* ZPixmap = packed pixels, same row stride as our buffer.
+         * (char*)pixels — XImage stores data as char*, but it points to
+         * our uint32_t array, so no conversion is needed. */
+        g_ximage = XCreateImage(
+            g_display, DefaultVisual(g_display, g_screen),
+            (unsigned)DefaultDepth(g_display, g_screen),
+            ZPixmap, 0,
+            (char *)backbuffer->pixels,
+            (unsigned)backbuffer->width, (unsigned)backbuffer->height,
+            32, backbuffer->pitch);
+    }
+
+    /* XPutImage blits the pixel array to the window. */
+    XPutImage(g_display, g_window, g_gc, g_ximage,
+              0, 0, 0, 0,
+              (unsigned)backbuffer->width, (unsigned)backbuffer->height);
+    XFlush(g_display);
+}
+
+void platform_audio_init(GameState *s, int hz)  { (void)s; (void)hz; }
+void platform_audio_update(GameState *s)         { (void)s; }
+void platform_audio_shutdown(void)               {}
+
+int main(void) {
+    static GameState      state;
+    static GameBackbuffer bb;
+
+    bb.pixels = (uint32_t *)malloc((size_t)(CANVAS_W * CANVAS_H) * sizeof(uint32_t));
+    if (!bb.pixels) return 1;
+    bb.width  = CANVAS_W;
+    bb.height = CANVAS_H;
+    bb.pitch  = CANVAS_W * 4;
+
+    platform_init("Sugar, Sugar", CANVAS_W, CANVAS_H);
+
+    double prev_time = platform_get_time();
+
+    while (!g_should_quit && !state.should_quit) {
+        double curr_time  = platform_get_time();
+        float  delta_time = (float)(curr_time - prev_time);
+        prev_time = curr_time;
+        if (delta_time > 0.1f) delta_time = 0.1f;
+
+        int total = CANVAS_W * CANVAS_H;
+        for (int i = 0; i < total; i++)
+            bb.pixels[i] = COLOR_BG;
+
+        platform_get_input(NULL); /* processes WM_DELETE_WINDOW */
+        platform_display_backbuffer(&bb);
+
+        /* Manual 60 fps cap — X11 has no SetTargetFPS equivalent. */
+        double elapsed = platform_get_time() - curr_time;
+        double target  = 1.0 / 60.0;
+        if (elapsed < target) {
+            struct timespec sleep_ts;
+            double rem = target - elapsed;
+            sleep_ts.tv_sec  = (time_t)rem;
+            sleep_ts.tv_nsec = (long)((rem - (double)sleep_ts.tv_sec) * 1e9);
+            nanosleep(&sleep_ts, NULL);
+        }
+    }
+
+    if (g_ximage) { g_ximage->data = NULL; XDestroyImage(g_ximage); }
+    if (g_display) { XDestroyWindow(g_display, g_window); XCloseDisplay(g_display); }
+    free(bb.pixels);
+    return 0;
+}
 ```
 
-**What you should see:**
-A 640×480 window titled "Sugar, Sugar" filled with a warm off-white color. Press Escape or click the window's close button to quit.
+**X11 vs Raylib — key differences:**
+
+| Concern         | Raylib                              | X11                                |
+|-----------------|-------------------------------------|------------------------------------|
+| Window creation | `InitWindow(w, h, title)`           | `XOpenDisplay` + `XCreateSimpleWindow` |
+| Frame timing    | `SetTargetFPS(60)`                  | Manual `nanosleep` at end of loop  |
+| Pixel upload    | `UpdateTexture` + GPU draw          | `XPutImage` direct software blit  |
+| Window close    | `WindowShouldClose()`               | `WM_DELETE_WINDOW` ClientMessage  |
+| Letterbox       | `DrawTextureEx` with scale          | Not done — window is fixed size   |
 
 ---
 
-## Key Concepts
+## Build and run
 
-- `uint32_t`: an unsigned 32-bit integer — same as `number` in JS but with a known, exact size.
-- `pixels[y * width + x]`: the canonical formula to address a 2D grid stored flat. At `(10, 3)` in a 640-wide buffer the index is `3*640+10 = 1930`.
-- `GameBackbuffer`: a struct holding a pointer to the pixel array. The struct is small (16 bytes); the actual pixels live in heap memory allocated with `calloc`.
-- `memset(ptr, 0, size)`: writes `size` zero bytes starting at `ptr`. Zeroing a struct is safe when all-zero bits represent a valid initial state (no pointer fields set to garbage, no floats that must start non-zero).
-- `delta_time (dt)`: the real number of seconds since the last frame. Multiplying velocity by `dt` makes movement frame-rate-independent. At 60 fps `dt ≈ 0.0167`. At 30 fps `dt ≈ 0.0333`.
-- `XPending` + `XNextEvent`: drain the OS event queue without blocking. This is the C equivalent of `addEventListener` in JS — but you pull events rather than having them pushed to callbacks.
-- `(void)param`: tells the compiler "I know I'm not using this parameter; don't warn me." Equivalent to `_param` prefix in TypeScript.
+```bash
+mkdir -p build
+
+# Raylib
+clang -Wall -Wextra -std=c99 -O0 -g -DDEBUG \
+      -fsanitize=address,undefined \
+      -o build/game src/main_raylib.c \
+      -lraylib -lm -lpthread -ldl
+
+./build/game
+
+# X11
+clang -Wall -Wextra -std=c99 -O0 -g -DDEBUG \
+      -fsanitize=address,undefined \
+      -o build/game src/main_x11.c \
+      -lX11 -lm
+
+./build/game
+```
+
+**Expected output:** A 640×480 window filled entirely with a soft sky-blue color.  Close it with Escape or the × button.
 
 ---
 
-## Exercise
+## Exercises
 
-Change `COLOR_BG` to `GAME_RGB(30, 30, 50)` (dark navy) and rebuild. The window should now open with a dark background. Revert when done — lessons ahead assume the warm off-white background.
+1. Change `COLOR_BG` to `GAME_RGB(30, 30, 30)` (dark grey) and rebuild.  Verify the canvas changes on both backends.
+2. Add a `COLOR_ORANGE GAME_RGB(251, 140, 0)` constant to `game.h` and paint a 100×100 rectangle in the center of the canvas by writing directly to `bb.pixels` in the loop.
+3. Why does X11 need `g_ximage->data = NULL` before `XDestroyImage`?  (Hint: who owns the pixel buffer?)
+
+---
+
+## What's next
+
+In Lesson 02 we extract the pixel-writing code into proper drawing primitives —
+`draw_pixel`, `draw_rect`, and the color macros — and pull the canvas-clear logic
+into a `game_render` function.

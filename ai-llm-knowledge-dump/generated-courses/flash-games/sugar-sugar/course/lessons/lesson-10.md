@@ -1,320 +1,247 @@
-# Lesson 10 — All 30 Levels + Complete Title Screen
+# Lesson 10: Win Detection — Cup Fill, Level Unlock, and Progress
 
-**By the end of this lesson you will have:**
-The complete game: a title screen with a 6×5 grid of 30 level buttons, all levels playable in sequence. Completing level 30 leads to a free-play sandbox. Locked levels are grey and unclickable.
+## What we're building
 
----
+Check whether all cups in a level are full after every simulation step.  When the win
+condition is met, unlock the next level and transition to `PHASE_LEVEL_COMPLETE`.
+Add the cup absorption logic inside `update_grains` so falling grains are collected.
 
-## Step 1 — Why levels.c uses no file I/O
+## What you'll learn
 
-In a JS game you might load levels from a JSON file at runtime:
+- AABB (Axis-Aligned Bounding Box) intersection for cup collection
+- Why we test the cup **interior** (not the exact pixel-edge walls)
+- `check_win()` — looping over all cups to find any that are not yet full
+- Unlocking the next level via `unlocked_count`
+- The `level_complete` and `level_advance` flow
+- Persistent unlock state across phase transitions
 
-```js
-const levels = await fetch('/levels.json').then(r => r.json());
-```
+## Prerequisites
 
-In Sugar Sugar, every level is hardcoded at compile time:
-
-```c
-// levels.c
-LevelDef g_levels[TOTAL_LEVELS] = {
-    [0]  = { ... },
-    [1]  = { ... },
-    ...
-    [29] = { ... },
-};
-```
-
-The compiler places `g_levels[]` in the binary's `.data` segment. At runtime it is already in memory — zero startup cost, zero disk reads, zero error handling for missing files.
-
-Trade-off: adding a level requires recompiling. That is fine for a fixed-puzzle game shipped as a single binary.
-
-`g_levels` is declared in `game.h` as `extern`:
-
-```c
-// game.h
-#define TOTAL_LEVELS 30
-extern LevelDef g_levels[TOTAL_LEVELS];
-```
-
-`extern` says "this array exists somewhere — the linker will find it." `levels.c` provides the actual storage. `game.c` and the platform backends reference it through the `extern` declaration.
-
-JS analogy: `extern` is like `import { g_levels } from './levels.js'` — you use it without re-declaring it.
+- Lesson 09 complete (LevelDef and level_load working)
 
 ---
 
-## Step 2 — Sparse array initialization with `[N] = { ... }`
+## Step 1: Cup absorption inside `update_grains`
 
-The 30 level structs in `levels.c` use designated array initializers:
-
-```c
-LevelDef g_levels[30] = {
-    [0]  = { .index = 0,  .emitter_count = 1, ... },
-    [5]  = { .index = 5,  .emitter_count = 1, ... },
-    [29] = { .index = 29, .emitter_count = 2, ... },
-};
-```
-
-You can define any slot in any order. Slots you skip are zero-initialized. This is a **sparse array initializer**.
-
-Why is this useful?
-- You can add level 17 without worrying about levels 1–16 being in order in the source file.
-- A zero-initialized `LevelDef` is a valid (empty) level — `emitter_count = 0`, `cup_count = 0`. The game handles it gracefully.
-
-Concrete check: `g_levels[3]` not listed in `levels.c`?
-- C standard guarantees it is filled with zeroes.
-- `emitter_count = 0` → no sugar spawns → nothing to do → level cannot be won.
-- The progression system will never reach it unless `unlocked_count` advances past it from a completed level, which requires a previous level to exist.
-
----
-
-## Step 3 — `unlocked_count` advances on completion
-
-`unlocked_count` starts at 1 (only level 1 is playable). Each time a level completes:
+Add a cup-check block after teleporters (before the settle check) for each grain:
 
 ```c
-// game.c — update_level_complete()
-static void update_level_complete(GameState *state, float dt) {
-    state->phase_timer += dt;
+/* src/game.c  —  cup check inside update_grains (after sub-step loop) */
 
-    if (state->phase_timer > 2.5f) {
-        int next = state->current_level + 1;
+/* ---- Cup check (AABB — interior only, walls excluded) ----
+ *
+ * We check the *interior* of the cup:  x+1 .. x+w-2,  y .. y+h-2
+ * because stamp_cups() placed solid wall pixels at the exact edges.
+ * Testing the interior prevents double-processing a grain that is
+ * physically colliding with the wall pixels.
+ *
+ * When the cup is full the grain is NOT absorbed — it rests on the
+ * solid bottom wall and eventually spills back out over the open top. */
+{
+  int gx = (int)p->x[i], gy = (int)p->y[i];
 
-        // advance the unlock frontier
-        if (next + 1 > state->unlocked_count)
-            state->unlocked_count = next + 1;
+  for (int c = 0; c < lv->cup_count; c++) {
+    Cup *cup = &lv->cups[c];
 
-        if (next >= TOTAL_LEVELS) {
-            change_phase(state, PHASE_FREEPLAY);
-        } else {
-            level_load(state, next);
-            change_phase(state, PHASE_PLAYING);
+    /* Interior bounds: one pixel inside each wall */
+    int ix0 = cup->x + 1,     ix1 = cup->x + cup->w - 1;
+    int iy0 = cup->y,          iy1 = cup->y + cup->h - 1;
+
+    if (gx >= ix0 && gx < ix1 && gy >= iy0 && gy < iy1) {
+
+      int color_ok = (cup->required_color == GRAIN_WHITE ||
+                      p->color[i] == (uint8_t)cup->required_color);
+
+      if (color_ok && cup->collected < cup->required_count) {
+        /* Absorb the grain: count it and remove from simulation. */
+        cup->collected++;
+        if (cup->collected == cup->required_count) {
+          /* Cup just reached 100% — SFX triggered in Lesson 15 */
         }
+        s_occ[gy * W + gx] = 0;  /* clear occupancy — grain is gone */
+        p->active[i] = 0;
+        goto next_grain;
+
+      } else if (!color_ok) {
+        /* Wrong color: discard silently.
+         * The original Sugar Sugar game does the same — no penalty,
+         * but the grain disappears (it can't pollute the cup). */
+        s_occ[gy * W + gx] = 0;
+        p->active[i] = 0;
+        goto next_grain;
+      }
+
+      /* Cup is full with correct color: grain stays active.
+       * It will pile up inside and eventually spill over the rim. */
     }
+  }
 }
 ```
 
-Walkthrough for completing level 1 (index 0):
-```
-next = 0 + 1 = 1
-next + 1 = 2
-unlocked_count was 1, now becomes 2
-level_load(state, 1)  → load level 2
-change_phase → PHASE_PLAYING
-```
-
-Walkthrough for completing level 30 (index 29):
-```
-next = 29 + 1 = 30
-30 >= TOTAL_LEVELS (30)  → true
-change_phase → PHASE_FREEPLAY
-```
-
-No level 31 is ever loaded.
-
 ---
 
-## Step 4 — `PHASE_FREEPLAY`: sandbox after the last level
-
-Freeplay is the same simulation as `PHASE_PLAYING` but with no win condition. The player draws lines, grains fall, nothing checks if cups are full.
+## Step 2: `check_win()` — all cups filled?
 
 ```c
-// game.c
-static void update_freeplay(GameState *state, GameInput *input, float dt) {
-    // same drawing + physics calls as update_playing
-    // ... handle mouse drawing, spawn_grains, update_grains ...
+/* src/game.c  —  check_win */
 
-    // Escape → go back to title
-    if (BUTTON_PRESSED(input->escape)) {
-        change_phase(state, PHASE_TITLE);
-    }
-
-    // R → clear lines and grains, restart freeplay
-    if (BUTTON_PRESSED(input->reset)) {
-        memset(&state->grains, 0, sizeof(state->grains));
-        memset(&state->lines,  0, sizeof(state->lines));
-    }
-    // no check_win() call here — freeplay never ends automatically
+/* Returns 1 if every cup in the active level is filled, 0 otherwise.
+ * Called once per frame at the end of update_playing. */
+static int check_win(GameState *state) {
+  LevelDef *lv = &state->level;
+  for (int c = 0; c < lv->cup_count; c++) {
+    if (lv->cups[c].collected < lv->cups[c].required_count)
+      return 0; /* at least one cup not yet full */
+  }
+  return 1; /* all cups filled */
 }
 ```
 
-Rendering freeplay uses `render_playing()` minus the cup fill bars (or with them — it doesn't matter since cups have `required_count = 0` in the freeplay state).
-
-The level loaded for freeplay is the last level by convention:
-
-```c
-// in update_level_complete(), when next >= TOTAL_LEVELS:
-level_load(state, TOTAL_LEVELS - 1); // keep using level 30's geometry
-change_phase(state, PHASE_FREEPLAY);
-```
-
 ---
 
-## Step 5 — Complete title screen: 30 buttons in a 6×5 grid
-
-`render_title()` draws all 30 buttons using the grid math from Lesson 07:
+## Step 3: Wire win detection into `update_playing`
 
 ```c
-// game.c — render_title()
-static void render_title(const GameState *state, GameBackbuffer *bb) {
-    draw_rect(bb, 0, 0, CANVAS_W, CANVAS_H, COLOR_BG);
+/* src/game.c  —  update_playing: add win check at the end */
 
-    // Centered title text
-    draw_text(bb, 220, 40, "SUGAR  SUGAR", COLOR_UI_TEXT);
-    draw_text(bb, 180, 62, "click a level to play", COLOR_UI_TEXT);
+static void update_playing(GameState *state, GameInput *input, float dt) {
+  state->phase_timer += dt;
 
-    const int cols   = 6;
-    const int btn_w  = 70, btn_h  = 40;
-    const int gap    = 8;
-    const int grid_x = 60,  grid_y = 110;
+  /* ... (drawing, reset, escape, simulation — from Lesson 08) ... */
 
-    for (int i = 0; i < TOTAL_LEVELS; i++) {
-        int col = i % cols;
-        int row = i / cols;
-        int bx  = grid_x + col * (btn_w + gap);
-        int by  = grid_y + row * (btn_h + gap);
+  spawn_grains(state, dt);
+  update_grains(state, dt);
 
-        int locked  = (i >= state->unlocked_count);
-        int hovered = (state->title_hover == i);
+  /* ---- Win check ---- */
+  if (check_win(state)) {
+    /* Unlock the next level if not already unlocked. */
+    int next = state->current_level + 1;
+    if (next < TOTAL_LEVELS && next >= state->unlocked_count)
+      state->unlocked_count = next + 1;
 
-        uint32_t bg = locked  ? GAME_RGB(160, 155, 150)
-                    : hovered ? COLOR_BTN_HOVER
-                    :           COLOR_BTN_NORMAL;
-
-        draw_rect        (bb, bx, by, btn_w, btn_h, bg);
-        draw_rect_outline(bb, bx, by, btn_w, btn_h, COLOR_BTN_BORDER);
-
-        if (locked) {
-            draw_text(bb, bx + 28, by + 14, "?", COLOR_UI_TEXT);
-        } else {
-            draw_int(bb, bx + 22, by + 14, i + 1, COLOR_UI_TEXT);
-        }
-    }
-
-    // Freeplay button — always visible after beating all levels
-    if (state->unlocked_count > TOTAL_LEVELS) {
-        draw_text(bb, 220, 370, "FREEPLAY UNLOCKED", COLOR_COMPLETE);
-    }
+    change_phase(state, PHASE_LEVEL_COMPLETE);
+  }
 }
 ```
 
-Grid math check for the 30th button (index 29):
-```
-col = 29 % 6 = 5
-row = 29 / 6 = 4
-bx  = 60 + 5 * (70 + 8) = 60 + 390 = 450
-by  = 110 + 4 * (40 + 8) = 110 + 192 = 302
-right edge = 450 + 70 = 520  < 640  ✓ (doesn't clip)
-bottom edge = 302 + 40 = 342  < 480  ✓
-```
-
-ASCII layout (first 12 buttons, 6 per row):
-
-```
-x=60                                              x=450
- [L01][L02][L03][L04][L05][L06]   y=110
- [L07][L08][L09][L10][L11][L12]   y=158
- ...
- [L25][L26][L27][L28][L29][L30]   y=302
-```
-
 ---
 
-## Step 6 — `update_title()`: hover detection and click handling
+## Step 4: Level advancement in `update_level_complete`
 
 ```c
-// game.c
-static void update_title(GameState *state, GameInput *input) {
-    int mx = input->mouse.x;
-    int my = input->mouse.y;
-    state->title_hover = -1; // reset every frame
+/* src/game.c  —  update_level_complete: advance to next level */
 
-    const int cols   = 6;
-    const int btn_w  = 70, btn_h  = 40;
-    const int gap    = 8;
-    const int grid_x = 60,  grid_y = 110;
+static void update_level_complete(GameState *state, GameInput *input, float dt) {
+  state->phase_timer += dt;
 
-    for (int i = 0; i < TOTAL_LEVELS; i++) {
-        int col = i % cols;
-        int row = i / cols;
-        int bx  = grid_x + col * (btn_w + gap);
-        int by  = grid_y + row * (btn_h + gap);
+  int advance = (state->phase_timer > 2.0f)
+             || BUTTON_PRESSED(input->mouse.left)
+             || BUTTON_PRESSED(input->enter);
 
-        if (mx >= bx && mx < bx + btn_w &&
-            my >= by && my < by + btn_h) {
-            state->title_hover = i; // record which button the mouse is over
-        }
+  if (advance) {
+    int next = state->current_level + 1;
+    if (next >= TOTAL_LEVELS) {
+      /* All 30 levels complete — unlock sandbox mode. */
+      change_phase(state, PHASE_FREEPLAY);
+    } else {
+      level_load(state, next);
+      change_phase(state, PHASE_PLAYING);
     }
-
-    // Click: only if hovering an unlocked button
-    if (BUTTON_PRESSED(input->mouse.left) && state->title_hover >= 0) {
-        int idx = state->title_hover;
-        if (idx < state->unlocked_count) {
-            level_load(state, idx);
-            change_phase(state, PHASE_PLAYING);
-        }
-    }
-
-    // Escape on title screen = quit
-    if (BUTTON_PRESSED(input->escape)) {
-        state->should_quit = 1;
-    }
+  }
 }
 ```
 
-Note `state->title_hover = -1` at the top. Every frame it resets. If the mouse is over no button, `title_hover` stays -1. The render function checks `state->title_hover == i` — a -1 will never match a valid index.
+---
+
+## Step 5: Cup progress rendering
+
+Add a visual fill-bar inside each cup so the player can see progress.
+
+```c
+/* src/game.c  —  render_cups (called from render_playing) */
+
+static void render_cups(const LevelDef *lv, GameBackbuffer *bb) {
+  for (int c = 0; c < lv->cup_count; c++) {
+    const Cup *cup = &lv->cups[c];
+    int full = (cup->collected >= cup->required_count);
+
+    /* Draw empty cup interior */
+    draw_rect(bb, cup->x + 1, cup->y, cup->w - 2, cup->h - 1, COLOR_CUP_EMPTY);
+
+    /* Draw fill bar rising from the bottom */
+    if (cup->required_count > 0) {
+      int filled_h = full
+        ? (cup->h - 1)
+        : (cup->collected * (cup->h - 1)) / cup->required_count;
+      int fill_y = cup->y + (cup->h - 1) - filled_h;
+      uint32_t fill_color = full ? COLOR_CUP_FILL_FULL : COLOR_CUP_FILL;
+      draw_rect(bb, cup->x + 1, fill_y, cup->w - 2, filled_h, fill_color);
+    }
+
+    /* Cup outline (over the fill so walls are visible) */
+    draw_rect_outline(bb, cup->x, cup->y, cup->w, cup->h, COLOR_CUP_BORDER);
+  }
+}
+```
+
+Call `render_cups` from `render_playing`:
+
+```c
+static void render_playing(const GameState *state, GameBackbuffer *bb) {
+  /* ... clear, lines, grains (from Lesson 08) ... */
+
+  render_cups(&state->level, bb);
+}
+```
 
 ---
 
-## Step 7 — All 30 level definitions (overview)
+## Understanding cup absorption
 
-The full `levels.c` contains all 30 levels grouped by mechanic:
+```
+Grain at (gx, gy) entering cup[c]:
 
-| Range    | Theme                            |
-|----------|----------------------------------|
-| 1–4      | Basic routing: one to four cups  |
-| 5–8      | Obstacle shelves                 |
-| 9–12     | Color filters and colored cups   |
-| 13–16    | Gravity switch                   |
-| 17–20    | Cyclic (wrap-around)             |
-| 21–24    | Teleporters                      |
-| 25–28    | Mixed mechanics                  |
-| 29–30    | Complex multi-mechanic puzzles   |
+  Cup walls (stamped as solid in LineBitmap):
+    left:   x = cup->x
+    right:  x = cup->x + cup->w - 1
+    bottom: y = cup->y + cup->h - 1
 
-Each level's `index` field matches its 0-based position in `g_levels[]`. This is redundant but useful for debugging: if `state->current_level != state->level.index`, something went wrong in `level_load()`.
+  Interior (absorption zone):
+    x in [cup->x+1, cup->x+cup->w-2]
+    y in [cup->y,   cup->y+cup->h-2]
+
+  Why not the wall pixels?
+    The wall pixels are in LineBitmap — IS_SOLID returns true for them.
+    A grain collides with the wall and slides — it never "is at" a wall pixel.
+    Testing only the interior guarantees we absorb grains that have already
+    passed through the open top and are inside the cup cavity.
+```
 
 ---
 
-## Build & Run
+## Build and run
 
 ```bash
-clang -Wall -Wextra -O2 -o sugar \
-    src/main_x11.c src/game.c src/levels.c -lX11 -lm
-./sugar
+./build-dev.sh -r
 ```
 
-**What you should see:**
-- Title screen with 30 buttons in a 6×5 grid.
-- Only button 1 is coloured; buttons 2–30 show `?`.
-- Clicking button 1 starts the first puzzle.
-- Completing each level unlocks the next.
-- After level 30, the screen shows "FREEPLAY UNLOCKED" and transitions to sandbox.
-- Escape from freeplay returns to the title.
+**Expected output:**
+- Level 0 shows a cup with a blue fill bar that rises as grains land inside.
+- When the bar reaches 100% (bright green), a brief celebration overlay appears.
+- After 2 seconds (or on click), Level 1 loads automatically.
+- Level 2 is now unlocked on the title screen.
 
 ---
 
-## Key Concepts
+## Exercises
 
-- `extern LevelDef g_levels[TOTAL_LEVELS]`: declared in `game.h`, defined in `levels.c`. The linker connects them. JS analogy: `export` / `import`.
-- **Compile-time data**: level arrays live in the binary's `.data` segment. Zero runtime I/O, zero error handling for missing files.
-- **Sparse array initializer** `[N] = { ... }`: skip slots freely; unset slots are zero-initialized.
-- `unlocked_count`: the single integer gating progression. Comparing `i >= unlocked_count` determines locked vs. playable.
-- `PHASE_FREEPLAY`: same physics as `PHASE_PLAYING`, no win check, Escape returns to title.
-- `title_hover = -1`: reset every frame. Render checks equality to index — -1 matches nothing.
-- `BUTTON_PRESSED(input->mouse.left)` + `title_hover >= 0` + `idx < unlocked_count`: three guards before loading a level.
+1. Add a `collected_visual` float field to `Cup` that lags behind `collected` (lerp at 0.05 per frame).  Use it for the fill bar so it animates smoothly.
+2. What happens with `required_color = GRAIN_RED` if the player never routes grains through a filter?  Verify that white grains are rejected and disappear.
+3. Change `required_count` to 999 for a test level.  Does the cup ever overflow?  Observe the pile-up inside when the cup is full.
 
 ---
 
-## Exercise
+## What's next
 
-Add a "RESTART TOUR" button to the title screen that appears only when `unlocked_count >= TOTAL_LEVELS`. Draw it at `(220, 400, 200, 36)`. When clicked, set `state->unlocked_count = 1` and call `change_phase(state, PHASE_TITLE)`. This resets progression without quitting.
+In Lesson 11 we add color filters — zones where passing grains change color —
+and multi-emitter levels where the player must route different streams to different cups.

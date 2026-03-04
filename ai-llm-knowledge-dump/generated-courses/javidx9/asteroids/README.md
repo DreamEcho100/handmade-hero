@@ -1,70 +1,100 @@
-# Asteroids — Javidx9 Course Port
+# Asteroids — Build-Along Course
 
-## What is this?
+A step-by-step C course building the classic Asteroids arcade game from scratch, targeting Linux
+with both X11/OpenGL and Raylib backends.
 
-A port of [OneLoneCoder / javidx9's Asteroids](https://github.com/OneLoneCoder) from C++/Windows console to C/Linux. The player pilots a triangle ship through a field of tumbling asteroids, shooting them apart for points. Large asteroids split into two medium ones; medium ones split into two small ones; small ones vanish. Clear all asteroids to advance to the next wave.
+Based on [javidx9 / OneLoneCoder](https://github.com/OneLoneCoder) — *Code-It-Yourself! Asteroids*
+(original C++ / Windows console). Ported to C with pixel-buffer rendering, a proper platform
+abstraction layer, and added audio. All code is educational and original C++ is used for study only.
 
-## How to play
+---
+
+## What you will build
+
+A wireframe Asteroids game where:
+
+- A triangular ship rotates and thrusts with Newtonian physics
+- Bullets fire in the ship's facing direction (one shot per key-press)
+- Asteroids drift and tumble; shooting splits them large→medium→small→gone
+- All objects wrap toroidally (exit right, reappear left — same top/bottom)
+- Explosions play a stereo-panned sound effect based on screen position
+- Score accumulates; clearing all asteroids advances the wave
+- A bitmap-font HUD shows SCORE in the top-left corner
+
+---
+
+## Prerequisites
+
+- Completed the **Snake course** (or equivalent): you should be comfortable with the
+  backbuffer pipeline, `GameButtonState` input model, `GAME_PHASE` enum, and `DEBUG_TRAP`
+- C compiler: `clang` (or `gcc`)
+- Linux with either:
+  - **X11 backend**: `sudo apt install libx11-dev libxkbcommon-dev libasound2-dev`
+  - **Raylib backend**: `sudo apt install libraylib-dev`
+- OpenGL/GLX is provided by your GPU driver or mesa
+
+---
+
+## How to build and run
+
+```sh
+# From the course/ directory:
+
+# Raylib backend (default) — build only
+./build-dev.sh
+
+# Raylib backend — build and run immediately
+./build-dev.sh -r
+
+# X11 backend — build and run
+./build-dev.sh --backend=x11 -r
+
+# Debug build with AddressSanitizer + UBSan
+./build-dev.sh -d -r
+```
+
+The binary is placed in `build/asteroids`.
+
+---
+
+## Controls
 
 | Key | Action |
 |-----|--------|
-| `←` / `A` | Rotate counter-clockwise (held = continuous) |
-| `→` / `D` | Rotate clockwise (held = continuous) |
-| `↑` / `W` | Thrust forward (held = acceleration) |
+| `←` / `A` | Rotate counter-clockwise |
+| `→` / `D` | Rotate clockwise |
+| `↑` / `W` | Thrust forward (hold for continuous) |
 | `Space` | Fire bullet (one shot per press — holding does not rapid-fire) |
-| `Esc` / `Q` | Quit |
+| `Q` / `Esc` | Quit |
 
-The ship wraps around screen edges. Bullets expire after 2.5 seconds. After death the scene freezes for 1.5 seconds then resets.
+---
 
-## How to build
+## Lesson list
 
-From the `course/` directory:
+| # | Title | One-line summary |
+|---|-------|-----------------|
+| 01 | Window + backbuffer | Open a black window; meet `AsteroidsBackbuffer`, `pitch`, `build-dev.sh`, `DEBUG_TRAP` |
+| 02 | Drawing primitives | `draw_rect`, `draw_rect_blend`; validate `GAME_RGBA` pixel format on both backends |
+| 03 | Line drawing (Bresenham) | Integer line algorithm; `draw_pixel_w` toroidal wrapper; triangle test |
+| 04 | Input | `GameButtonState`, double-buffer `inputs[2]`, `GameInput` union with 4 buttons |
+| 05 | Game structure | `GameState`, `GAME_PHASE` enum, `asteroids_init`/`update`/`render` skeleton |
+| 06 | Vec2 + rotation matrix | `Vec2`, `draw_wireframe`, `cos`/`sin` once per object, `srand(time(NULL))` |
+| 07 | Ship physics + toroidal wrap | `vx += sin(angle)*THRUST*dt`; `draw_pixel_w` wraps lines seamlessly at edges |
+| 08 | Asteroids entity pool | `SpaceObject[MAX_ASTEROIDS]`, `compact_pool` swap-with-last O(1) removal |
+| 09 | Bullets | `bullets[MAX_BULLETS]`, fire "just pressed", timer expiry, `compact_pool` |
+| 10 | Collision detection | `dx²+dy²<r²` (no sqrt), bullet-asteroid hit+split, player death, wave clear |
+| 11 | Font + UI | `FONT_8X8[128][8]` BIT7-left, `draw_text`, `snprintf`, score + death overlay |
+| 12 | Audio | Thrust/fire/explode/death SFX; spatial pan by `asteroid.x`; ALSA + Raylib audio |
+| 13 | Polish + `utils/` refactor | Refactor to `utils/`; wave scaling; high score; `COURSE-BUILDER-IMPROVEMENTS.md` |
 
-```sh
-# X11 backend (default Linux)
-./build_x11.sh
+---
 
-# Raylib backend
-./build_raylib.sh
-```
+## What you will have achieved by the end
 
-Both scripts compile `src/asteroids.c` together with the chosen platform layer.
-
-## Architecture
-
-| Layer | File | Responsibility |
-|-------|------|----------------|
-| Game logic | `src/asteroids.c` + `src/asteroids.h` | All update and render logic; no OS calls |
-| Platform contract | `src/platform.h` | Declares `platform_get_input`, timing, and backbuffer upload |
-| X11 platform | `src/platform_x11.c` | Window creation, event loop, XImage upload |
-| Raylib platform | `src/platform_raylib.c` | Window creation, event loop, `UpdateTexture` upload |
-
-**Backbuffer pipeline** — `asteroids_render` writes pixels into an `AsteroidsBackbuffer` (`uint32_t pixels[800 × 600]`). The platform uploads that buffer to the GPU once per frame.
-
-**Delta-time loop** — `asteroids_update(state, input, dt)` advances physics by `dt` seconds. Rotation, thrust, bullet movement, and the death timer are all `× dt` so the game runs at the same speed regardless of frame rate.
-
-**Bresenham line + toroidal wrapping** — `draw_line` uses integer Bresenham; each pixel is written via `draw_pixel_w` which wraps coordinates modulo screen dimensions. Wireframe objects crossing the screen edge render seamlessly without any special case.
-
-**Entity pools** — asteroids and bullets live in fixed C arrays (`SpaceObject asteroids[64]`, `SpaceObject bullets[32]`). Dead objects are marked `active = 0` and removed by `compact_pool` (swap-with-last, O(1) amortized). No heap allocation occurs in the game loop.
-
-## Lessons
-
-| # | Title | What you learn |
-|---|-------|----------------|
-| 1 | Screen & backbuffer | `SCREEN_W/H`, pixel format, clearing with `draw_rect` |
-| 2 | Bresenham's line | Integer line drawing; why no floating-point needed |
-| 3 | 2D rotation matrix | `x' = x·cos θ − y·sin θ`; `draw_wireframe` model pipeline |
-| 4 | Toroidal wrapping | `draw_pixel_w` modulo wrap; seamless edge crossing |
-| 5 | Input system | `GameButtonState`; held vs just-pressed; `prepare_input_frame` |
-| 6 | Euler integration | `dx += sin(angle)·accel·dt`; `x += dx·dt` |
-| 7 | Entity pools | Fixed arrays + `compact_pool` (swap-with-last); no heap in loop |
-| 8 | Circle collision | Squared-distance test; no `sqrt` needed |
-| 9 | Asteroid splitting | `size/2`; two random-angle children spawned at hit position |
-| 10 | Level progression | Wave clear detection; bonus score; safe respawn placement |
-| 11 | State machine | `GAME_PHASE` enum; `PHASE_DEAD` freezes update, blinks ship |
-
-## Original source
-
-Based on **javidx9 / OneLoneCoder** — *"Code-It-Yourself! Asteroids"* (Windows console, C++).  
-Original repository: <https://github.com/OneLoneCoder/Javidx9>  
-YouTube series: *One Lone Coder* — used here for educational study only.
+- A fully playable Asteroids game running natively on Linux (both X11 and Raylib)
+- Implemented from scratch: Bresenham's line drawing, 2D rotation matrix, Euler physics,
+  toroidal wrapping, entity pool management, circle collision, bitmap font rendering,
+  procedural audio with stereo panning
+- Understood the Handmade Hero platform-abstraction architecture: game logic never touches
+  X11, Raylib, or any OS API — the platform layer is a thin translator
+- Written code that passes `-Wall -Wextra` with zero warnings on both backends

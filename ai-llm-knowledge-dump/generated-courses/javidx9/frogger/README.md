@@ -1,66 +1,109 @@
-# Frogger — Javidx9 Course Port
+# Frogger — C Game Development Course
 
-## What is this?
+> A hands-on course for JavaScript/TypeScript developers learning C through game programming.  
+> Port of OneLoneCoder's (javidx9) Frogger from C++/Windows to C99/Linux.
 
-A port of [OneLoneCoder / javidx9's Frogger](https://github.com/OneLoneCoder) from C++/Windows console to C/Linux. The frog must cross five lanes of traffic and three lanes of river to reach the homes at the top. Reach 3 homes to win.
+---
 
-## How to play
+## What is this course?
 
-| Key | Action |
-|-----|--------|
-| `↑` / `W` | Hop forward (one tile per press) |
-| `↓` / `S` | Hop backward (one tile per press) |
-| `←` / `A` | Hop left (one tile per press) |
-| `→` / `D` | Hop right (one tile per press) |
-| `Esc` / `Q` | Quit |
+You'll build a complete, playable Frogger game in C99 that runs on both X11/OpenGL and Raylib. By the end you will have written every line: the pixel renderer, input system, scrolling lane engine, collision grid, sprite loader, bitmap font, and a stereo-panned audio system — all without a game engine.
 
-Hops fire **once per press** — holding a key does not repeat. On river rows the frog is carried sideways by the log beneath it.
+The course follows the same architecture used in the **Tetris**, **Snake**, and **Asteroids** courses (CPU backbuffer pipeline, thin platform layer, Data-Oriented Design) and introduces three techniques new to Frogger:
 
-## How to build
+| Technique                    | What it teaches                                         |
+|------------------------------|---------------------------------------------------------|
+| `lane_scroll()` floor-mod    | Pixel-accurate bidirectional scrolling without C truncation bugs |
+| Danger buffer                | Flat 2D collision grid rebuilt every frame              |
+| `draw_sprite_partial` UV crop | Rendering a sub-region of a sprite sheet                |
 
-From the `course/` directory:
+---
 
-```sh
-# X11 backend (default Linux)
-./build_x11.sh
+## Prerequisites
+
+| Requirement        | Notes                                                                 |
+|--------------------|-----------------------------------------------------------------------|
+| **Snake course**   | Required — assumes familiarity with the CPU backbuffer, `GameButtonState`, and delta-time loop |
+| **Asteroids course** | Recommended — introduces sprites and audio; Frogger builds on both  |
+| C99 compiler       | `clang` recommended; `gcc` works                                      |
+| Linux              | X11 + OpenGL or Raylib; both backends build on Ubuntu / Debian        |
+
+Install dependencies:
+
+```bash
+# X11 backend
+sudo apt install clang libx11-dev libxkbcommon-dev libgl-dev
 
 # Raylib backend
-./build_raylib.sh
+sudo apt install clang libraylib-dev
 ```
 
-Both scripts compile `src/frogger.c` together with the chosen platform layer and link against the platform's libraries.
+---
 
-## Architecture
+## Build and run
 
-| Layer | File | Responsibility |
-|-------|------|----------------|
-| Game logic | `src/frogger.c` + `src/frogger.h` | All update and render logic; no OS calls |
-| Platform contract | `src/platform.h` | Declares `platform_get_input`, timing, and backbuffer upload |
-| X11 platform | `src/platform_x11.c` | Window creation, event loop, XImage upload |
-| Raylib platform | `src/platform_raylib.c` | Window creation, event loop, `UpdateTexture` upload |
+```bash
+cd course/
 
-**Backbuffer pipeline** — `frogger_render` writes pixels into a `FroggerBackbuffer` (`uint32_t pixels[1024 × 640]`). The platform uploads that buffer to the GPU once per frame; no platform drawing API is called from game code.
+# X11 backend (debug)
+./build-dev.sh --backend=x11
 
-**Delta-time loop** — `frogger_tick(state, input, dt)` advances the simulation by `dt` seconds (capped at 100 ms). Lane scroll positions, river-carry physics, and the death timer are all driven by `state->time`.
+# X11 backend (release)
+./build-dev.sh --backend=x11 -r
 
-**Data-Oriented Design** — lane speeds (`float lane_speeds[10]`) and lane patterns (`char lane_patterns[10][64]`) are separate arrays so the hot path (danger buffer rebuild) touches only the speed floats (40 bytes, one cache line).
+# Raylib backend (debug)
+./build-dev.sh --backend=raylib
+
+# Raylib backend (release)
+./build-dev.sh --backend=raylib -r
+```
+
+Then run from the `course/` directory so the `assets/` path resolves:
+
+```bash
+./build/frogger_x11       # or ./build/frogger_raylib
+```
+
+---
 
 ## Lessons
 
-| # | Title | What you learn |
-|---|-------|----------------|
-| 1 | Screen & cell math | `SCREEN_CELLS_W/H`, `CELL_PX`, `TILE_PX`; coordinate systems |
-| 2 | Sprite loader | `.spr` binary format; flat `SpriteBank` pool; no heap in game loop |
-| 3 | Lane scroll | `lane_scroll()` — positive-modulo pixel math; fixing the C-truncation jump bug |
-| 4 | Input system | `GameButtonState`; `half_transition_count`; "just-pressed" vs held |
-| 5 | Game tick | `frogger_tick`: hop, river carry, danger buffer rebuild, collision |
-| 6 | Danger buffer | `uint8_t danger[W×H]` rebuilt every tick; center-cell collision |
-| 7 | Rendering | Painter's algorithm; `draw_sprite_partial`; death flash; HUD |
-| 8 | Platform split | `platform.h` contract; same game.c compiles under X11 and Raylib |
-| 9 | DOD layout | Separating hot (speeds) from cold (patterns) data |
+| #  | Title                              | Summary                                                             |
+|----|------------------------------------|---------------------------------------------------------------------|
+| 01 | Window + Backbuffer                | Open a resizable window; allocate a CPU pixel buffer with `pitch`; unified build script; letterbox scaling |
+| 02 | Drawing Primitives                 | `draw_rect`, `draw_rect_blend`; `GAME_RGBA` pixel format; named color constants; cross-backend validation |
+| 03 | Input                              | `GameButtonState`; double-buffered `inputs[2]`; `GameInput` union; X11 auto-repeat suppression |
+| 04 | Game Structure + `GAME_PHASE`      | `GameState`; `game_init/update/render` split; `GAME_PHASE` enum state machine |
+| 05 | Lane Data (DOD)                    | `lane_speeds[]` + `lane_patterns[][]` as separate arrays; Data-Oriented Design rationale |
+| 06 | Scrolling Lanes (`lane_scroll`)    | Pixel-accurate floor-mod scrolling; bidirectional lanes; sub-tile smoothness |
+| 07 | Danger Buffer + Frog Collision     | Flat 2D `danger[]` bitmask; per-frame rebuild; frog death and respawn |
+| 08 | Sprites (`SpriteBank`)             | `.spr` binary file loader; `SpriteBank` fixed pool; `draw_sprite_partial` UV crop |
+| 09 | Homes + Win Condition              | Five home cells; `homes_reached` counter; `PHASE_WIN` trigger; win overlay |
+| 10 | Font + UI                          | `FONT_8X8[128][8]` BIT7-left bitmap font; `draw_text`; `snprintf` HUD |
+| 11 | Audio                              | Hop / death / home-reached SFX; stereo pan by `frog_x`; ALSA + Raylib buffer model |
+| 12 | Polish + `utils/` Refactor         | Refactor draw code to `utils/`; respawn flicker; game-over overlay; restart key |
 
-## Original source
+---
 
-Based on **javidx9 / OneLoneCoder** — *"Code-It-Yourself! Frogger"* (Windows console, C++).  
-Original repository: <https://github.com/OneLoneCoder/Javidx9>  
-YouTube series: *One Lone Coder* — used here for educational study only.
+## What you will have built by the end
+
+- A complete, playable Frogger running natively on Linux at 60 fps
+- A CPU pixel renderer that works identically on two completely different graphics backends
+- A scrolling tile engine with correct floor-mod arithmetic for bidirectional lanes
+- A collision system where the grid is provably consistent with what is drawn on screen
+- A sprite system that loads binary `.spr` files and renders UV-cropped tiles
+- A stereo-panned audio system driven entirely by synthesised PCM data
+- A `utils/` module split matching the architecture used across all courses
+
+---
+
+## Relationship to other courses
+
+```
+Tetris  ─┐
+Snake   ─┤── same backbuffer + platform pattern
+Asteroids─┤── adds sprites + audio
+Frogger ─┘── adds lane_scroll + danger buffer + spatial audio
+```
+
+Each course is self-contained but shares the same `game.h`/`platform.h`/`audio.c` architecture. Building all four gives you a reusable mental model for any 2D game in C.
