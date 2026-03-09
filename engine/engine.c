@@ -179,6 +179,11 @@ int engine_init(EngineState *engine) {
   // Backend-specific timing state (latency_samples, running_sample_index,
   // etc.) lives in each backend's private config struct, NOT here.
 
+  // NOTE: Both x11 (ALSA S16_LE) and Raylib (miniaudio 16-bit) backends
+  // currently set AUDIO_FORMAT_I16 during their init.  If a future backend
+  // sets a wider format the allocation here should be updated to use:
+  //   audio_format_bytes_per_sample(format) * max_sample_count
+  // For now I16 is the only format, so sizeof(i16)*2 is always correct.
   const int bytes_per_sample = (int)(sizeof(i16) * 2); // 16-bit stereo
   const u32 audio_hz = game->config.audio_game_update_hz != 0
                            ? game->config.audio_game_update_hz
@@ -198,7 +203,7 @@ int engine_init(EngineState *engine) {
 
   game->audio.samples_per_second = (i32)game->config.initial_audio_sample_rate;
   game->audio.max_sample_count = max_sample_count;
-  game->audio.samples = allocations->audio_samples.base;
+  game->audio.samples_buffer = allocations->audio_samples.base;
   game->audio.is_initialized = false; // backend sets true after its init
 
   printf("✅ Audio buffer: %d samples max\n", max_sample_count);

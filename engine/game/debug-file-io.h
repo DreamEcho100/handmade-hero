@@ -93,7 +93,7 @@ typedef struct {
  *   }
  */
 De100DebugDe100FileReadResult
-de100_debug_read_entire_file(ThreadContext *thread_context,
+de100_debug_read_entire_file(GameThreadContext *thread_context,
                              const char *filename);
 
 /**
@@ -105,7 +105,7 @@ de100_debug_read_entire_file(ThreadContext *thread_context,
  *
  * Safe to call multiple times (idempotent).
  */
-void de100_debug_free_de100_file_memory(ThreadContext *thread_context,
+void de100_debug_free_de100_file_memory(GameThreadContext *thread_context,
                                         De100MemoryBlock *memory);
 
 /**
@@ -125,7 +125,7 @@ void de100_debug_free_de100_file_memory(ThreadContext *thread_context,
  *   }
  */
 De100DebugFileWriteResult
-de100_debug_write_entire_file(ThreadContext *thread_context,
+de100_debug_write_entire_file(GameThreadContext *thread_context,
                               const char *filename, u32 size, const void *data);
 
 // ═══════════════════════════════════════════════════════════════════════════

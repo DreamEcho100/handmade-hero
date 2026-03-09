@@ -106,7 +106,6 @@ update_window_from_backbuffer(GameBackBuffer *backbuffer) {
 
 de100_file_scoped_fn inline void
 audio_generate_and_send(EngineGameState *game, GameMainCode *game_main_code) {
-
   // Fill ALL available buffers (Raylib double-buffers internally)
   for (int i = 0; i < 4; i++) {
     u32 samples_to_generate = raylib_get_samples_to_write(&game->audio);

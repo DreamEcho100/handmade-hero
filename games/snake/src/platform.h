@@ -71,10 +71,10 @@ static inline int platform_game_props_init(PlatformGameProps *props) {
    * Raylib uses a 4096-sample stream buffer, so allocate 8 frames (~6400)
    * to cover any reasonable backend with headroom to spare. */
   int max_samples = (props->game.audio.samples_per_second / 60) * 8;
-  props->game.audio.samples =
+  props->game.audio.samples_buffer =
       (int16_t *)malloc(max_samples * sizeof(int16_t) * 2); /* Stereo */
 
-  if (!props->game.audio.samples) {
+  if (!props->game.audio.samples_buffer) {
     fprintf(stderr, "❌ Failed to allocate audio buffer\n");
     free(props->game.backbuffer.pixels);
     return 1;
@@ -90,9 +90,9 @@ static inline void platform_game_props_free(PlatformGameProps *props) {
     free(props->game.backbuffer.pixels);
     props->game.backbuffer.pixels = NULL;
   }
-  if (props->game.audio.samples) {
-    free(props->game.audio.samples);
-    props->game.audio.samples = NULL;
+  if (props->game.audio.samples_buffer) {
+    free(props->game.audio.samples_buffer);
+    props->game.audio.samples_buffer = NULL;
   }
 }
 

@@ -27,7 +27,7 @@ Then the backend init runs:
 - Raylib: `raylib_init_audio(&engine->game.audio, ...)`
 - X11/ALSA: `linux_init_audio(&x11->audio_config, &engine->game.audio, ...)`
 
-Both set `audio_output->samples_per_second` and `audio_output->is_initialized = true`. From this moment the game can safely write into `samples`.
+Both set `audio_output->samples_per_second`, `audio_output->format = AUDIO_FORMAT_I16`, and `audio_output->is_initialized = true`. From this moment the game can safely write into `samples_buffer` using `audio_write_sample()`.
 
 Finally `game_init` runs. It reads persistent `GameMemory` and initialises the game-specific audio state (`HHGameAudioState`, oscillator phases, volumes). This state lives inside the permanent memory block — not a global, not a DLL static.
 
@@ -38,7 +38,7 @@ The main loop calls `audio_generate_and_send`:
 - **Raylib**: polls `IsAudioStreamProcessed` up to 4 times; each time it fires, sets `game->audio.sample_count` and calls `get_audio_samples`, then `raylib_send_samples`.
 - **X11/ALSA**: computes how far the write cursor is behind the latency target, sets `sample_count` accordingly, calls `get_audio_samples`, writes to the ALSA ring buffer with `snd_pcm_writei`.
 
-`get_audio_samples` lands in the game DLL (`game_get_audio_samples` in `main.c`). It reads `HHGameAudioState` from `GameMemory`, calls into `audio-helpers.h` utilities, and writes interleaved stereo `i16` pairs into `audio->samples`. The backend then moves those bytes to hardware.
+`get_audio_samples` lands in the game DLL (`game_get_audio_samples` in `main.c`). It reads `HHGameAudioState` from `GameMemory`, mixes all voices in `f32`, and writes each stereo frame via `audio_write_sample(buf, frame_index, left_f32, right_f32)`. That helper reads `buf->format` (set by the backend at init) and converts to the correct PCM format at the output boundary. The backend then moves those bytes to hardware.
 
 ### What `audio-helpers.h` and `audio.h` Provide
 
@@ -46,7 +46,8 @@ The main loop calls `audio_generate_and_send`:
 - `GameAudioState` — a minimal engine-level audio state (`SoundSource tone`, `f32 master_volume`). Games with complex needs define their own (e.g., `HHGameAudioState`).
 - `De100SoundPlayer` — a playback-cursor player for pre-loaded PCM: stores a pointer to the sample data, cursor, loop flag, gain. The game advances it per-sample in the fill callback.
 - `de100_audio_midi_to_freq(midi_note)` — standard MIDI note → Hz (`A4 = 440 Hz`).
-- `de100_audio_clamp_sample(f32)` — clamp float to `i16` range `[-32768, 32767]`.
+- `audio_write_sample(buf, frame_index, L, R)` — write one normalised stereo frame (`-1.0..1.0`) into `buf->samples_buffer`, converting to whatever `buf->format` the backend set (`AUDIO_FORMAT_I16`, `I32`, `F32`, `F64`). Dispatches via `_Generic` on the type of `L`: pass `f32` values for the `f32` path, `f64` for higher precision.
+- `audio_format_bytes_per_sample(fmt)` — returns bytes per stereo frame for an `AudioSampleFormat`.
 - `de100_audio_calculate_pan(pan, &left_vol, &right_vol)` — linear panning from `[-1, 1]`.
 - MIDI note constants: `DE100_MIDI_C4`, `DE100_MIDI_A4`, `DE100_MIDI_REST`, etc.
 
@@ -54,14 +55,14 @@ The main loop calls `audio_generate_and_send`:
 
 ### What Is Currently Missing
 
-| Gap                                               | Impact                                                                                    |
-| ------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| No audio file loader (WAV, OGG, MP3)              | Every sound must be synthesised — no pre-recorded SFX or music                            |
-| No streaming ring buffer                          | Music files too large to load fully must wait; nothing decodes ahead                      |
-| `g_game_is_paused` not connected to audio         | Pausing the game visually does not stop audio generation                                  |
-| No `sample_clock` in `GameAudioOutputBuffer`      | A/V sync requires backend-specific code (`running_sample_index`, `total_samples_written`) |
-| No bus mixer                                      | Voices mix directly to `i16`; clipping likely on loud multi-voice scenes                  |
-| No `backend_pause_audio` / `backend_resume_audio` | Focus-loss handling is ad-hoc per backend                                                 |
+| Gap                                               | Impact                                                                                                                                                                                              |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No audio file loader (WAV, OGG, MP3)              | Every sound must be synthesised — no pre-recorded SFX or music                                                                                                                                      |
+| No streaming ring buffer                          | Music files too large to load fully must wait; nothing decodes ahead                                                                                                                                |
+| `g_game_is_paused` not connected to audio         | ✅ Handled: `game_get_audio_samples` writes silence when `g_game_is_paused` is true — backends remain fully agnostic; `backend_pause_audio`/`backend_resume_audio` (clean ALSA drain) still missing |
+| No `sample_clock` in `GameAudioOutputBuffer`      | A/V sync requires backend-specific code (`running_sample_index`, `total_samples_written`)                                                                                                           |
+| No bus mixer                                      | All voices mix to one flat stream; per-bus volume control requires a mixer layer                                                                                                                    |
+| No `backend_pause_audio` / `backend_resume_audio` | Focus-loss handling is ad-hoc per backend                                                                                                                                                           |
 
 ---
 
@@ -103,13 +104,13 @@ GAME_GET_AUDIO_SAMPLES(game_get_audio_samples) {
   MyGameAudioState *a = &((MyGameState *)memory->permanent.base)->audio;
 
   if (!audio->is_initialized) {
-    memset(audio->samples, 0, (size_t)audio->sample_count * sizeof(i16) * 2);
+    memset(audio->samples_buffer, 0,
+           (size_t)audio->sample_count * (size_t)audio_format_bytes_per_sample(audio->format));
     return;
   }
 
-  i16 *out = (i16 *)audio->samples;
   for (i32 i = 0; i < audio->sample_count; i++) {
-    float bgm_s = sinf(a->bgm.phase) * a->bgm.volume * a->music_vol * 32767.0f;
+    float bgm_s = sinf(a->bgm.phase) * a->bgm.volume * a->music_vol;
     a->bgm.phase += 2.0f * PI * a->bgm.frequency / audio->samples_per_second;
     if (a->bgm.phase > 2.0f * PI) a->bgm.phase -= 2.0f * PI;
 
@@ -118,8 +119,7 @@ GAME_GET_AUDIO_SAMPLES(game_get_audio_samples) {
 
     float L = (bgm_s + sfx_s) * a->master_vol;
     float R = L;
-    out[i * 2]     = de100_audio_clamp_sample(L);
-    out[i * 2 + 1] = de100_audio_clamp_sample(R);
+    audio_write_sample(audio, i, L, R);  /* format-agnostic; backend decides PCM width */
     a->sample_clock++;
   }
 }
@@ -359,9 +359,9 @@ These five additions unlock everything else without requiring library dependenci
 
 The backend increments it by `sample_count` after each fill call. Games use it for A/V sync, subtitle timing, animation events, and accurate music position. Without it, every game reimplements this in backend-specific ways.
 
-### 3 — Connect `g_game_is_paused` to Audio
+### 3 — ~~Connect `g_game_is_paused` to Audio~~ ✅ DONE (game-callback level)
 
-Gate `audio_generate_and_send` on `!g_game_is_paused` in both backends. Add `backend_pause_audio` / `backend_resume_audio` to the backend interface (ALSA: `snd_pcm_drop/prepare`, Raylib: `PauseAudioStream/ResumeAudioStream`). Without this, pausing the game visually doesn't stop audio clicks from a partial buffer.
+`game_get_audio_samples` now checks `g_game_is_paused` immediately after the `is_initialized` guard. When true it `memset`s `samples_buffer` to zero and returns — the backend receives clean silence and keeps its stream fed without underruns. The backends themselves never touch `g_game_is_paused`; they are fully agnostic to game pause state, which is the correct layering. Note: `backend_pause_audio` / `backend_resume_audio` (clean ALSA drain via `snd_pcm_drop/prepare`, Raylib `PauseAudioStream/ResumeAudioStream`) are still missing, so the ALSA ring buffer keeps running during pause (filled with silence). A proper backend-level pause interface is a future improvement.
 
 ### 4 — Streaming Ring Buffer Utility (`engine/game/audio-stream.h`)
 
@@ -377,27 +377,28 @@ void audio_ring_read(AudioRingBuffer *r, i16 *dst, u32 frames);
 
 Games allocate the backing buffer from `GameMemory`. The fill callback drains; main-loop decode fills. Threading optional and additive on top.
 
-### 5 — `sample_format` Enum in `GameAudioOutputBuffer`
+### 5 — ~~`sample_format` Enum in `GameAudioOutputBuffer`~~ ✅ DONE
 
-Add before adding any new backend (SDL3, CoreAudio, WASAPI). Defers the i16-vs-float32 decision to a negotiated contract rather than a silent assumption. The enum costs nothing now and prevents a widespread refactor later.
+`AudioSampleFormat` (`AUDIO_FORMAT_I16`, `I32`, `F32`, `F64`) is now in `engine/game/audio.h`. Both backends set `format = AUDIO_FORMAT_I16` at init. Game code uses `audio_write_sample(buf, frame_index, L, R)` from `audio-helpers.h` — a `_Generic` macro that dispatches on the type of `L` and converts normalised `f32`/`f64` to whatever PCM format the backend requested. No game file ever casts `samples_buffer` to `i16*` directly.
 
 Everything beyond this — OGG decoding, reverb, spatial audio, buses — is game-layer code that assembles from these five primitives plus `stb_vorbis.h` or a hand-rolled decoder.
 
 ```c
 typedef struct {
-  i32   samples_per_second;  // Set once at init; game reads this
-  i32   sample_count;        // Samples to generate THIS call (set by backend, max ≤ max_sample_count)
-  i32   max_sample_count;    // Buffer capacity — never write more than this (set at engine init)
-  void *samples;             // i16 interleaved stereo, allocated by engine
-  bool  is_initialized;      // Backend sets true after successful init; game can check
+  i32             samples_per_second;  // Set once at init; game reads this
+  i32             sample_count;        // Samples to generate THIS call (set by backend, max ≤ max_sample_count)
+  i32             max_sample_count;    // Buffer capacity — never write more than this (set at engine init)
+  void           *samples_buffer;      // Opaque PCM buffer; write via audio_write_sample()
+  AudioSampleFormat format;            // Set by backend at init (currently always AUDIO_FORMAT_I16)
+  bool            is_initialized;      // Backend sets true after successful init; game can check
 } GameAudioOutputBuffer;
 ```
 
 The game's `get_audio_samples` callback receives this. It should:
 
 1. Read `sample_count` to know how many frames to write.
-2. Write interleaved stereo `i16` pairs into `samples`.
-3. Never write more than `max_sample_count` samples.
+2. Write samples via `audio_write_sample(buf, frame_index, left_f32, right_f32)` — never cast `samples_buffer` directly.
+3. Never write more than `max_sample_count` frames.
 4. Check `is_initialized` if it needs to handle the uninitialized case gracefully.
 
 ---
@@ -448,7 +449,7 @@ u32   backend_get_samples_to_write(GameAudioOutputBuffer *audio_output);
 void  backend_send_samples  (GameAudioOutputBuffer *audio_output);
 ```
 
-5. In `init`: set `audio_output->samples_per_second` and `audio_output->is_initialized = true` on success.
+5. In `init`: set `audio_output->samples_per_second`, `audio_output->format` (e.g. `AUDIO_FORMAT_I16`), and `audio_output->is_initialized = true` on success. Never omit `format` — game code calls `audio_write_sample()` which dispatches on it.
 6. In the main loop, cap `samples_to_generate` to `audio_output->max_sample_count` before calling `get_audio_samples`.
 
 ---
@@ -488,12 +489,9 @@ The safe default for this engine is **no** — keep `get_audio_samples` main-thr
 
 #### Sample format
 
-Every current backend uses `i16` interleaved stereo. SDL3, WASAPI, and CoreAudio all prefer — or in CoreAudio's case _require_ — `float32`. The choices are:
+`AudioSampleFormat` is now in `engine/game/audio.h` with four cases: `AUDIO_FORMAT_I16`, `I32`, `F32`, `F64`. Both current backends set `AUDIO_FORMAT_I16` at init. When adding SDL3, WASAPI, or CoreAudio (which prefer or require `float32`), the backend simply sets `AUDIO_FORMAT_F32` instead — game code is unchanged because it always calls `audio_write_sample()`.
 
-- Negotiate at init: add a `sample_format` enum to `GameAudioOutputBuffer` (`AUDIO_FORMAT_I16`, `AUDIO_FORMAT_F32`)
-- Always mix in `i16` and convert inside the backend before sending
-
-If you don't solve this now, every new backend silently adds a format conversion step with differing quality tradeoffs. The enum approach is cleaner.
+The game's contract is: **mix in normalised `f32`, pass to `audio_write_sample`, never touch `samples_buffer` directly.** Format conversion is the backend's private responsibility.
 
 #### Buffer size ownership
 
@@ -547,12 +545,12 @@ Violating any of these causes priority inversion and audio dropouts. The safe de
 - `samples_per_second` — the game needs this to compute tone frequencies
 - `sample_count` — frames to fill this call
 - `max_sample_count` — safety cap
-- `samples` — the buffer pointer
+- `samples_buffer` — the opaque buffer pointer
+- `format` — ✅ added (`AudioSampleFormat`); use `audio_write_sample()` to write, never cast directly
 - `is_initialized` — lets the game guard writes and handle device changes gracefully
 
 **Consider adding before the next backend:**
 
-- `sample_format` enum — otherwise every backend silently assumes `i16`; adding it later is a wider refactor
 - `channel_count` — stereo is fine now, but adding it later touches every fill callback
 - `u64 sample_clock` — an absolute sample counter the backend increments; equivalent to the old `running_sample_index` but now exposed in the shared contract so any game can sync animations/events to audio precisely without backend-specific code
 
@@ -689,20 +687,20 @@ This creates a hidden dependency between backend buffer size and effect complexi
 
 ### Pause / Focus Loss
 
-**Game layer: stop calling `get_audio_samples`. Backend layer: drain with silence or pause the stream.**
+**Game layer: write silence into the buffer. Backend layer (future): drain with `backend_pause_audio` or pause the stream.**
 
-When the game loses focus:
+Currently implemented: `game_get_audio_samples` checks `g_game_is_paused` right after the `is_initialized` guard. If true, it `memset`s `samples_buffer` to zero and returns. The backend sees a normal call that happened to produce silence — no special pause path needed, no underruns, no backend coupling.
 
-| Backend   | Pause mechanism                                 |
+The missing piece is a clean backend drain on pause for ALSA. ALSA's ring buffer keeps running while filled with silence (fine), but if a future `backend_pause_audio` were added it could do `snd_pcm_drop` + `snd_pcm_prepare` to stop the hardware clock during pause:
+
+| Backend   | Future pause mechanism                          |
 | --------- | ----------------------------------------------- |
 | ALSA      | `snd_pcm_drop` then `snd_pcm_prepare` to resume |
 | Raylib    | `PauseAudioStream` / `ResumeAudioStream`        |
 | WASAPI    | `IAudioClient::Stop` / `Start`                  |
 | CoreAudio | `AudioOutputUnitStop` / `Start`                 |
 
-The game layer does not need to know any of this — it just stops receiving `get_audio_samples` calls. But the backend must handle the "paused while hardware is still running" state explicitly. ALSA's ring buffer will starve and produce underrun errors (`EPIPE`) on resume if no silence is written while paused.
-
-The current backend interface is missing `backend_pause_audio` / `backend_resume_audio`. Adding these as no-ops on backends that self-drain is low-cost; not having them means every backend handles focus-loss ad-hoc.
+The current approach (silence from game callback) is correct for this stage. Focus-loss pause is handled the same way. The backend interface has no pause concept yet.
 
 ---
 
@@ -757,17 +755,15 @@ The layering violation already fixed in this refactor — game adapter code impo
 
 ```c
 void get_audio_samples(GameMemory *memory, GameAudioOutputBuffer *audio) {
-  i16 *out = (i16 *)audio->samples;
   for (i32 i = 0; i < audio->sample_count; i++) {
-    i16 sample = (i16)(32000 * sin(state->tone_phase));
-    *out++ = sample; // left
-    *out++ = sample; // right
+    float sample = sinf(state->tone_phase);
     state->tone_phase += 2.0f * PI * state->tone_hz / audio->samples_per_second;
+    audio_write_sample(audio, i, sample, sample);  /* mono: L == R */
   }
 }
 ```
 
-Keep the phase accumulator in game state so it persists across calls.
+Keep the phase accumulator in game state so it persists across calls. Mix in normalised `f32` (−1.0 to 1.0) — `audio_write_sample` converts to the backend's PCM format.
 
 ### Case 2: Streaming PCM from a file / decoder
 
@@ -788,10 +784,9 @@ Generate samples from note events stored in game state. Advance a sample clock e
 ```c
 i64 sample_clock = state->sample_clock;
 for (i32 i = 0; i < audio->sample_count; i++) {
-  // advance sequencer at sample_clock
-  i16 s = mix_active_voices(state, sample_clock++);
-  ((i16 *)audio->samples)[i * 2 + 0] = s;
-  ((i16 *)audio->samples)[i * 2 + 1] = s;
+  // advance sequencer at sample_clock; mix_active_voices returns normalised f32
+  float s = mix_active_voices_f32(state, sample_clock++);
+  audio_write_sample(audio, i, s, s);
 }
 state->sample_clock = sample_clock;
 ```
@@ -819,8 +814,7 @@ for (i32 i = 0; i < audio->sample_count; i++) {
   float s = 0;
   for (int t = 0; t < NUM_TRACKS; t++)
     s += track_sample(state->tracks[t]) * lerp(state->gain[t], state->target_gain[t], alpha);
-  ((i16 *)audio->samples)[i * 2]     = (i16)s;
-  ((i16 *)audio->samples)[i * 2 + 1] = (i16)s;
+  audio_write_sample(audio, i, s, s);
 }
 ```
 
@@ -892,19 +886,17 @@ memset(bus_sfx,   0, sample_count * sizeof(float) * 2);
 for each music_voice: mix_voice_float(bus_music, voice, sample_count);
 for each sfx_voice:   mix_voice_float(bus_sfx,   voice, sample_count);
 
-// 3. Apply bus gains and write final i16 output
-i16 *out = (i16 *)audio->samples;
+// 3. Apply bus gains and write final output via audio_write_sample
 for (i32 i = 0; i < sample_count; i++) {
   float L = bus_music[i*2]   * state->music_gain
           + bus_sfx[i*2]     * state->sfx_gain;
   float R = bus_music[i*2+1] * state->music_gain
           + bus_sfx[i*2+1]   * state->sfx_gain;
-  out[i*2]   = clamp_i16((i32)L);
-  out[i*2+1] = clamp_i16((i32)R);
+  audio_write_sample(audio, i, L, R);  /* clamps + converts to backend format */
 }
 ```
 
-`float32` intermediate prevents clipping when many voices accumulate. The `i16` conversion happens once, at the end.
+`float32` intermediate prevents clipping when many voices accumulate. `audio_write_sample` handles the format conversion once, at the output boundary.
 
 ### Case 11: Looping sound with wrap boundary
 
@@ -942,10 +934,23 @@ advance_timeline(state, audio_time_seconds); // subtitles, events, flip sync
 
 ### Case 13: Focus loss / game paused
 
-Gate `get_audio_samples` at the engine level; keep the callback free of pause logic:
+Currently implemented: `game_get_audio_samples` writes silence and returns early when `g_game_is_paused` is true. The platform backends are unaware of pause state:
 
 ```c
-// In the main loop:
+// In game_get_audio_samples (game callback — current approach):
+if (!audio_buffer->is_initialized || audio_buffer->sample_count == 0) return;
+if (g_game_is_paused) {
+  memset(audio_buffer->samples_buffer, 0,
+         (size_t)audio_buffer->sample_count
+           * (size_t)audio_format_bytes_per_sample(audio_buffer->format));
+  return;  // backend sends silence; stream stays fed, no underruns
+}
+```
+
+Future ideal — add `backend_pause_audio` to stop the hardware clock during pause (saves power, reduces ALSA ring-buffer churn):
+
+```c
+// In the main loop (aspirational):
 if (!engine.is_paused && game->audio.is_initialized) {
   u32 n = backend_get_samples_to_write(&game->audio);
   if (n > 0) {
@@ -954,7 +959,7 @@ if (!engine.is_paused && game->audio.is_initialized) {
     backend_send_samples(&game->audio);
   }
 } else {
-  backend_pause_audio(&game->audio); // no-op on backends that self-drain with silence
+  backend_pause_audio(&game->audio); // no-op on backends that self-drain
 }
 ```
 
@@ -965,16 +970,12 @@ Filters require state across calls. Store it in `GameMemory` so hot-reload prese
 ```c
 typedef struct { float prev_L; float prev_R; float cutoff; } LowPassState;
 
-// In get_audio_samples, after mixing into bus_sfx:
-i16 *buf = (i16 *)audio->samples;
+// In get_audio_samples, after mixing into float bus_sfx[sample_count*2]:
 for (i32 i = 0; i < audio->sample_count; i++) {
-  float in_L = (float)buf[i*2];
-  float in_R = (float)buf[i*2+1];
   // one-pole IIR: y[n] = (1-a)*x[n] + a*y[n-1]
-  lpf->prev_L = (1.0f - lpf->cutoff) * in_L + lpf->cutoff * lpf->prev_L;
-  lpf->prev_R = (1.0f - lpf->cutoff) * in_R + lpf->cutoff * lpf->prev_R;
-  buf[i*2]   = clamp_i16((i32)lpf->prev_L);
-  buf[i*2+1] = clamp_i16((i32)lpf->prev_R);
+  lpf->prev_L = (1.0f - lpf->cutoff) * bus_sfx[i*2]   + lpf->cutoff * lpf->prev_L;
+  lpf->prev_R = (1.0f - lpf->cutoff) * bus_sfx[i*2+1] + lpf->cutoff * lpf->prev_R;
+  audio_write_sample(audio, i, lpf->prev_L, lpf->prev_R);
 }
 ```
 
@@ -984,27 +985,27 @@ If `LowPassState` were a DLL-local static, hot-reload resets `prev_L/R` to 0 and
 
 ## Potential Issues Checklist
 
-| Issue                                               | Symptom                                    | Fix                                                                      |
-| --------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------ |
-| Buffer overflow                                     | Crash or corruption                        | Always cap `sample_count` to `max_sample_count`                          |
-| Stale buffer data                                   | Clicks/pops when muted                     | `memset` to 0 on silence                                                 |
-| Phase discontinuity on reload                       | Click at reload boundary                   | Store phase in `GameMemory`                                              |
-| ALSA underrun                                       | Distorted output, `EPIPE` errors           | Increase `safety_samples`; call `snd_pcm_recover`                        |
-| Raylib buffer missed                                | Dropped audio frame                        | Loop `GetSamplesToWrite` up to N times per frame                         |
-| Sample rate mismatch                                | Wrong pitch                                | Resample at load or per-sample                                           |
-| `is_initialized` not checked                        | Crash on first frames                      | Guard all sample writes with `is_initialized`                            |
-| `is_initialized` only checked at startup            | Silent corruption on device change         | Re-check every frame                                                     |
-| Emoji / non-ASCII in `printf`                       | Compiler warns/errors                      | Use `\u25xx` BMP-only escapes or literal UTF-8 bytes                     |
-| Backend-specific type in `_common/` or `game/`      | Dead fields on other backends              | Move to backend-private struct                                           |
-| `get_audio_samples` called from audio thread        | Malloc/lock inside causes dropout or crash | Use ring-buffer shim; fill on main thread only                           |
-| Wrong sample format assumed                         | Distorted output on CoreAudio / WASAPI     | Add `sample_format` to `GameAudioOutputBuffer` before adding new backend |
-| Debug function imported across layer boundary       | Breaks on new backend, coupling bloat      | Read from `GameAudioOutputBuffer` fields or use a debug function pointer |
-| Gain/pitch applied via backend API                  | Behaviour diverges between backends        | Apply in mixer in game code before writing to `samples`                  |
-| Voice/mixer state in DLL-local static               | State reset on hot-reload; click/pop       | All audio state (cursors, phases, filters) in `GameMemory`               |
-| Mixing directly to `i16` across many voices         | Clipping/distortion on loud scenes         | Mix to `float32` bus buffers; clamp to `i16` once at final output        |
-| Loop point mid-call not handled                     | Reads garbage past end of asset            | Use a partial-copy loop with explicit wrap logic in the mixer            |
-| Effect history not preserved across calls           | Clicks at call boundaries (filter, reverb) | Store history in `GameMemory`; effects must accept arbitrary chunk sizes |
-| Effect requires min buffer size, backend gives less | Convolution artefacts, HRTF incorrect      | Document min buffer per effect; verify all backends can supply it        |
-| Pause handled inside `get_audio_samples`            | Game logic leaks into audio callback       | Gate the call at engine/main-loop level; keep callback pure              |
-| A/V sync derived from frame timer                   | Drifts under CPU load                      | Add `sample_clock` to `GameAudioOutputBuffer`; derive time from it       |
-| `is_initialized` is plain `bool` across threads     | Data race on device change (CoreAudio)     | Use atomic release-store / acquire-load before adding a threaded backend |
+| Issue                                               | Symptom                                    | Fix                                                                                                                                                                                                      |
+| --------------------------------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Buffer overflow                                     | Crash or corruption                        | Always cap `sample_count` to `max_sample_count`                                                                                                                                                          |
+| Stale buffer data                                   | Clicks/pops when muted                     | ✅ Done: `memset` to 0 on **every** paused frame in `game_get_audio_samples` (no `was_paused` static shortcut)                                                                                           |
+| Phase discontinuity on reload                       | Click at reload boundary                   | Store phase in `GameMemory`                                                                                                                                                                              |
+| ALSA underrun                                       | Distorted output, `EPIPE` errors           | Increase `safety_samples`; call `snd_pcm_recover`                                                                                                                                                        |
+| Raylib buffer missed                                | Dropped audio frame                        | Loop `GetSamplesToWrite` up to N times per frame                                                                                                                                                         |
+| Sample rate mismatch                                | Wrong pitch / wrong duration               | ✅ Done: `HHGameAudioState.samples_per_second` synced from `audio_buffer->samples_per_second` each callback; use `duration_ms * audio->samples_per_second / 1000.0f` — never hardcode `48000` or `48.0f` |
+| `is_initialized` not checked                        | Crash on first frames                      | ✅ Done: early-return guard at top of `game_get_audio_samples`                                                                                                                                           |
+| `is_initialized` only checked at startup            | Silent corruption on device change         | ✅ Done: backends re-check before every `get_samples_to_write` call; game callback guards on entry                                                                                                       |
+| Emoji / non-ASCII in `printf`                       | Compiler warns/errors                      | Use `\u25xx` BMP-only escapes or literal UTF-8 bytes                                                                                                                                                     |
+| Backend-specific type in `_common/` or `game/`      | Dead fields on other backends              | Move to backend-private struct                                                                                                                                                                           |
+| `get_audio_samples` called from audio thread        | Malloc/lock inside causes dropout or crash | Use ring-buffer shim; fill on main thread only                                                                                                                                                           |
+| Wrong sample format assumed                         | Distorted output on CoreAudio / WASAPI     | ✅ Done: `AudioSampleFormat` in `GameAudioOutputBuffer`; use `audio_write_sample()`                                                                                                                      |
+| Debug function imported across layer boundary       | Breaks on new backend, coupling bloat      | ✅ Done: F1 key prints `GameAudioOutputBuffer` fields directly; `raylib/audio.h` removed from game adapter                                                                                               |
+| Gain/pitch applied via backend API                  | Behaviour diverges between backends        | Apply in mixer in game code before writing to `samples`                                                                                                                                                  |
+| Voice/mixer state in DLL-local static               | State reset on hot-reload; click/pop       | ✅ Done: `was_paused` static removed; all audio state (cursors, phases, filters, `samples_per_second`) in `GameMemory` via `HandMadeHeroGameState`                                                       |
+| Mixing directly to `i16` across many voices         | Clipping/distortion on loud scenes         | ✅ Done: mix in normalised `f32`; call `audio_write_sample()` — never cast `samples_buffer` to `i16*` directly                                                                                           |
+| Loop point mid-call not handled                     | Reads garbage past end of asset            | Use a partial-copy loop with explicit wrap logic in the mixer                                                                                                                                            |
+| Effect history not preserved across calls           | Clicks at call boundaries (filter, reverb) | Store history in `GameMemory`; effects must accept arbitrary chunk sizes                                                                                                                                 |
+| Effect requires min buffer size, backend gives less | Convolution artefacts, HRTF incorrect      | Document min buffer per effect; verify all backends can supply it                                                                                                                                        |
+| Pause handled inside `get_audio_samples`            | Game logic leaks into audio callback       | ✅ Done: `game_get_audio_samples` writes silence and returns early when paused — platform backends are fully agnostic                                                                                    |
+| A/V sync derived from frame timer                   | Drifts under CPU load                      | Add `sample_clock` to `GameAudioOutputBuffer`; derive time from it                                                                                                                                       |
+| `is_initialized` is plain `bool` across threads     | Data race on device change (CoreAudio)     | Use atomic release-store / acquire-load before adding a threaded backend                                                                                                                                 |

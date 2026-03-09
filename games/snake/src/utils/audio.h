@@ -52,10 +52,10 @@
  * but as raw int16 instead of float32.
  */
 typedef struct {
-  int16_t *samples;       /* Interleaved stereo PCM; platform allocates    */
-  int samples_per_second; /* 44100 or 48000                            */
-  int sample_count;       /* Stereo pairs to generate; buffer byte size =
-                             sample_count × 2 × sizeof(int16_t)            */
+  int16_t *samples_buffer; /* Interleaved stereo PCM; platform allocates    */
+  int samples_per_second;  /* 44100 or 48000                            */
+  int sample_count;        /* Stereo pairs to generate; buffer byte size =
+                              sample_count × 2 × sizeof(int16_t)            */
   bool is_initialized;
 } AudioOutputBuffer;
 

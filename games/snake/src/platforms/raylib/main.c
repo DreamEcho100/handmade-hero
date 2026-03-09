@@ -68,9 +68,11 @@ static int platform_audio_init(AudioOutputBuffer *audio_buffer) {
   }
 
   /* Pre-fill BOTH buffers with silence (Raylib double-buffers) */
-  memset(audio_buffer->samples, 0, buffer_size * 2 * sizeof(int16_t));
-  UpdateAudioStream(g_raylib.audio_stream, audio_buffer->samples, buffer_size);
-  UpdateAudioStream(g_raylib.audio_stream, audio_buffer->samples, buffer_size);
+  memset(audio_buffer->samples_buffer, 0, buffer_size * 2 * sizeof(int16_t));
+  UpdateAudioStream(g_raylib.audio_stream, audio_buffer->samples_buffer,
+                    buffer_size);
+  UpdateAudioStream(g_raylib.audio_stream, audio_buffer->samples_buffer,
+                    buffer_size);
 
   PlayAudioStream(g_raylib.audio_stream);
 
@@ -210,7 +212,7 @@ static void process_audio(PlatformGameProps *props,
   while (IsAudioStreamProcessed(g_raylib.audio_stream)) {
     props->game.audio.sample_count = g_raylib.buffer_size_frames;
     game_get_audio_samples(game_audio, &props->game.audio);
-    UpdateAudioStream(g_raylib.audio_stream, props->game.audio.samples,
+    UpdateAudioStream(g_raylib.audio_stream, props->game.audio.samples_buffer,
                       g_raylib.buffer_size_frames);
     buffers_this_frame++;
     g_raylib_buffers_filled++;

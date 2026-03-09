@@ -187,13 +187,14 @@ static void platform_audio_update(GameState *game_state,
   while (buffers_filled < max_buffers &&
          IsAudioStreamProcessed(g_raylib.stream)) {
     /* Generate exactly buffer_size_frames samples */
-    AudioOutputBuffer buffer = {.samples = g_raylib.sample_buffer,
+    AudioOutputBuffer buffer = {.samples_buffer = g_raylib.sample_buffer,
                                 .samples_per_second =
                                     config->samples_per_second,
                                 .sample_count = g_raylib.buffer_size_frames};
 
     game_get_audio_samples(game_state, &buffer);
-    UpdateAudioStream(g_raylib.stream, buffer.samples, buffer.sample_count);
+    UpdateAudioStream(g_raylib.stream, buffer.samples_buffer,
+                      buffer.sample_count);
 
     config->running_sample_index += buffer.sample_count;
     buffers_filled++;

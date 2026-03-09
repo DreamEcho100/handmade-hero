@@ -586,8 +586,10 @@ bool linux_init_audio(LinuxAudioConfig *audio_config,
   }
 
   audio_config->is_initialized = true;
-  if (audio_output)
+  if (audio_output) {
+    audio_output->format = AUDIO_FORMAT_I16; /* ALSA: S16_LE hardware */
     audio_output->is_initialized = true;
+  }
 
   printf(
       "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550"
@@ -819,7 +821,7 @@ void linux_send_samples_to_alsa(LinuxAudioConfig *audio_config,
     return;
   }
 
-  if (!source->samples || source->sample_count <= 0) {
+  if (!source->samples_buffer || source->sample_count <= 0) {
     return;
   }
 
@@ -837,7 +839,7 @@ void linux_send_samples_to_alsa(LinuxAudioConfig *audio_config,
   // ─────────────────────────────────────────────────────────────────────
 
   snd_pcm_sframes_t frames_written =
-      SndPcmWritei(g_linux_audio_output.pcm_handle, source->samples,
+      SndPcmWritei(g_linux_audio_output.pcm_handle, source->samples_buffer,
                    (snd_pcm_uframes_t)source->sample_count);
 
   if (frames_written < 0) {
@@ -853,7 +855,7 @@ void linux_send_samples_to_alsa(LinuxAudioConfig *audio_config,
 
     // Retry the write after recovery
     frames_written =
-        SndPcmWritei(g_linux_audio_output.pcm_handle, source->samples,
+        SndPcmWritei(g_linux_audio_output.pcm_handle, source->samples_buffer,
                      (snd_pcm_uframes_t)source->sample_count);
 
     if (frames_written < 0) {

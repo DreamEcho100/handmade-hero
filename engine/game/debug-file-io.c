@@ -131,7 +131,7 @@ de100_file_scoped_fn De100DebugFileWriteResult make_write_success(void) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 De100DebugDe100FileReadResult
-de100_debug_read_entire_file(ThreadContext *thread_context,
+de100_debug_read_entire_file(GameThreadContext *thread_context,
                              const char *filename) {
   (void)thread_context;
   De100DebugDe100FileReadResult result = {0};
@@ -243,7 +243,7 @@ de100_debug_read_entire_file(ThreadContext *thread_context,
 // FREE FILE MEMORY
 // ═══════════════════════════════════════════════════════════════════════════
 
-void de100_debug_free_de100_file_memory(ThreadContext *thread_context,
+void de100_debug_free_de100_file_memory(GameThreadContext *thread_context,
                                         De100MemoryBlock *memory) {
   (void)thread_context;
   if (!memory) {
@@ -266,7 +266,7 @@ void de100_debug_free_de100_file_memory(ThreadContext *thread_context,
 // ═══════════════════════════════════════════════════════════════════════════
 
 De100DebugFileWriteResult
-de100_debug_write_entire_file(ThreadContext *thread_context,
+de100_debug_write_entire_file(GameThreadContext *thread_context,
                               const char *filename, u32 size,
                               const void *data) {
   (void)thread_context;

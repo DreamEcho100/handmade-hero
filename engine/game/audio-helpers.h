@@ -46,17 +46,87 @@ de100_file_scoped_fn inline f32 de100_audio_midi_to_freq(i32 midi_note) {
 #define DE100_MIDI_REST 0
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sample Clamping
+// audio_write_sample — write one stereo frame into a GameAudioOutputBuffer
 // ─────────────────────────────────────────────────────────────────────────────
-// Clamp float sample to int16 range [-32768, 32767]
 //
-de100_file_scoped_fn inline i16 de100_audio_clamp_sample(f32 sample) {
-  if (sample > 32767.0f)
-    return 32767;
-  if (sample < -32768.0f)
-    return -32768;
-  return (i16)sample;
+// All game mixing must happen in float (-1.0 to 1.0).  The format conversion
+// to whatever PCM the backend requested lives here, at the platform boundary.
+//
+// Usage:
+//   audio_write_sample(buf, s, left_f32, right_f32);
+//   audio_write_sample(buf, s, left_f64, right_f64);   // f64 overload
+//
+// frame_index : zero-based sample frame index (0 .. sample_count-1)
+// left/right  : normalised float amplitude  (-1.0 to  1.0)
+//
+// ─────────────────────────────────────────────────────────────────────────────
+
+de100_file_scoped_fn inline void
+_audio_write_sample_f32(GameAudioOutputBuffer *buf, i32 frame_index, f32 left,
+                        f32 right) {
+  /* Clamp to normalised range */
+  left = left < -1.0f ? -1.0f : (left > 1.0f ? 1.0f : left);
+  right = right < -1.0f ? -1.0f : (right > 1.0f ? 1.0f : right);
+  i32 base = frame_index * 2;
+  switch (buf->format) {
+  case AUDIO_FORMAT_I16: {
+    i16 *s = (i16 *)buf->samples_buffer;
+    s[base] = (i16)(left * 32767.0f);
+    s[base + 1] = (i16)(right * 32767.0f);
+  } break;
+  case AUDIO_FORMAT_I32: {
+    i32 *s = (i32 *)buf->samples_buffer;
+    s[base] = (i32)(left * 2147483647.0f);
+    s[base + 1] = (i32)(right * 2147483647.0f);
+  } break;
+  case AUDIO_FORMAT_F32: {
+    f32 *s = (f32 *)buf->samples_buffer;
+    s[base] = left;
+    s[base + 1] = right;
+  } break;
+  case AUDIO_FORMAT_F64: {
+    f64 *s = (f64 *)buf->samples_buffer;
+    s[base] = (f64)left;
+    s[base + 1] = (f64)right;
+  } break;
+  }
 }
+
+de100_file_scoped_fn inline void
+_audio_write_sample_f64(GameAudioOutputBuffer *buf, i32 frame_index, f64 left,
+                        f64 right) {
+  left = left < -1.0 ? -1.0 : (left > 1.0 ? 1.0 : left);
+  right = right < -1.0 ? -1.0 : (right > 1.0 ? 1.0 : right);
+  i32 base = frame_index * 2;
+  switch (buf->format) {
+  case AUDIO_FORMAT_I16: {
+    i16 *s = (i16 *)buf->samples_buffer;
+    s[base] = (i16)(left * 32767.0);
+    s[base + 1] = (i16)(right * 32767.0);
+  } break;
+  case AUDIO_FORMAT_I32: {
+    i32 *s = (i32 *)buf->samples_buffer;
+    s[base] = (i32)(left * 2147483647.0);
+    s[base + 1] = (i32)(right * 2147483647.0);
+  } break;
+  case AUDIO_FORMAT_F32: {
+    f32 *s = (f32 *)buf->samples_buffer;
+    s[base] = (f32)left;
+    s[base + 1] = (f32)right;
+  } break;
+  case AUDIO_FORMAT_F64: {
+    f64 *s = (f64 *)buf->samples_buffer;
+    s[base] = left;
+    s[base + 1] = right;
+  } break;
+  }
+}
+
+/* Dispatch on the type of the L argument (R must match).
+ * f32 → _audio_write_sample_f32 ; f64/double → _audio_write_sample_f64 */
+#define audio_write_sample(buf, frame_index, L, R)                             \
+  _Generic((L), f32: _audio_write_sample_f32, f64: _audio_write_sample_f64)(   \
+      (buf), (frame_index), (L), (R))
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Stereo Panning
@@ -444,13 +514,15 @@ de100_file_scoped_fn inline void de100_audio_mix_sample_stereo(f32 sample,
   *mix_right += sample * right_vol;
 }
 
-// Finalize mix: apply master volume and clamp
-de100_file_scoped_fn inline void de100_audio_finalize_stereo(f32 mix_left,
-                                                             f32 mix_right,
-                                                             f32 master_volume,
-                                                             i16 *out) {
-  *out++ = de100_audio_clamp_sample(mix_left * master_volume * 16000.0f);
-  *out = de100_audio_clamp_sample(mix_right * master_volume * 16000.0f);
+// Finalize mix: apply master volume and write one stereo frame to the buffer.
+// mix_left / mix_right should be normalised amplitude (-1.0 to 1.0) BEFORE
+// master_volume is applied.  The function delegates to audio_write_sample so
+// format conversion happens at the platform boundary.
+de100_file_scoped_fn inline void
+de100_audio_finalize_stereo(GameAudioOutputBuffer *buf, i32 frame_index,
+                            f32 mix_left, f32 mix_right, f32 master_volume) {
+  audio_write_sample(buf, frame_index, mix_left * master_volume,
+                     mix_right * master_volume);
 }
 
 #endif // DE100_GAME_AUDIO_HELPERS_H

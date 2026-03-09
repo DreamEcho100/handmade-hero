@@ -203,7 +203,7 @@ static int g_sample_call_count = 0;    /* DEBUG: track calls */
 static int g_last_fade_remaining = -1; /* DEBUG: track fade transitions */
 
 void game_get_audio_samples(GameAudioState *audio, AudioOutputBuffer *buffer) {
-  int16_t *out = buffer->samples;
+  int16_t *out = buffer->samples_buffer;
   int sample_count = buffer->sample_count;
   float inv_sample_rate = 1.0f / (float)buffer->samples_per_second;
 

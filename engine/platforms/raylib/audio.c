@@ -115,8 +115,10 @@ bool raylib_init_audio(GameAudioOutputBuffer *audio_output,
   g_raylib_audio_output.sample_buffer_size = buffer_bytes;
 
   PlayAudioStream(g_raylib_audio_output.stream);
-  if (audio_output)
+  if (audio_output) {
+    audio_output->format = AUDIO_FORMAT_I16; /* Raylib stream: 16-bit signed */
     audio_output->is_initialized = true;
+  }
 
   printf("✅ Audio: %d Hz, %d sample buffer\n", samples_per_second,
          buffer_size);
@@ -161,7 +163,7 @@ void raylib_send_samples(GameAudioOutputBuffer *audio_output) {
   }
 
   // Send samples to Raylib
-  UpdateAudioStream(g_raylib_audio_output.stream, audio_output->samples,
+  UpdateAudioStream(g_raylib_audio_output.stream, audio_output->samples_buffer,
                     audio_output->sample_count);
 
   // Track total written for debug overlay

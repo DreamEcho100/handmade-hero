@@ -10,9 +10,9 @@
  * Platform fills this struct, game writes samples into it.
  */
 typedef struct {
-  int16_t *samples;       /* Interleaved stereo: L0,R0,L1,R1,... */
-  int samples_per_second; /* Usually 44100 or 48000 */
-  int sample_count;       /* How many stereo pairs to generate */
+  int16_t *samples_buffer; /* Interleaved stereo: L0,R0,L1,R1,... */
+  int samples_per_second;  /* Usually 44100 or 48000 */
+  int sample_count;        /* How many stereo pairs to generate */
 } AudioOutputBuffer;
 
 /* ═══════════════════════════════════════════════════════════════════════════

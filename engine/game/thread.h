@@ -5,6 +5,6 @@
 
 typedef struct {
   i32 placeholder;
-} ThreadContext;
+} GameThreadContext;
 
 #endif // DE100_GAME_DE100_THREAD_H

@@ -244,7 +244,7 @@ static void platform_audio_update(GameState *game_state,
   if (samples_to_write <= 0)
     return;
 
-  AudioOutputBuffer buffer = {.samples = g_x11.sample_buffer,
+  AudioOutputBuffer buffer = {.samples_buffer = g_x11.sample_buffer,
                               .samples_per_second = g_x11.samples_per_second,
                               .sample_count = samples_to_write};
 

@@ -46,7 +46,7 @@ typedef struct {
   // (what game sees)
   GameInput *inputs;
 
-  ThreadContext thread_context;
+  GameThreadContext thread_context;
 
 } EngineGameState;
 

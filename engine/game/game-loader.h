@@ -92,13 +92,13 @@ typedef GAME_STARTUP(game_startup_t);
 // Can be used for per-session or per-level initialization, possibly with access
 // to memory arenas or engine services.
 #define GAME_INIT(name)                                                        \
-  void name(ThreadContext *thread_context, GameMemory *memory,                 \
+  void name(GameThreadContext *thread_context, GameMemory *memory,             \
             GameInput *inputs, GameBackBuffer *buffer)
 typedef GAME_INIT(game_init_t);
 
 // Called once per frame - updates game logic and renders graphics
 #define GAME_UPDATE_AND_RENDER(name)                                           \
-  void name(ThreadContext *thread_context, GameMemory *memory,                 \
+  void name(GameThreadContext *thread_context, GameMemory *memory,             \
             GameInput *inputs, GameBackBuffer *buffer)
 typedef GAME_UPDATE_AND_RENDER(game_update_and_render_t);
 

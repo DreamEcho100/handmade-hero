@@ -130,7 +130,7 @@ void platform_audio_write(X11AudioConfig *config,
     return;
 
   snd_pcm_sframes_t written = snd_pcm_writei(
-      g_x11.audio.pcm_handle, audio_buffer->samples, samples_to_write);
+      g_x11.audio.pcm_handle, audio_buffer->samples_buffer, samples_to_write);
 
   if (written < 0) {
     written = snd_pcm_recover(g_x11.audio.pcm_handle, written, 0);

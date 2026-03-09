@@ -6,7 +6,6 @@
 #include <stdbool.h>
 
 extern bool is_game_running;
-extern bool g_game_is_paused;
 // extern bool g_window_is_active;
 extern bool g_reload_requested;
 

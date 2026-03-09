@@ -188,7 +188,7 @@ void game_audio_update(GameAudioState *audio, float delta_time) {
 
 void game_get_audio_samples(GameState *state, AudioOutputBuffer *buffer) {
   GameAudioState *audio = &state->audio;
-  int16_t *out = buffer->samples;
+  int16_t *out = buffer->samples_buffer;
   int sample_count = buffer->sample_count;
   float inv_sample_rate = 1.0f / (float)buffer->samples_per_second;
 
