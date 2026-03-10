@@ -55,14 +55,13 @@ The main loop calls `audio_generate_and_send`:
 
 ### What Is Currently Missing
 
-| Gap                                               | Impact                                                                                                                                                                                              |
-| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| No audio file loader (WAV, OGG, MP3)              | Every sound must be synthesised — no pre-recorded SFX or music                                                                                                                                      |
-| No streaming ring buffer                          | Music files too large to load fully must wait; nothing decodes ahead                                                                                                                                |
-| `g_game_is_paused` not connected to audio         | ✅ Handled: `game_get_audio_samples` writes silence when `g_game_is_paused` is true — backends remain fully agnostic; `backend_pause_audio`/`backend_resume_audio` (clean ALSA drain) still missing |
-| No `sample_clock` in `GameAudioOutputBuffer`      | A/V sync requires backend-specific code (`running_sample_index`, `total_samples_written`)                                                                                                           |
-| No bus mixer                                      | All voices mix to one flat stream; per-bus volume control requires a mixer layer                                                                                                                    |
-| No `backend_pause_audio` / `backend_resume_audio` | Focus-loss handling is ad-hoc per backend                                                                                                                                                           |
+| Gap                                               | Impact                                                                                    |
+| ------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| No audio file loader (WAV, OGG, MP3)              | Every sound must be synthesised — no pre-recorded SFX or music                            |
+| No streaming ring buffer                          | Music files too large to load fully must wait; nothing decodes ahead                      |
+| No `sample_clock` in `GameAudioOutputBuffer`      | A/V sync requires backend-specific code (`running_sample_index`, `total_samples_written`) |
+| No bus mixer                                      | All voices mix to one flat stream; per-bus volume control requires a mixer layer          |
+| No `backend_pause_audio` / `backend_resume_audio` | Focus-loss handling is ad-hoc per backend                                                 |
 
 ---
 
@@ -359,9 +358,9 @@ These five additions unlock everything else without requiring library dependenci
 
 The backend increments it by `sample_count` after each fill call. Games use it for A/V sync, subtitle timing, animation events, and accurate music position. Without it, every game reimplements this in backend-specific ways.
 
-### 3 — ~~Connect `g_game_is_paused` to Audio~~ ✅ DONE (game-callback level)
+### 3 — ~~Connect pause state to Audio~~ ✅ DONE (game-callback level)
 
-`game_get_audio_samples` now checks `g_game_is_paused` immediately after the `is_initialized` guard. When true it `memset`s `samples_buffer` to zero and returns — the backend receives clean silence and keeps its stream fed without underruns. The backends themselves never touch `g_game_is_paused`; they are fully agnostic to game pause state, which is the correct layering. Note: `backend_pause_audio` / `backend_resume_audio` (clean ALSA drain via `snd_pcm_drop/prepare`, Raylib `PauseAudioStream/ResumeAudioStream`) are still missing, so the ALSA ring buffer keeps running during pause (filled with silence). A proper backend-level pause interface is a future improvement.
+`game_get_audio_samples` checks `game->is_paused` (a `bool32` field on `HandMadeHeroGameState` inside `GameMemory`) immediately after the `is_initialized` guard. When true it `memset`s `samples_buffer` to zero and returns — the backend receives clean silence and keeps its stream fed without underruns. The backends never touch game pause state; they are fully agnostic. `g_game_is_paused` (the old engine global) is gone entirely. Note: `backend_pause_audio` / `backend_resume_audio` (clean ALSA drain via `snd_pcm_drop/prepare`, Raylib `PauseAudioStream/ResumeAudioStream`) are still missing, so the ALSA ring buffer keeps running during pause (filled with silence). A proper backend-level pause interface is a future improvement.
 
 ### 4 — Streaming Ring Buffer Utility (`engine/game/audio-stream.h`)
 
@@ -689,7 +688,7 @@ This creates a hidden dependency between backend buffer size and effect complexi
 
 **Game layer: write silence into the buffer. Backend layer (future): drain with `backend_pause_audio` or pause the stream.**
 
-Currently implemented: `game_get_audio_samples` checks `g_game_is_paused` right after the `is_initialized` guard. If true, it `memset`s `samples_buffer` to zero and returns. The backend sees a normal call that happened to produce silence — no special pause path needed, no underruns, no backend coupling.
+Currently implemented: `game_get_audio_samples` checks `game->is_paused` (a `bool32` field on `HandMadeHeroGameState` inside `GameMemory`) right after the `is_initialized` guard. If true, it `memset`s `samples_buffer` to zero and returns. The backend sees a normal call that happened to produce silence — no special pause path needed, no underruns, no backend coupling. `g_game_is_paused` (the old engine global) no longer exists.
 
 The missing piece is a clean backend drain on pause for ALSA. ALSA's ring buffer keeps running while filled with silence (fine), but if a future `backend_pause_audio` were added it could do `snd_pcm_drop` + `snd_pcm_prepare` to stop the hardware clock during pause:
 
@@ -934,12 +933,13 @@ advance_timeline(state, audio_time_seconds); // subtitles, events, flip sync
 
 ### Case 13: Focus loss / game paused
 
-Currently implemented: `game_get_audio_samples` writes silence and returns early when `g_game_is_paused` is true. The platform backends are unaware of pause state:
+Currently implemented: `game_get_audio_samples` writes silence and returns early when `game->is_paused` is true. `game` is `HandMadeHeroGameState *` cast from `memory->permanent_storage`. The platform backends are unaware of pause state:
 
 ```c
 // In game_get_audio_samples (game callback — current approach):
 if (!audio_buffer->is_initialized || audio_buffer->sample_count == 0) return;
-if (g_game_is_paused) {
+HandMadeHeroGameState *game = (HandMadeHeroGameState *)memory->permanent_storage;
+if (game->is_paused) {
   memset(audio_buffer->samples_buffer, 0,
          (size_t)audio_buffer->sample_count
            * (size_t)audio_format_bytes_per_sample(audio_buffer->format));

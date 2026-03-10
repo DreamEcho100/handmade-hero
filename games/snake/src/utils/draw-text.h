@@ -40,4 +40,10 @@ void draw_char(Backbuffer *bb, int x, int y, char c, uint32_t color, int scale);
 void draw_text(Backbuffer *bb, int x, int y, const char *text, uint32_t color,
                int scale);
 
+/* Glyph metrics — must match the actual font data (5 wide × 7 tall)
+ * and the advance used in draw_text (5 + 1px gap = 6). */
+#define GLYPH_WIDTH 5
+#define GLYPH_HEIGHT 7
+#define GLYPH_STRIDE 6
+
 #endif // UTILS_DRAW_TEXT_H

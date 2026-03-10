@@ -16,12 +16,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/time.h>
 #include <time.h>
 
 typedef void (*PFNGLXSWAPINTERVALEXTPROC)(Display *, GLXDrawable, int);
 
-static double g_start_time = 0.0;
 static double g_last_frame_time = 0.0;
 static const double g_target_frame_time = 1.0 / 60.0;
 
@@ -30,13 +28,10 @@ static const double g_target_frame_time = 1.0 / 60.0;
  * ═══════════════════════════════════════════════════════════════════════════
  */
 
-double platform_get_time(void) {
-  struct timeval tv;
-  gettimeofday(&tv, NULL);
-  double now = (double)tv.tv_sec + (double)tv.tv_usec / 1000000.0;
-  if (g_start_time == 0.0)
-    g_start_time = now;
-  return now - g_start_time;
+static inline double platform_get_time(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
 }
 
 static void sleep_ms(int ms) {
@@ -197,7 +192,7 @@ void platform_get_input(GameInput *input, PlatformGameProps *props) {
       case XK_Q:
       case XK_Escape:
         props->is_running = false;
-        input->quit = true;
+        input->quit = 1;
         break;
       case XK_r:
       case XK_R:
@@ -236,7 +231,7 @@ void platform_get_input(GameInput *input, PlatformGameProps *props) {
     case ClientMessage:
       if ((Atom)event.xclient.data.l[0] == g_x11.wm_delete_window) {
         props->is_running = false;
-        input->quit = true;
+        input->quit = 1;
       }
       break;
     case ConfigureNotify:
@@ -290,11 +285,16 @@ static void process_audio(PlatformGameProps *props,
   if (!props->game.audio.is_initialized)
     return;
 
-  /* X11AudioConfig is owned by g_x11.audio.config, not by PlatformGameProps */
   int samples_to_write = platform_audio_get_samples_to_write(
       &g_x11.audio.config, &props->game.audio);
 
   if (samples_to_write > 0) {
+    /* Clamp to allocated buffer capacity — platform_audio_get_samples_to_write
+     * already does this, but guard here too as a defence-in-depth measure. */
+    if (props->game.audio.max_sample_count > 0 &&
+        samples_to_write > props->game.audio.max_sample_count) {
+      samples_to_write = props->game.audio.max_sample_count;
+    }
     props->game.audio.sample_count = samples_to_write;
     game_get_audio_samples(game_audio, &props->game.audio);
     platform_audio_write(&g_x11.audio.config, &props->game.audio,
@@ -308,22 +308,20 @@ static void process_audio(PlatformGameProps *props,
  */
 
 int main(void) {
-  /* Initialize platform */
   PlatformGameProps props = {0};
   if (platform_game_props_init(&props) != 0)
     return 1;
   if (platform_init(&props) != 0)
     return 1;
 
-  /* Initialize game */
-  GameInput input = {0};
+  GameInput inputs[2];
+  memset(inputs, 0, sizeof(inputs));
   GameState state = {0};
   state.audio.samples_per_second = props.game.audio.samples_per_second;
   game_init(&state, &props.game.audio);
 
   g_last_frame_time = platform_get_time();
 
-  /* Main loop */
   while (props.is_running) {
     double now = platform_get_time();
     float dt = (float)(now - g_last_frame_time);
@@ -331,24 +329,20 @@ int main(void) {
       dt = 0.05f;
     g_last_frame_time = now;
 
-    /* Input */
-    prepare_input_frame(&input);
-    platform_get_input(&input, &props);
-    if (input.quit)
+    /* Double-buffered input: swap, prepare, then fill */
+    platform_swap_input_buffers(&inputs[0], &inputs[1]);
+    prepare_input_frame(&inputs[0], &inputs[1]);
+    platform_get_input(&inputs[1], &props);
+    if (inputs[1].quit)
       break;
 
-    /* Update */
-    game_update(&state, &input, &props.game.audio, dt);
+    game_update(&state, &inputs[1], &props.game.audio, dt);
     game_audio_update(&state.audio, dt);
-
-    /* Audio */
     process_audio(&props, &state.audio);
 
-    /* Render */
     game_render(&state, &props.game.backbuffer);
     display_backbuffer(&props.game.backbuffer);
 
-    /* Frame limiting */
     if (!g_x11.vsync_enabled) {
       double elapsed = platform_get_time() - now;
       if (elapsed < g_target_frame_time) {
@@ -357,7 +351,6 @@ int main(void) {
     }
   }
 
-  /* Cleanup */
   platform_game_props_free(&props);
   platform_shutdown();
   return 0;

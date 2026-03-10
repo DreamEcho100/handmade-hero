@@ -82,6 +82,10 @@ The target student is a JavaScript/web developer learning C and low-level game p
 
 ### Step 2 — Build the course files (Recommended file layout)
 
+The layout is described in two stages. Start with Stage A; migrate to Stage B when the trigger conditions are met. Document any deviation in `PLAN.md`.
+
+**Stage A — Starter layout** (single backend or small game)
+
 ```
 game-name/
 ├── build-dev.sh              # Build script with backend selection
@@ -92,35 +96,92 @@ game-name/
 │   │   ├── draw-shapes.h
 │   │   ├── draw-text.c       # Bitmap font rendering
 │   │   ├── draw-text.h
-│   │   ├── audio.h           # GameAudioState, SoundInstance, ToneGenerator
+│   │   ├── audio.h           # AudioOutputBuffer; SoundInstance; ToneGenerator
 │   │   ├── math.h            # MIN, MAX, CLAMP macros
-│   │   └── ...               # any other reusable helper used by game.c/game.h
-│   ├── game.c                # All game logic
-│   ├── game.h                # Game types, state, API
-│   ├── audio.c               # game_get_audio_samples(), game_audio_update()
-│   ├── levels.c              # Level/map data (designated initialisers; omit if no levels)
-│   ├── platform.h            # Platform contract
+│   │   └── ...               # any other reusable helper
+│   ├── game/
+│   │   ├── main.c            # game_init(), game_update(), game_render()
+│   │   ├── main.h            # Game types, state, public API
+│   │   ├── audio.c           # game_get_audio_samples(), game_audio_update()
+│   │   ├── audio.h           # GameAudioState, SOUND_ID enum
+│   │   ├── base.h            # Shared game types (GameInput, GameState, etc.)
+│   │   └── levels.c          # Level/map data (omit if no levels)
+│   ├── platform.h            # Platform contract (visible to all layers)
 │   ├── main_x11.c            # X11/OpenGL backend
 │   └── main_raylib.c         # Raylib backend
 └── build/                    # Build output (gitignored)
 ```
 
-> ⚠ **`src/` root must only contain:** `game.c`, `game.h`, `audio.c`, `levels.c` (if applicable), `platform.h`, `main_x11.c`, `main_raylib.c`. All reusable helpers belong in `utils/`. Never place a utility or re-export shim header at the `src/` root — it mixes layers and contradicts `utils/`. If `game.h` needs `utils/audio.h`, include `utils/audio.h` directly; never create a thin `sounds.h` that only re-exports it.
+**Stage B — Evolved layout** (two backends with platform-specific internals)
+
+When a backend grows beyond a single file — e.g., it needs its own audio driver, a global state struct, or OS-specific helpers — move it into its own subdirectory:
+
+```
+game-name/
+├── build-dev.sh
+├── src/
+│   ├── utils/                # (same as Stage A)
+│   ├── game/
+│   │   ├── main.c            # game_init(), game_update(), game_render()
+│   │   ├── main.h
+│   │   ├── audio.c
+│   │   ├── audio.h
+│   │   └── base.h
+│   ├── platforms/
+│   │   ├── x11/
+│   │   │   ├── main.c        # platform_init(), main loop, input, display
+│   │   │   ├── audio.c       # ALSA init, write, shutdown
+│   │   │   ├── audio.h       # X11-private audio API (not in platform.h)
+│   │   │   ├── base.c        # Definition: X11State g_x11 = {0};
+│   │   │   └── base.h        # X11State struct + extern declaration
+│   │   └── raylib/
+│   │       └── main.c        # platform_init(), main loop, audio stream
+│   └── platform.h            # Shared platform contract
+└── build/
+```
+
+**Trigger conditions for moving to Stage B:**
+
+- A backend needs its own audio driver or hardware-parameter setup (e.g., ALSA)
+- A backend needs a private global state struct that must not be visible to the game layer
+- A backend file exceeds ~300 lines and has a clean subsystem boundary (e.g., audio vs. windowing)
 
 **Why `utils/`?** Drawing primitives and math helpers are reusable across games. Keep them separate from game-specific logic.
 
-**Reference:** See `games/tetris/` for the complete structure.
+**Why `game/` subdirectory?** Groups all game-logic files — state, audio, rendering — away from platform and utility code. As the game grows this boundary prevents accidental coupling.
 
-**This structure is a starting point, not a rigid template.** As your game grows, expand it. Rules of thumb:
+**Platform-private state.** Each backend owns a single file-scope global struct that is never included by the game layer or `platform.h`. The game layer communicates with it only through functions declared in `platform.h`.
 
-- When a `.c` file exceeds ~400 lines, find a clean subsystem boundary and extract it into its own `.c/.h` pair
-- When a second major feature lands (camera, particles, collision, audio subsystem), give it a dedicated file pair
-- When files are loaded from disk, add an `assets/` folder
-- Prefix subsystem files consistently: `sys_camera.c`, `sys_particles.c` so the layer is immediately obvious
-- At larger scale add subdirectories (`entities/`, `systems/`, `audio/`) as needed — one file per coherent subsystem
-- Update `PLAN.md` whenever you deviate from the initial structure so future readers understand the evolution
+```c
+/* platforms/x11/base.h  — included ONLY by x11/*.c files */
+typedef struct {
+  Display    *display;
+  Window      window;
+  GLXContext  gl_context;
+  int         is_running;
+  X11Audio    audio;          /* ALSA handle + config */
+  /* ... */
+} X11State;
 
-**Game header evolution:** `game.h` will grow substantially across lessons — from ~10 lines in lesson 1 to 300+ by the final lesson. Strategy:
+extern X11State g_x11;       /* defined once in base.c */
+```
+
+```c
+/* platforms/x11/base.c */
+X11State g_x11 = {0};        /* zero-initialised; owns all x11-layer state */
+```
+
+The Raylib backend follows the same pattern with `RaylibState g_raylib`. Neither struct is ever visible to `game/` or `utils/`.
+
+> **Why?** The alternative is passing a `void *platform_context` pointer through every function call, which adds noise with no benefit when there is exactly one instance. A file-scope global is idiomatic C for this pattern and clearly scoped by the compilation unit.
+
+> ⚠ **Never re-export a platform-private header from `platform.h`.** If `platform.h` includes `platforms/x11/base.h`, the game layer gains sight of X11 types — a layer violation. Keep each backend's `base.h` strictly within its own subdirectory.
+
+> ⚠ **Only one rule is non-negotiable about layout:** reusable helpers (drawing, math, audio types) belong in `utils/`; never at `src/` root or inside `game/`. Everything else — file names, subdirectory depth, splitting criteria — is a judgement call. Document your choices in `PLAN.md`.
+
+**Reference implementations:** `games/tetris/` uses Stage A; `games/snake/` uses Stage B. Both are valid; choose based on your game's complexity.
+
+**Game header evolution:** `main.h` (or `game.h` in Stage A) will grow substantially across lessons — from ~10 lines in lesson 1 to 300+ by the final lesson. Strategy:
 
 - Early lessons (1–3): show the complete header (it's short)
 - Middle lessons: show only the changed struct with a before/after comment block
@@ -200,13 +261,31 @@ The source code must be:
 
 - Written in **C** (not C++), even if the original is C++
 - Split into three layers:
-  - **Game logic**: `game.c` — all update, render, and draw calls; zero platform API
-  - **Shared header**: `game.h` — types, structs, enums, public function declarations
-  - **Platform backends**: `main_x11.c`, `main_raylib.c` — one file per platform
+  - **Game logic** (`game/main.c`, `game/audio.c`, etc.) — all update, render, and draw calls; never calls OS-specific or windowing APIs
+  - **Shared header** (`game/main.h` / `game/base.h`) — types, structs, enums, public function declarations
+  - **Platform backends** (`platforms/x11/`, `platforms/raylib/`, or `main_x11.c` / `main_raylib.c`) — one compilation unit per platform; owns all OS-specific code
 - Connected via a **`platform.h` contract**
 - Uses a **backbuffer pipeline**: game writes ARGB pixels into a `uint32_t *` array; platform uploads that array to the GPU each frame
 - Buildable with `clang` using the provided build scripts
 - Heavily commented — every non-obvious line gets a comment explaining the _why_
+
+### What the game layer may and may not call
+
+The boundary is **portability**, not dogma. The rule is: if the call would need a different implementation on a different OS, it belongs in the platform layer or behind a contract function. If the C standard library provides it and it works identically on Linux, macOS, and Windows, the game layer can call it directly.
+
+| Category                | Examples                                      | Where it belongs    | Reason                               |
+| ----------------------- | --------------------------------------------- | ------------------- | ------------------------------------ |
+| OS windowing / GPU      | `XCreateWindow`, `glTexImage2D`, `InitWindow` | Platform layer only | Different API per OS/backend         |
+| Audio hardware          | `snd_pcm_writei`, `UpdateAudioStream`         | Platform layer only | Different API per OS/backend         |
+| Input hardware          | `XNextEvent`, `IsKeyDown`                     | Platform layer only | Different API per OS/backend         |
+| Timing / clocks         | `clock_gettime`, `GetTime`                    | Platform layer only | POSIX vs Win32 vs Raylib             |
+| Portable file I/O       | `fopen`, `fclose`, `fread`, `fprintf`         | Game layer ✅       | C standard; identical on all targets |
+| Portable strings / math | `memset`, `snprintf`, `sinf`, `rand`          | Game layer ✅       | C standard; identical on all targets |
+| Portable time seed      | `time(NULL)`                                  | Game layer ✅       | C standard; identical on all targets |
+
+> ⚠ **File paths are still a platform concern.** Even if the game layer calls `fopen`, the path it uses should be either relative (safe for local builds) or injected by the platform layer. Never hardcode an absolute path like `/home/user/...` in game code. For save files the pattern is: game code calls `fopen("build/save.dat", "r")` with a well-known relative path; `build-dev.sh` ensures the binary is always run from the project root so the path resolves correctly. Document this constraint in the first lesson that reads or writes a file.
+
+> **Teaching note for JS developers:** This mirrors the browser's same-origin model — the game layer is "sandboxed" from OS details, but standard library functions (like `Math`, `JSON`, `console`) are global and always available. `fopen` is the C equivalent of `localStorage` — it's always there; you don't need the platform to wrap it.
 
 ### Debug printf policy
 
@@ -220,7 +299,7 @@ Unexplained debug includes confuse students about what is "needed" vs. "leftover
 
 ### Platform contract
 
-**Reference:** `games/tetris/src/platform.h`
+**Reference:** `games/tetris/src/platform.h`, `games/snake/src/platform.h`
 
 The minimal contract requires these functions:
 
@@ -237,15 +316,46 @@ For engine integration, wrap initialization state in `PlatformGameProps`:
 - Backbuffer struct
 - `is_running` flag
 
-**Look for in the reference:**
+**Look for in the references:**
 
 - `platform_game_props_init()` — allocates backbuffer, sets dimensions
 - `platform_game_props_free()` — frees backbuffer
-- How each backend implements the contract differently
+- How each backend implements the contract differently while exposing the same function signatures
 
-**Principle:** Keep the contract minimal for simple games. Expand for engine integration. The game layer should never call platform-specific APIs directly.
+**Principle:** Keep the contract minimal. The game layer should never call platform-specific APIs directly. Expand the contract only when the game needs a service that genuinely varies by platform (timing source, audio callback trigger, etc.).
 
-> ⚠ **Always read `game.h` for the `GameInput` struct field names before writing a backend.** The field names (`move_up`, `move_left`, etc.) are the canonical source of truth — they differ between courses. Copying a backend from a previous game without reading the current `GameInput` struct causes silent mismatches where the wrong action fires for a given key, or a key does nothing.
+**Platform-private global state.** Each backend should declare a single file-scope global struct that lives entirely within the backend's compilation units. This struct holds all the OS handles, device handles, and configuration the platform layer needs to operate. It is never exposed through `platform.h` and is never `#include`d by any game-layer file.
+
+In the Stage A layout (flat `src/`) this is a `static` global inside `main_x11.c` or `main_raylib.c`. In the Stage B layout (subdirectories) it gets its own `base.h` / `base.c` pair so multiple backend files can share it:
+
+```c
+/* platforms/x11/base.h — included ONLY within platforms/x11/ */
+typedef struct {
+  Display    *display;
+  Window      window;
+  GLXContext  gl_context;
+  Atom        wm_delete_window;
+  int         width, height;
+  bool        vsync_enabled;
+  GLuint      texture_id;
+  int         is_running;
+  X11Audio    audio;         /* owns ALSA handle + config */
+} X11State;
+
+extern X11State g_x11;      /* definition lives in base.c */
+```
+
+```c
+/* platforms/x11/base.c */
+#include "base.h"
+X11State g_x11 = {0};       /* zero-init; C guarantees all fields start at 0/NULL/false */
+```
+
+The Raylib backend mirrors this pattern with its own `RaylibState g_raylib`. Neither struct is ever visible to `game/` or `utils/`.
+
+**Why a named global rather than a pointer parameter?** With exactly one platform instance, passing `PlatformState *ctx` through every function adds noise without benefit. A file-scope global is idiomatic for this pattern in C and makes the ownership clear: the struct lives in the backend's translation unit, no one else can touch it.
+
+> ⚠ **Always read `game/base.h` (or `game.h`) for the `GameInput` struct field names before writing a backend.** The field names (`turn_left`, `move_up`, etc.) are the canonical source of truth — they differ between courses. Copying a backend from a previous game without reading the current `GameInput` struct causes silent mismatches where the wrong action fires for a given key, or a key does nothing.
 
 ---
 
@@ -1055,8 +1165,10 @@ void draw_rect(Backbuffer *bb, int x, int y, int w, int h, uint32_t color) {
   int x1 = (x + w > bb->width) ? bb->width : x + w;
   int y1 = (y + h > bb->height) ? bb->height : y + h;
 
+  /* Use pitch/4, NOT width — pitch is bytes-per-row, which may differ from
+   * width*4 if the platform adds row padding (common on OpenGL/DirectX).   */
   for (int py = y0; py < y1; py++) {
-    uint32_t *row = bb->pixels + py * bb->width;
+    uint32_t *row = bb->pixels + py * (bb->pitch / 4);
     for (int px = x0; px < x1; px++) {
       row[px] = color;
     }
@@ -1080,7 +1192,7 @@ void draw_rect_blend(Backbuffer *bb, int x, int y, int w, int h, uint32_t color)
   uint32_t inv_a = 255 - src_a;
 
   for (int py = y0; py < y1; py++) {
-    uint32_t *row = bb->pixels + py * bb->width;
+    uint32_t *row = bb->pixels + py * (bb->pitch / 4);  /* pitch/4, NOT width */
     for (int px = x0; px < x1; px++) {
       uint32_t dst = row[px];
       uint32_t dst_r = (dst >> 16) & 0xFF;
@@ -1146,7 +1258,7 @@ void draw_char(Backbuffer *bb, int x, int y, char c, uint32_t color, int scale) 
             int px = x + col * scale + sx;
             int py = y + row * scale + sy;
             if (px >= 0 && px < bb->width && py >= 0 && py < bb->height) {
-              bb->pixels[py * bb->width + px] = color;
+              bb->pixels[py * (bb->pitch / 4) + px] = color;  /* pitch/4, NOT width */
             }
           }
         }
@@ -1207,12 +1319,37 @@ Pick one tier per course; document the choice in the audio lesson:
 ### Audio output buffer
 
 ```c
+/*
+ * WHO FILLS WHAT
+ * ──────────────
+ *   Platform sets at init:   samples_buffer, samples_per_second,
+ *                             max_sample_count, is_initialized
+ *   Platform sets per-frame: sample_count (≤ max_sample_count)
+ *   Game writes into:         samples_buffer via game_get_audio_samples()
+ *
+ * MEMORY LAYOUT — Interleaved Stereo
+ *   Index:  0      1      2      3   ...
+ *   Value:  L[0]   R[0]   L[1]   R[1] ...
+ *   Write:  samples_buffer[s*2+0] = left;  samples_buffer[s*2+1] = right;
+ */
 typedef struct {
-  int16_t *samples;       /* Interleaved stereo: L0,R0,L1,R1,... */
-  int samples_per_second; /* Usually 44100 or 48000 */
-  int sample_count;       /* How many stereo pairs to generate */
+  int16_t *samples_buffer; /* Interleaved stereo PCM; platform allocates.   */
+                           /* Hard-coded I16_LE: works on Linux ALSA+Raylib. */
+                           /* See EVOLUTION PATH below for F32 backends.     */
+  int samples_per_second;  /* 44100 or 48000 — fixed at init                */
+  int sample_count;        /* Stereo pairs to write THIS call                */
+                           /* (set per-frame by platform, ≤ max_sample_count)*/
+  int max_sample_count;    /* Buffer capacity in stereo pairs.               */
+                           /* Allocated as: (samples_per_second/60)*8        */
+                           /* game_get_audio_samples() MUST NOT exceed this. */
+  bool is_initialized;     /* Set true by platform after audio device init.  */
+                           /* Check EVERY FRAME — not just at startup.       */
+                           /* Audio devices can disappear mid-session (USB,  */
+                           /* sleep/wake, driver crash) on some platforms.   */
 } AudioOutputBuffer;
 ```
+
+> **EVOLUTION PATH — F32 / multi-backend:** The engine-level `GameAudioOutputBuffer` replaces `int16_t *samples_buffer` with `void *samples_buffer + AudioSampleFormat format` and adds an `audio_write_sample()` `_Generic` macro that dispatches on format at compile-time. This handles CoreAudio (F32) and WASAPI (F32) backends without touching game code. Keep that upgrade path in mind: do NOT sprinkle raw `int16_t` casts throughout the game layer — all i16 conversion happens once at the final write in `game_get_audio_samples()`.
 
 ### Sound effect system
 
@@ -1306,6 +1443,17 @@ typedef struct {
 ```
 
 **Reference:** `games/tetris/src/utils/audio.h` lines 84–144 for the full declaration.
+
+### Signal shaping in game code — never the backend
+
+> **Rule:** The platform's only audio job is moving bytes from `samples_buffer` to the hardware ring buffer. Gain, pitch, effects, volume curves, and any DSP modification all belong in **game code** — specifically inside `game_get_audio_samples()` and `game_audio_update()`. Never call `SetAudioStreamVolume()`, use ALSA software volume, or apply OS-level effects. That path creates hidden double-indirection (the backend applies gain on top of the game's gain), makes the two backends behave differently, and prevents porting to new backends. Concrete violations to avoid:
+>
+> | ❌ Never do this (backend layer)         | ✅ Do this instead (game layer)                          |
+> | ---------------------------------------- | -------------------------------------------------------- |
+> | `SetAudioStreamVolume(stream, 0.5f)`     | multiply samples by `audio->master_volume` in mixer loop |
+> | ALSA SW plugin volume / dmix             | `mixed_left *= audio->master_volume` per sample          |
+> | `SetAudioStreamPitch(stream, 1.5f)`      | slide `inst->frequency` in `game_get_audio_samples()`    |
+> | Any Raylib `PlaySound()` / `LoadSound()` | `game_play_sound()` → PCM mixer → `samples_buffer`       |
 
 ### Playing sounds
 
@@ -1492,14 +1640,24 @@ This is the **complete** sample loop as used by the Tetris game. It incorporates
 ```c
 void game_get_audio_samples(GameState *state, AudioOutputBuffer *buffer) {
   GameAudioState *audio = &state->audio;
-  int16_t *out          = buffer->samples;
+
+  /* Safety cap: never write past the allocated buffer.                      */
+  /* Platform already clamps before calling us; this is defence-in-depth.    */
+  /* WHY max_sample_count? A backend misconfiguration or late audio-device   */
+  /* change could pass a sample_count larger than the allocated buffer       */
+  /* size → silent out-of-bounds write / memory corruption.                  */
+  int sample_count = buffer->sample_count;
+  if (buffer->max_sample_count > 0 && sample_count > buffer->max_sample_count)
+    sample_count = buffer->max_sample_count;
+
+  int16_t *out          = buffer->samples_buffer;
   float    inv_sr       = 1.0f / (float)buffer->samples_per_second;
   int      fade_out_samples = buffer->samples_per_second / 100; /* ~10 ms */
 
   /* Clear buffer (memset so any skipped slot leaves silence) */
-  memset(out, 0, (size_t)buffer->sample_count * 2 * sizeof(int16_t));
+  memset(out, 0, (size_t)sample_count * 2 * sizeof(int16_t));
 
-  for (int s = 0; s < buffer->sample_count; s++) {
+  for (int s = 0; s < sample_count; s++) {
     float left  = 0.0f;
     float right = 0.0f;
 
@@ -1554,6 +1712,8 @@ void game_get_audio_samples(GameState *state, AudioOutputBuffer *buffer) {
 }
 ```
 
+**Why float mixing — never int16 directly:** Two simultaneous sounds each at `INT16_MAX` (32767) added as `int16_t` overflow to –2 (two's complement wrap). Even away from extremes, every `int16_t` multiply drops the low bits, building up quantisation noise over N voices. Mixing in `float32` keeps full precision across all additions; _one_ clamped integer conversion at the final `*out++ = ...` is the only precision loss. Rule: accumulate in `float left / right`, scale by `master_volume * 16000.0f`, clamp and cast once.
+
 **Click prevention** is handled by `fade_in` / `fade_out` computed from `inst->fade_in_samples` and `inst->total_samples`. Set these when initializing a slot (see `game_play_sound_at()` above).
 
 **Stereo panning** uses linear-law: the attenuated channel is scaled by `1 - |pan|`. This matches `calculate_piece_pan()` in `audio.c`.
@@ -1592,12 +1752,13 @@ for (int i = 0; i < 2; i++) {
 /* two chunks to become ready simultaneously, leaving one unserviced.      */
 while (IsAudioStreamProcessed(g_raylib.stream)) {
   AudioOutputBuffer ab = {
-    .samples            = g_raylib.sample_buffer,
+    .samples_buffer     = g_raylib.sample_buffer,
     .samples_per_second = config->samples_per_second,
     .sample_count       = g_raylib.buffer_size_frames,
+    .max_sample_count   = config->max_sample_count,
   };
   game_get_audio_samples(game_state, &ab);
-  UpdateAudioStream(g_raylib.stream, ab.samples, ab.sample_count);
+  UpdateAudioStream(g_raylib.stream, ab.samples_buffer, ab.sample_count);
 }
 ```
 
@@ -1629,7 +1790,7 @@ if (to_write > 0) {
   };
   game_get_audio_samples(game_state, &ab);
   snd_pcm_sframes_t written = snd_pcm_writei(g_x11.pcm_handle,
-                                              ab.samples, to_write);
+                                              ab.samples_buffer, to_write);
   if (written < 0) {
     snd_pcm_recover(g_x11.pcm_handle, (int)written, 0);
     /* Re-pre-fill silence after underrun recovery.                      */
@@ -3093,6 +3254,7 @@ Each lesson should follow this structure:
 > **Build:** `./build-dev.sh --backend=raylib -r`
 
 > **File display policy for this lesson:** [Either "All files shown in full" or "Only changed
+>
 > > sections shown; unshown lines in `game.h` and `game.c` are identical to Lesson XX-1."]
 
 ---

@@ -13,9 +13,6 @@
 #define SCREEN_INITIAL_HEIGHT ((GRID_HEIGHT + HEADER_ROWS) * CELL_SIZE)
 #define MAX_SNAKE (GRID_WIDTH * GRID_HEIGHT)
 
-/* Typed enum prevents passing a raw int where a direction is expected.
- * Arithmetic still works: (dir + 1) % 4 = turn right (CW).
- *                         (dir + 3) % 4 = turn left (CCW). */
 typedef enum {
   SNAKE_DIR_UP = 0,
   SNAKE_DIR_RIGHT = 1,
@@ -23,16 +20,12 @@ typedef enum {
   SNAKE_DIR_LEFT = 3
 } SNAKE_DIR;
 
-/* direction: 0=UP, 1=RIGHT, 2=DOWN, 3=LEFT */
 #define DIRECTION_SNAKE_SIZE 4
 static const int DIRECTION_SNAKE_X[DIRECTION_SNAKE_SIZE] = {0, 1, 0, -1};
 static const int DIRECTION_SNAKE_Y[DIRECTION_SNAKE_SIZE] = {-1, 0, 1, 0};
 
 typedef struct {
-  /** Accumulates delta time while button is held */
   float timer;
-
-  /** Time between auto-repeats (e.g., 0.1 = 100ms) */
   float interval;
 } GameActionRepeat;
 
@@ -45,6 +38,7 @@ typedef struct {
 #define COLOR_YELLOW GAME_RGB(255, 215, 0)
 #define COLOR_DARK_GRAY GAME_RGB(64, 64, 64)
 #define COLOR_GRAY GAME_RGB(128, 128, 128)
+#define COLOR_GREEN GAME_RGB(50, 205, 50)
 
 typedef struct {
   int x;
@@ -53,25 +47,11 @@ typedef struct {
 
 /* ─── Input System ───────────────────────────────────────────── */
 
-/* GameButtonState tracks both the current state AND transitions within a frame.
- * Origin: Casey Muratori's Handmade Hero.
- *
- * ended_down:            1 = key is pressed now; 0 = key is released.
- * half_transition_count: number of state changes this frame.
- *   0 = no change (held or idle)
- *   1 = normal press or release
- *   2 = full tap (pressed + released within one frame)
- *
- * "Just pressed this frame" check:
- *   button.ended_down && button.half_transition_count > 0 */
 typedef struct {
   int half_transition_count;
   int ended_down;
 } GameButtonState;
 
-/* Call on KeyPress: UPDATE_BUTTON(btn, 1)
- * Call on KeyRelease: UPDATE_BUTTON(btn, 0)
- * Only increments half_transition_count when state actually changes. */
 #define UPDATE_BUTTON(button, is_down)                                         \
   do {                                                                         \
     if ((button).ended_down != (is_down)) {                                    \
@@ -80,25 +60,31 @@ typedef struct {
     }                                                                          \
   } while (0)
 
+#define BUTTON_COUNT 2
+
 typedef struct {
-  GameButtonState turn_left;  /* CCW: Left arrow or A */
-  GameButtonState turn_right; /* CW:  Right arrow or D */
-  int restart;                /* R or Space — fires once per press */
-  int quit;                   /* Q or Escape */
+  union {
+    GameButtonState buttons[BUTTON_COUNT];
+    struct {
+      GameButtonState turn_left;
+      GameButtonState turn_right;
+    };
+  };
+  int restart;
+  int quit;
 } GameInput;
 
 typedef struct {
   Segment segments[MAX_SNAKE];
-  int head;   /* index of the head segment */
-  int tail;   /* index of the tail segment */
-  int length; /* number of active segments */
+  int head;
+  int tail;
+  int length;
 
   SNAKE_DIR direction;
   SNAKE_DIR next_direction;
-  int speed; // TODO: is it needed?!!
+  int grow_pending;
 
-  GameActionRepeat
-      move_repeat; /* auto-repeat for moving forward (always active) */
+  GameActionRepeat move_repeat;
 } Snake;
 
 typedef struct {
@@ -107,6 +93,10 @@ typedef struct {
   int score;
   int best_score;
   GameAudioState audio;
+  struct {
+    int x;
+    int y;
+  } food;
 } GameState;
 
 #endif // GAME_BASE_H

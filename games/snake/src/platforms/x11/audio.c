@@ -80,12 +80,15 @@ int platform_audio_init(X11AudioConfig *config,
   snd_pcm_sw_params(g_x11.audio.pcm_handle, sw_params);
 
   snd_pcm_hw_params_get_buffer_size(hw_params, &buffer_frames);
-  audio_buffer->sample_count = buffer_frames;
+  /* Note: buffer_frames is the ALSA internal ring-buffer size — NOT how many
+   * samples the game should write per frame.  sample_count is set per-frame
+   * by process_audio() in main.c after calling
+   * platform_audio_get_samples_to_write(). */
 
   snd_pcm_prepare(g_x11.audio.pcm_handle);
   audio_buffer->is_initialized = true;
 
-  printf("✓ ALSA initialized (buffer: %lu frames)\n", buffer_frames);
+  printf("✓ ALSA initialized (hw ring-buffer: %lu frames)\n", buffer_frames);
   printf("═══════════════════════════════════════════════════════════\n\n");
 
   return 0;
@@ -118,6 +121,11 @@ int platform_audio_get_samples_to_write(X11AudioConfig *config,
    * generating massive chunks that stress the game-audio mixer. */
   if (samples > config->samples_per_frame * 4)
     samples = config->samples_per_frame * 4;
+  /* Hard cap at the game buffer's allocated capacity — prevents silent OOB
+   * write. */
+  if (audio_buffer->max_sample_count > 0 &&
+      samples > audio_buffer->max_sample_count)
+    samples = audio_buffer->max_sample_count;
 
   return samples;
 }

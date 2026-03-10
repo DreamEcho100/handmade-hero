@@ -38,9 +38,9 @@ void draw_rect_blend(Backbuffer *bb, int x, int y, int w, int h,
     return;
 
   // Extract source RGB components
-  uint8_t src_r = (color >> 16) & 0xFF;
+  uint8_t src_r = color & 0xFF;
   uint8_t src_g = (color >> 8) & 0xFF;
-  uint8_t src_b = color & 0xFF;
+  uint8_t src_b = (color >> 16) & 0xFF;
 
   // Clip to backbuffer bounds
   int x0 = MAX(x, 0);

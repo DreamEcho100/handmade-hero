@@ -16,8 +16,8 @@ typedef struct {
 
 /* Color helper - pack RGBA into uint32 */
 #define GAME_RGBA(r, g, b, a)                                                  \
-  (((uint32_t)(a) << 24) | ((uint32_t)(r) << 16) | ((uint32_t)(g) << 8) |      \
-   (uint32_t)(b))
+  (((uint32_t)(a) << 24) | ((uint32_t)(b) << 16) | ((uint32_t)(g) << 8) |      \
+   (uint32_t)(r))
 
 #define GAME_RGB(r, g, b) GAME_RGBA(r, g, b, 255)
 
