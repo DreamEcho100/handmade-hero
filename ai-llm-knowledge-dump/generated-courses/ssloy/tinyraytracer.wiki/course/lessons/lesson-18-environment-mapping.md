@@ -147,7 +147,7 @@ int envmap_load(EnvMap *e, const char *filename) {
   e->width    = w;
   e->height   = h;
   e->channels = 3;
-  printf("Loaded envmap: %s (%dx%d)\n", filename, w, h);
+  printf("Loaded envmap (equirectangular): %s (%dx%d)\n", filename, w, h);
   return 0;
 }
 

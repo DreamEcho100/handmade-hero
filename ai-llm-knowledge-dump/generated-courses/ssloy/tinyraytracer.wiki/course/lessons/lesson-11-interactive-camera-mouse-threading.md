@@ -15,15 +15,15 @@ Dragging the mouse (left button) orbits the camera around the scene. Right-click
 
 ## Files changed
 
-| File | Change type | Summary |
-|------|-------------|---------|
-| `game/render.h` | Modified | `RtCamera` struct replaces simple camera; `CameraBasis` struct; mouse/zoom constants; `MAX_RENDER_THREADS`; `camera_compute_basis` declaration |
-| `game/render.c` | Modified | `camera_init`, `camera_update` (mouse+keyboard), `camera_compute_basis`, multi-threaded `render_scene` with `RenderJob` + `render_thread_fn` |
-| `game/base.h` | Modified | Add `MouseState` struct; add `camera_forward`/`camera_backward` buttons; expand button array |
-| `game/main.c` | Modified | Call `camera_update` with input; pass camera to `render_scene` |
-| `platforms/x11/main.c` | Modified | Mouse button/motion/scroll event handling; WASD key bindings |
-| `platforms/raylib/main.c` | Modified | Same mouse/key additions |
-| `build-dev.sh` | Modified | Add `-lpthread` to linker flags for X11 backend |
+| File                      | Change type | Summary                                                                                                                                        |
+| ------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `game/render.h`           | Modified    | `RtCamera` struct replaces simple camera; `CameraBasis` struct; mouse/zoom constants; `MAX_RENDER_THREADS`; `camera_compute_basis` declaration |
+| `game/render.c`           | Modified    | `camera_init`, `camera_update` (mouse+keyboard), `camera_compute_basis`, multi-threaded `render_scene` with `RenderJob` + `render_thread_fn`   |
+| `game/base.h`             | Modified    | Add `MouseState` struct; add `camera_forward`/`camera_backward` buttons; expand button array                                                   |
+| `game/main.c`             | Modified    | Call `camera_update` with input; pass camera to `render_scene`                                                                                 |
+| `platforms/x11/main.c`    | Modified    | Mouse button/motion/scroll event handling; WASD key bindings                                                                                   |
+| `platforms/raylib/main.c` | Modified    | Same mouse/key additions                                                                                                                       |
+| `build-dev.sh`            | Modified    | Add `-lpthread` to linker flags for X11 backend                                                                                                |
 
 ## Background — why this works
 
@@ -103,6 +103,7 @@ This is the same NDC-to-ray formula from L03, but now using pre-computed vectors
 Raytracing is **embarrassingly parallel** — each pixel is independent, with no shared mutable state. This makes it ideal for splitting across CPU cores.
 
 The approach:
+
 1. Detect CPU core count: `sysconf(_SC_NPROCESSORS_ONLN)`
 2. Split rows evenly across threads
 3. Each thread renders its row range into the shared pixel buffer
@@ -162,6 +163,7 @@ void render_scene(Backbuffer *bb, const Scene *scene, const RtCamera *cam);
 ```
 
 **Key design:**
+
 - `RtCamera` uses the `Rt` prefix to avoid name collision with Raylib's built-in `Camera` type.
 - `camera_update` returns `int` (1 if camera moved, 0 if unchanged) — this will be used for adaptive quality in L12.
 - `camera_update` takes `const void *input` and internally casts to `GameInput *` — this avoids a circular header dependency between `render.h` and `base.h`.
@@ -235,10 +237,11 @@ int camera_update(RtCamera *cam, const void *input_ptr, float delta_time) {
 ```
 
 **Key lines:**
+
 - Lines 10-14: Mouse orbit. `dx` and `dy` are pixel deltas from the platform. Multiplying by `MOUSE_ORBIT_SPEED` (0.005) converts pixels to radians — about 3 degrees per 10-pixel drag.
 - Lines 17-26: Panning. We compute the camera's `right` and `up` vectors in world space using `vec3_cross`. The target moves along these vectors, and the camera follows because `recompute_position` places the camera relative to the target.
 - Line 29: Scroll zoom directly modifies `orbit_radius`. Positive scroll (wheel up) zooms in (decreases radius).
-- Lines 50-53: Pitch clamping at 0.44*PI (about 79 degrees). Going to exactly PI/2 makes `cosf(pitch) = 0`, which collapses the orbit sphere to a point and breaks the camera.
+- Lines 50-53: Pitch clamping at 0.44\*PI (about 79 degrees). Going to exactly PI/2 makes `cosf(pitch) = 0`, which collapses the orbit sphere to a point and breaks the camera.
 - Lines 58-61: Movement detection by comparing old vs new state. The squared differences avoid expensive `sqrtf`. Threshold `1e-10f` catches tiny floating-point drift while detecting real user input.
 
 ### `game/render.c` — camera_compute_basis
@@ -258,6 +261,7 @@ CameraBasis camera_compute_basis(const RtCamera *cam, int width, int height) {
 ```
 
 **Key lines:**
+
 - Line 4: `forward` = normalized direction from camera to target. This is the center of the view.
 - Line 6: `right` = `cross(forward, world_up)`. The cross product produces a vector perpendicular to both — this is the camera's "right" direction. `vec3_cross` was added to `vec3.h` in preparation for this lesson (formally introduced in L12).
 - Line 7: `up` = `cross(right, forward)`. This recomputed up vector is perpendicular to both right and forward, forming an orthonormal basis. Note: no `normalize` needed here because `right` and `forward` are already unit-length and perpendicular.
@@ -309,6 +313,7 @@ void render_scene(Backbuffer *bb, const Scene *scene, const RtCamera *cam) {
 ```
 
 **Key lines:**
+
 - Line 5: Each thread processes its assigned row range (`start_row` to `end_row`). Rows are independent — no synchronization needed.
 - Line 14: `camera_compute_basis` is called ONCE. The returned `basis` struct is passed to all threads by pointer (read-only).
 - Line 22-23: `remainder` handling distributes leftover rows among the first few threads. For 600 rows across 8 threads: 75 rows each, no remainder.
@@ -362,10 +367,10 @@ case ButtonPress:
 case MotionNotify:
   curr->mouse.x  = (float)ev.xmotion.x;
   curr->mouse.y  = (float)ev.xmotion.y;
-  curr->mouse.dx = curr->mouse.x - prev_mouse_x;
-  curr->mouse.dy = curr->mouse.y - prev_mouse_y;
-  prev_mouse_x   = curr->mouse.x;
-  prev_mouse_y   = curr->mouse.y;
+  curr->mouse.dx = curr->mouse.x - g_prev_mouse_x;
+  curr->mouse.dy = curr->mouse.y - g_prev_mouse_y;
+  g_prev_mouse_x = curr->mouse.x;
+  g_prev_mouse_y = curr->mouse.y;
   break;
 ```
 
@@ -373,16 +378,16 @@ case MotionNotify:
 
 ## Common mistakes
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| Camera flips upside down at top/bottom | Pitch not clamped | Clamp pitch to `[-0.44*PI, +0.44*PI]` |
-| Orbit is backwards (drag right = rotate left) | Sign of `dx` multiplication | Check: `cam->yaw -= m->dx * MOUSE_ORBIT_SPEED` (negative dx = positive yaw) |
-| Scene renders but camera doesn't move | Forgot to call `camera_update` in `game_update` | Add `camera_update(&state->camera, input, delta_time)` |
-| Linker error: undefined reference to `pthread_create` | Missing `-lpthread` flag | Add `-lpthread` to `BACKEND_LIBS` in `build-dev.sh` |
-| Frame rate unchanged with threading | Only 1 thread created | Check `sysconf(_SC_NPROCESSORS_ONLN)` returns > 1; verify `num_threads` |
-| Garbled pixels / data race | Threads writing overlapping rows | Verify `start_row`/`end_row` ranges are non-overlapping |
-| Camera right vector is zero | Camera looking straight up/down | Pitch clamp prevents this; `cross(forward, world_up)` degenerates when forward is parallel to world_up |
-| Scroll zoom doesn't work on X11 | Missing button 4/5 handling | X11 reports scroll as `ButtonPress` with button index 4 (up) and 5 (down) |
+| Symptom                                               | Cause                                           | Fix                                                                                                    |
+| ----------------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Camera flips upside down at top/bottom                | Pitch not clamped                               | Clamp pitch to `[-0.44*PI, +0.44*PI]`                                                                  |
+| Orbit is backwards (drag right = rotate left)         | Sign of `dx` multiplication                     | Check: `cam->yaw -= m->dx * MOUSE_ORBIT_SPEED` (negative dx = positive yaw)                            |
+| Scene renders but camera doesn't move                 | Forgot to call `camera_update` in `game_update` | Add `camera_update(&state->camera, input, delta_time)`                                                 |
+| Linker error: undefined reference to `pthread_create` | Missing `-lpthread` flag                        | Add `-lpthread` to `BACKEND_LIBS` in `build-dev.sh`                                                    |
+| Frame rate unchanged with threading                   | Only 1 thread created                           | Check `sysconf(_SC_NPROCESSORS_ONLN)` returns > 1; verify `num_threads`                                |
+| Garbled pixels / data race                            | Threads writing overlapping rows                | Verify `start_row`/`end_row` ranges are non-overlapping                                                |
+| Camera right vector is zero                           | Camera looking straight up/down                 | Pitch clamp prevents this; `cross(forward, world_up)` degenerates when forward is parallel to world_up |
+| Scroll zoom doesn't work on X11                       | Missing button 4/5 handling                     | X11 reports scroll as `ButtonPress` with button index 4 (up) and 5 (down)                              |
 
 ## Exercise
 
@@ -390,11 +395,11 @@ case MotionNotify:
 
 ## JS ↔ C concept map
 
-| JS / Web concept | C equivalent in this lesson | Key difference |
-|---|---|---|
-| `new OrbitControls(camera, canvas)` | `camera_update(cam, input, dt)` — manual orbit math | No library; sin/cos computed directly |
-| `event.clientX`, `event.movementX` | `curr->mouse.x`, `curr->mouse.dx` | Platform accumulates deltas; no DOM events |
-| `event.deltaY` (wheel) | `curr->mouse.scroll` (+1/-1 per tick) | X11 reports wheel as button 4/5, not a scroll delta |
-| `camera.lookAt(target)` | `vec3_sub(target, position)` → `forward` → `right` → `up` basis | Manual basis computation instead of matrix library |
-| `new Worker()` / `Promise.all(workers)` | `pthread_create` / `pthread_join` | OS threads, not web workers; shared memory instead of message passing |
-| `navigator.hardwareConcurrency` | `sysconf(_SC_NPROCESSORS_ONLN)` | POSIX system call; returns physical core count |
+| JS / Web concept                        | C equivalent in this lesson                                     | Key difference                                                        |
+| --------------------------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `new OrbitControls(camera, canvas)`     | `camera_update(cam, input, dt)` — manual orbit math             | No library; sin/cos computed directly                                 |
+| `event.clientX`, `event.movementX`      | `curr->mouse.x`, `curr->mouse.dx`                               | Platform accumulates deltas; no DOM events                            |
+| `event.deltaY` (wheel)                  | `curr->mouse.scroll` (+1/-1 per tick)                           | X11 reports wheel as button 4/5, not a scroll delta                   |
+| `camera.lookAt(target)`                 | `vec3_sub(target, position)` → `forward` → `right` → `up` basis | Manual basis computation instead of matrix library                    |
+| `new Worker()` / `Promise.all(workers)` | `pthread_create` / `pthread_join`                               | OS threads, not web workers; shared memory instead of message passing |
+| `navigator.hardwareConcurrency`         | `sysconf(_SC_NPROCESSORS_ONLN)`                                 | POSIX system call; returns physical core count                        |

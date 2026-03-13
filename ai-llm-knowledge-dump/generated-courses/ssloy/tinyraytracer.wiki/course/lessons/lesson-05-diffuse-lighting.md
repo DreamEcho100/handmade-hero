@@ -14,12 +14,12 @@ The four spheres are no longer flat-colored circles. Each sphere now has shading
 
 ## Files changed
 
-| File | Change type | Summary |
-|------|-------------|---------|
-| `game/lighting.h` | Created | `LightingResult` struct, `compute_lighting` declaration |
-| `game/lighting.c` | Created | Diffuse lighting computation (loop over lights) |
-| `game/scene.h` | Modified | Add `Light` struct, `MAX_LIGHTS`, lights array in `Scene`, 3 lights in `scene_init` |
-| `game/main.c` | Modified | Render loop now calls `compute_lighting` and uses result to shade pixels |
+| File               | Change type | Summary                                                                             |
+| ------------------ | ----------- | ----------------------------------------------------------------------------------- |
+| `game/lighting.h`  | Created     | `LightingResult` struct, `compute_lighting` declaration                             |
+| `game/lighting.c`  | Created     | Diffuse lighting computation (loop over lights)                                     |
+| `game/scene.h`     | Modified    | Add `Light` struct, `MAX_LIGHTS`, lights array in `Scene`, 3 lights in `scene_init` |
+| `game/raytracer.c` | Modified    | `cast_ray` now calls `compute_lighting` and uses result to shade pixels             |
 
 ## Background — why this works
 
@@ -44,6 +44,7 @@ This cosine falloff is called **Lambert's cosine law**. It models how real surfa
 ### The lighting formula
 
 For each light in the scene:
+
 ```
 diffuse_contribution = light.intensity * max(0, dot(light_dir, surface_normal))
 ```
@@ -63,6 +64,7 @@ We already compute this in `sphere_intersect` (Lesson 03) and store it in `hit->
 ### Light direction
 
 The light direction at a surface point is:
+
 ```c
 light_dir = normalize(light.position - hit_point)
 ```
@@ -114,6 +116,7 @@ static inline void scene_init(Scene *s) {
 ```
 
 **Key lines:**
+
 - `Light` has just two fields: `position` (where the light is in world space) and `intensity` (how bright it is). A point light radiates equally in all directions.
 - Three lights create interesting shading: light from the left, above-right, and right-behind. This avoids the flat look of a single light and creates subtle shading gradients.
 - `intensity` values above 1.0 are valid — they mean the light is "brighter than normal." The final pixel color gets clamped to [0, 1] before conversion to bytes.
@@ -140,6 +143,7 @@ LightingResult compute_lighting(Vec3 point, Vec3 normal, Vec3 view_dir,
 ```
 
 **Key lines:**
+
 - `LightingResult` returns two separate intensities: diffuse and specular. For this lesson, only `diffuse_intensity` is computed; `specular_intensity` stays 0. Lesson 06 fills it in.
 - `view_dir` is the direction from the surface toward the camera. Not used yet (it's needed for specular), but the signature is designed for the full Phong model.
 - `const RtMaterial *material` is passed by pointer (not by value) because the struct is 36+ bytes — too large for efficient register passing.
@@ -170,13 +174,14 @@ LightingResult compute_lighting(Vec3 point, Vec3 normal, Vec3 view_dir,
 ```
 
 **Key lines:**
+
 - `vec3_sub(light.position, point)` — vector from the surface point to the light. `vec3_normalize` makes it a unit vector so the dot product gives the pure cosine.
 - `vec3_dot(light_dir, normal)` — the heart of diffuse shading. If positive, the surface faces the light. If negative or zero, the surface faces away.
 - `if (diff > 0.0f)` — the `max(0, ...)` clamp. We skip negative contributions rather than adding negative light (which would darken the surface incorrectly).
 - `result.diffuse_intensity +=` — accumulate contributions from all lights. This is a sum over all lights, not a maximum.
 - `(void)view_dir; (void)material;` — these parameters are unused in this lesson's diffuse-only version but are part of the function signature for the specular addition in Lesson 06.
 
-### `game/render.c` — using lighting in the render loop (relevant changes)
+### `game/raytracer.c` — using lighting in the render loop (relevant changes)
 
 ```c
 /* After scene_intersect finds a hit: */
@@ -195,19 +200,20 @@ if (scene_intersect(ray, scene, &hit)) {
 ```
 
 **Key lines:**
+
 - `vec3_negate(ray.direction)` — the view direction points FROM the surface TOWARD the camera. Since `ray.direction` points from camera to surface, negating it gives us the view direction.
 - `vec3_scale(mat.diffuse_color, lr.diffuse_intensity)` — multiply the material's base color by the lighting intensity. Ivory `(0.4, 0.4, 0.3)` lit with intensity 2.0 becomes `(0.8, 0.8, 0.6)`. If the intensity exceeds 1.0/component, we clamp when converting to bytes.
 - `compute_lighting` returns raw intensity values. The caller decides how to combine them with material properties. This separation lets us add specular, reflections, and refractions in later lessons without changing `compute_lighting`.
 
 ## Common mistakes
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| Spheres are completely black | `light_dir` computed backwards: `point - light.position` instead of `light.position - point` | Direction must be FROM surface TOWARD light: `vec3_sub(light.position, point)` |
-| Spheres have inverted shading (dark side faces light) | Normal points inward: `center - hit_point` instead of `hit_point - center` | Normal in `sphere_intersect` must be `normalize(hit_point - center)` |
-| Only one side of sphere is lit | Only one light in `scene_init` | Add all 3 lights; check `light_count` increments |
-| Spheres are too bright (washed out white) | Missing clamp before `GAME_RGB` | Clamp each channel to 255 max: `(int)fminf(color.x * 255.0f, 255.0f)` |
-| Lighting looks flat (no gradient on sphere) | `light_dir` not normalized | Must `vec3_normalize` the direction; un-normalized dot gives wrong cosine |
+| Symptom                                               | Cause                                                                                        | Fix                                                                            |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Spheres are completely black                          | `light_dir` computed backwards: `point - light.position` instead of `light.position - point` | Direction must be FROM surface TOWARD light: `vec3_sub(light.position, point)` |
+| Spheres have inverted shading (dark side faces light) | Normal points inward: `center - hit_point` instead of `hit_point - center`                   | Normal in `sphere_intersect` must be `normalize(hit_point - center)`           |
+| Only one side of sphere is lit                        | Only one light in `scene_init`                                                               | Add all 3 lights; check `light_count` increments                               |
+| Spheres are too bright (washed out white)             | Missing clamp before `GAME_RGB`                                                              | Clamp each channel to 255 max: `(int)fminf(color.x * 255.0f, 255.0f)`          |
+| Lighting looks flat (no gradient on sphere)           | `light_dir` not normalized                                                                   | Must `vec3_normalize` the direction; un-normalized dot gives wrong cosine      |
 
 ## Exercise
 
@@ -215,10 +221,10 @@ if (scene_intersect(ray, scene, &hit)) {
 
 ## JS ↔ C concept map
 
-| JS / Web concept | C equivalent in this lesson | Key difference |
-|---|---|---|
-| `new THREE.PointLight(0xffffff, 1.5)` | `(Light){ .position = ..., .intensity = 1.5f }` | No class; compound literal; manual lighting math |
-| `normal.dot(lightDir)` | `vec3_dot(light_dir, normal)` | Free function, not a method |
-| `Math.max(0, dotResult)` | `if (diff > 0.0f) { ... }` | Conditional instead of `fmaxf` — same effect, slightly clearer intent |
-| `color.multiplyScalar(intensity)` | `vec3_scale(mat.diffuse_color, lr.diffuse_intensity)` | Explicit function call; returns new vector (no mutation) |
-| `lights.forEach(light => { ... })` | `for (int i = 0; i < scene->light_count; i++)` | Manual index loop; no callbacks or closures |
+| JS / Web concept                      | C equivalent in this lesson                           | Key difference                                                        |
+| ------------------------------------- | ----------------------------------------------------- | --------------------------------------------------------------------- |
+| `new THREE.PointLight(0xffffff, 1.5)` | `(Light){ .position = ..., .intensity = 1.5f }`       | No class; compound literal; manual lighting math                      |
+| `normal.dot(lightDir)`                | `vec3_dot(light_dir, normal)`                         | Free function, not a method                                           |
+| `Math.max(0, dotResult)`              | `if (diff > 0.0f) { ... }`                            | Conditional instead of `fmaxf` — same effect, slightly clearer intent |
+| `color.multiplyScalar(intensity)`     | `vec3_scale(mat.diffuse_color, lr.diffuse_intensity)` | Explicit function call; returns new vector (no mutation)              |
+| `lights.forEach(light => { ... })`    | `for (int i = 0; i < scene->light_count; i++)`        | Manual index loop; no callbacks or closures                           |

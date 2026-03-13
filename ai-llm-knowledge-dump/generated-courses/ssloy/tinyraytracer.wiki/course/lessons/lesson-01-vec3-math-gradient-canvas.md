@@ -4,7 +4,7 @@
 
 ## Observable outcome
 
-A window opens showing a smooth color gradient: green→red vertically, blue→red horizontally. The gradient is rendered by writing directly to the platform backbuffer via `GAME_RGB`. This proves the rendering pipeline works end-to-end.
+A window opens showing a smooth color gradient: red increases top-to-bottom, green increases left-to-right, producing a black-green-red-yellow gradient (no blue component). The gradient is rendered by writing directly to the platform backbuffer via `GAME_RGB`. This proves the rendering pipeline works end-to-end.
 
 ## New concepts
 
@@ -14,22 +14,23 @@ A window opens showing a smooth color gradient: green→red vertically, blue→r
 
 ## Files changed
 
-| File | Change type | Summary |
-|------|-------------|---------|
-| `build-dev.sh` | Adapted | Game sources, `-lm` for math, title "TinyRaytracer" |
-| `platform.h` | Adapted | `GAME_TITLE "TinyRaytracer"`, `GAME_W 800`, `GAME_H 600` |
-| `game/base.h` | Adapted | `quit` button only (1 button); `play_tone` removed |
-| `game/vec3.h` | Created | `Vec3` struct + `vec3_make`, `vec3_add`, `vec3_sub`, `vec3_scale`, `vec3_negate`, `vec3_mul` |
-| `game/main.h` | Created | `RaytracerState` stub; `game_init`/`game_update`/`game_render` declarations |
-| `game/main.c` | Created | Stub implementations; gradient render loop |
-| `game/render.h` | Created | Minimal — `RtCamera` stub, `render_scene` declaration |
-| `game/render.c` | Created | Simple per-pixel loop writing gradient to backbuffer |
-| `platforms/raylib/main.c` | Adapted | Audio stripped; `game_update`/`game_render` calls |
-| `platforms/x11/main.c` | Adapted | Audio stripped; `game_update`/`game_render` calls |
+| File                      | Change type | Summary                                                                                      |
+| ------------------------- | ----------- | -------------------------------------------------------------------------------------------- |
+| `build-dev.sh`            | Adapted     | Game sources, `-lm` for math, title "TinyRaytracer"                                          |
+| `platform.h`              | Adapted     | `GAME_TITLE "TinyRaytracer"`, `GAME_W 800`, `GAME_H 600`                                     |
+| `game/base.h`             | Adapted     | `quit` button only (1 button); `play_tone` removed                                           |
+| `game/vec3.h`             | Created     | `Vec3` struct + `vec3_make`, `vec3_add`, `vec3_sub`, `vec3_scale`, `vec3_negate`, `vec3_mul` |
+| `game/main.h`             | Created     | `RaytracerState` stub; `game_init`/`game_update`/`game_render` declarations                  |
+| `game/main.c`             | Created     | Stub implementations; gradient render loop                                                   |
+| `game/render.h`           | Created     | Minimal — `RtCamera` stub, `render_scene` declaration                                        |
+| `game/render.c`           | Created     | Simple per-pixel loop writing gradient to backbuffer                                         |
+| `platforms/raylib/main.c` | Adapted     | Audio stripped; `game_update`/`game_render` calls                                            |
+| `platforms/x11/main.c`    | Adapted     | Audio stripped; `game_update`/`game_render` calls                                            |
 
 ## Background — why this works
 
 ### JS analogy
+
 In JavaScript you'd write `class Vec3 { constructor(x,y,z) { this.x = x; ... } }` with methods like `add(other)`. In C there are no classes, constructors, or operator overloading. Instead:
 
 ```c
@@ -44,6 +45,7 @@ static inline Vec3 vec3_make(float x, float y, float z) {
 The `(Vec3){x, y, z}` syntax is a **compound literal** — C99's equivalent of `new Vec3(x,y,z)` but allocated on the stack, not the heap. No `malloc`, no `free`.
 
 ### How it works in C
+
 Every vec3 operation is an explicit function call:
 
 ```c
@@ -56,12 +58,15 @@ Vec3 d = vec3_scale(c, 0.5f);         /* JS: c.multiply(0.5)   */
 All functions are `static inline` because they'll be called millions of times per frame (once per pixel × multiple operations). The compiler inlines them at the call site — zero function-call overhead.
 
 ### Why float, not double
+
 We use `float` (32-bit) not `double` (64-bit) because:
+
 1. GPU rendering uses float exclusively — learning with float matches real-world practice
 2. Half the memory bandwidth — 3 floats = 12 bytes vs 3 doubles = 24 bytes
 3. `sqrtf`, `sinf`, `cosf` are the float variants of math functions (requires `-lm` linker flag)
 
 ### The rendering loop
+
 Each frame, `game_render` writes to the backbuffer pixel by pixel:
 
 ```c
@@ -124,6 +129,7 @@ static inline Vec3 vec3_mul(Vec3 a, Vec3 b) {
 ```
 
 **Key lines:**
+
 - Line 7: `typedef struct { float x, y, z; } Vec3;` — the entire type is 12 bytes. No vtable, no methods, no hidden fields.
 - Line 10: `return (Vec3){x, y, z};` — compound literal. This is stack-allocated and returned by value (the compiler optimizes the copy away).
 - All functions take `Vec3` by value, not by pointer — for small structs (≤16 bytes) this is faster because the values stay in CPU registers.
@@ -167,6 +173,7 @@ void game_render(RaytracerState *state, Backbuffer *bb) {
 ```
 
 **Key lines:**
+
 - Line 8: `memset(state, 0, sizeof(*state))` — zero-init all fields. C doesn't auto-initialize like JS.
 - Line 17: `bb->pitch / 4` — pitch is in bytes, pixels are 4 bytes each. `pitch` may differ from `width * 4` due to row alignment.
 - Line 23-26: Float-to-pixel conversion. `r` ranges 0.0→1.0, multiply by 255 for byte range.
@@ -176,6 +183,7 @@ void game_render(RaytracerState *state, Backbuffer *bb) {
 > **Platform change:** The backends are adapted from the Platform Foundation Course template. Only the changed lines are shown. See **Platform Foundation Course** for full context.
 
 **`game/base.h`** — simplified to 1 button:
+
 ```c
 typedef struct {
   union {
@@ -188,6 +196,7 @@ typedef struct {
 ```
 
 **Both backends** — replace `demo_render(&bb, ...)` with:
+
 ```c
 game_update(&state, curr_input, dt);
 game_render(&state, &bb);
@@ -195,12 +204,12 @@ game_render(&state, &bb);
 
 ## Common mistakes
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| Black window | `GAME_RGB` arguments in wrong order | Check: `GAME_RGB(red, green, blue)` — red first |
-| Gradient is sideways | `i` and `j` swapped in the formula | `j / height` = vertical (top→bottom), `i / width` = horizontal (left→right) |
-| Compile error: `-lm` | Missing math library link | Add `-lm` to `BACKEND_LIBS` in `build-dev.sh` |
-| Gradient has visible bands | Integer division instead of float | Use `(float)j / (float)bb->height`, not `j / bb->height` |
+| Symptom                    | Cause                               | Fix                                                                         |
+| -------------------------- | ----------------------------------- | --------------------------------------------------------------------------- |
+| Black window               | `GAME_RGB` arguments in wrong order | Check: `GAME_RGB(red, green, blue)` — red first                             |
+| Gradient is sideways       | `i` and `j` swapped in the formula  | `j / height` = vertical (top→bottom), `i / width` = horizontal (left→right) |
+| Compile error: `-lm`       | Missing math library link           | Add `-lm` to `BACKEND_LIBS` in `build-dev.sh`                               |
+| Gradient has visible bands | Integer division instead of float   | Use `(float)j / (float)bb->height`, not `j / bb->height`                    |
 
 ## Exercise
 
@@ -208,9 +217,9 @@ game_render(&state, &bb);
 
 ## JS ↔ C concept map
 
-| JS / Web concept | C equivalent in this lesson | Key difference |
-|---|---|---|
+| JS / Web concept                            | C equivalent in this lesson                                   | Key difference                                    |
+| ------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------- |
 | `class Vec3 { constructor(x,y,z) { ... } }` | `typedef struct { float x, y, z; } Vec3` + `vec3_make(x,y,z)` | No constructors; compound literal `(Vec3){x,y,z}` |
-| `vec.add(other)` | `vec3_add(a, b)` | No operator overloading; explicit function calls |
-| `canvas.getContext('2d').fillRect(...)` | `bb->pixels[j * stride + i] = GAME_RGB(r,g,b)` | Direct pixel write; no canvas API |
-| `requestAnimationFrame(render)` | Platform loop calls `game_render()` each frame | You don't own the loop; the platform calls you |
+| `vec.add(other)`                            | `vec3_add(a, b)`                                              | No operator overloading; explicit function calls  |
+| `canvas.getContext('2d').fillRect(...)`     | `bb->pixels[j * stride + i] = GAME_RGB(r,g,b)`                | Direct pixel write; no canvas API                 |
+| `requestAnimationFrame(render)`             | Platform loop calls `game_render()` each frame                | You don't own the loop; the platform calls you    |

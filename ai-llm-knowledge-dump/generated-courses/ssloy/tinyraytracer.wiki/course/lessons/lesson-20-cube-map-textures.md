@@ -4,7 +4,7 @@
 
 ## Observable outcome
 
-If you place six cube map face images in `assets/textures/cube/Park3Med/` named `px.jpg`, `nx.jpg`, `py.jpg`, `ny.jpg`, `pz.jpg`, `nz.jpg`, the scene background shows the cube map. Reflective surfaces (mirror sphere) reflect the cube map. Pressing **C** cycles: `sky` (procedural) -> `eq` (equirectangular) -> `cube` (cube map) -> `sky` (wrapping around, skipping any mode with no loaded data). The HUD line 3 shows `C:sky`, `C:eq`, or `C:cube`.
+If you place six cube map face images in `assets/textures/cube/Park3Med/` named `px.jpg`, `nx.jpg`, `py.jpg`, `ny.jpg`, `pz.jpg`, `nz.jpg`, the scene background shows the cube map. Reflective surfaces (mirror sphere) reflect the cube map. Pressing **C** cycles: `sky` (procedural) -> `eq` (equirectangular) -> `cube` (cube map) -> `sky` (wrapping around, skipping any mode with no loaded data). The HUD line 2 shows `C:sky`, `C:eq`, or `C:cube`.
 
 If no cube map images exist, the loader falls back to equirectangular; if that also fails, it falls back to procedural sky. No crash either way.
 

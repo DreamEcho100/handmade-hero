@@ -4,7 +4,7 @@
 
 ## Observable outcome
 
-The HUD now shows `L:glsl` as an available export. Pressing **Shift+L** writes a file `raytracer.glsl` to the working directory and prints `Exported GLSL shader: raytracer.glsl (N bytes)` to stdout. Opening that file in Shadertoy produces the familiar 4-sphere scene with ivory, rubber, mirror, and glass materials, 3 point lights, Phong shading, a checkerboard floor, hard shadows, and reflections -- all running at 60 fps on a modern GPU.
+The HUD now shows `L:glsl` as an available export. Pressing **Shift+L** writes a file `raytracer.glsl` to the working directory and prints `Exported GLSL shader: raytracer.glsl (N bytes)` to stdout. Opening that file in Shadertoy produces the familiar 4-sphere scene with ivory, rubber, mirror, and glass materials, 3 point lights, Phong shading, a checkerboard floor, hard shadows, reflections, and refractions -- all running at 60 fps on a modern GPU.
 
 ## New concepts
 
@@ -51,7 +51,7 @@ for (depth = 0; depth < MAX_DEPTH; depth++) {
 }
 ```
 
-Each iteration handles one bounce. The `weight` variable tracks how much energy the reflected ray carries -- it decreases geometrically with each reflection. When `weight` is multiplied into the accumulated color, the result is mathematically equivalent to the recursive version (for reflections; refractions are omitted for simplicity in this shader).
+Each iteration handles one bounce. The `weight` variable tracks how much energy the reflected ray carries -- it decreases geometrically with each reflection. When `weight` is multiplied into the accumulated color, the result is mathematically equivalent to the recursive version. Refractions are handled inline within each iteration: when a refractive material is hit, a single refracted ray is traced and its contribution added to `color` before the reflection bounce continues.
 
 ### C-to-GLSL operation mapping
 
@@ -102,7 +102,7 @@ The GLSL version is more compact because GLSL supports vector arithmetic nativel
  *   - 4 spheres with ivory/rubber/mirror/glass materials
  *   - 3 point lights with Phong shading
  *   - Checkerboard floor
- *   - Hard shadows + reflections (iterative, no recursion in GLSL)
+ *   - Hard shadows + reflections + refractions (iterative, no recursion in GLSL)
  * ═══════════════════════════════════════════════════════════════════════════
  */
 
@@ -130,7 +130,7 @@ static const char GLSL_RAYTRACER_SOURCE[] =
 "//      cast_ray with: texture(iChannel0, dir).rgb\n"
 "// ═══════════════════════════════════════════════════════════════════════\n"
 "\n"
-"const int   MAX_DEPTH   = 3;\n"
+"const int   MAX_DEPTH   = 4;\n"
 "const float FOV         = 1.0472; // PI/3\n"
 "const vec3  BG_TOP      = vec3(0.2, 0.7, 0.8);\n"
 "const vec3  BG_BOT      = vec3(1.0, 1.0, 1.0);\n"
@@ -183,8 +183,8 @@ static const char GLSL_RAYTRACER_SOURCE[] =
 "    float thc = sqrt(r2 - d2);\n"
 "    float t0  = tca - thc;\n"
 "    float t1  = tca + thc;\n"
-"    if (t0 < 0.0) t0 = t1;\n"
-"    if (t0 < 0.0) return -1.0;\n"
+"    if (t0 < 0.001) t0 = t1;\n"
+"    if (t0 < 0.001) return -1.0;\n"
 "    return t0;\n"
 "}\n"
 "\n"
@@ -204,9 +204,9 @@ static const char GLSL_RAYTRACER_SOURCE[] =
 "                  (sphere_mat[i]==2) ? mirror : glass;\n"
 "        }\n"
 "    }\n"
-"    // Checkerboard floor (same as our plane intersection y=-4)\n"
+"    // Checkerboard floor (same as our plane intersection y=0)\n"
 "    if (abs(dir.y) > 1e-3) {\n"
-"        float d = -(orig.y + 4.0) / dir.y;\n"
+"        float d = -orig.y / dir.y;\n"
 "        if (d > 0.001 && d < t) {\n"
 "            vec3 pt = orig + dir * d;\n"
 "            if (abs(pt.x) < 30.0 && abs(pt.z) < 50.0) {\n"
@@ -231,7 +231,7 @@ static const char GLSL_RAYTRACER_SOURCE[] =
 "// and refractions.  GLSL forbids recursion, so we unroll into a loop\n"
 "// with a weight accumulator.\n"
 "//\n"
-"// Optimization note: this loop has at most MAX_DEPTH=3 iterations.\n"
+"// Optimization note: this loop has at most MAX_DEPTH=4 iterations.\n"
 "// The GLSL compiler may fully unroll it for better GPU performance.\n"
 "vec3 cast_ray(vec3 orig, vec3 dir) {\n"
 "    vec3  color  = vec3(0.0);\n"
@@ -274,6 +274,46 @@ static const char GLSL_RAYTRACER_SOURCE[] =
 "        vec3 specular = vec3(spec_i);\n"
 "\n"
 "        color += weight * (diffuse * mat.albedo.x + specular * mat.albedo.y);\n"
+"\n"
+"        // ── Refraction (Snell's law via GLSL built-in) ─────────\n"
+"        // For refractive materials (glass), compute refracted ray\n"
+"        // contribution and add it.  Same as our CPU cast_ray:\n"
+"        // refract_color * albedo.w\n"
+"        if (mat.albedo.w > 0.0) {\n"
+"            float eta = (dot(dir, N) < 0.0)\n"
+"                        ? (1.0 / mat.ior) : mat.ior;\n"
+"            vec3 faceN = (dot(dir, N) < 0.0) ? N : -N;\n"
+"            vec3 rdir  = refract(dir, faceN, eta);\n"
+"            if (length(rdir) > 0.001) {\n"
+"                vec3 rOrig = (dot(rdir, N) < 0.0)\n"
+"                             ? pt - N * 0.001 : pt + N * 0.001;\n"
+"                // Trace one refracted bounce for its contribution\n"
+"                float rt; vec3 rN; Material rM;\n"
+"                if (scene_hit(rOrig, rdir, rt, rN, rM)) {\n"
+"                    vec3 rpt = rOrig + rdir * rt;\n"
+"                    float rd = 0.0, rs = 0.0;\n"
+"                    for (int l = 0; l < N_LIGHTS; l++) {\n"
+"                        vec3 rl = normalize(light_pos[l] - rpt);\n"
+"                        float srt; vec3 srN; Material srM;\n"
+"                        vec3 srO = rpt + rN * 0.001;\n"
+"                        if (scene_hit(srO, rl, srt, srN, srM) &&\n"
+"                            srt < length(light_pos[l] - rpt))\n"
+"                            continue;\n"
+"                        rd += light_int[l] * max(0.0, dot(rl, rN));\n"
+"                        rs += light_int[l] *\n"
+"                            pow(max(0.0, dot(reflect(-rl,rN),-rdir)),\n"
+"                                rM.spec_exp);\n"
+"                    }\n"
+"                    vec3 rc = rM.color * rd * rM.albedo.x\n"
+"                            + vec3(rs) * rM.albedo.y;\n"
+"                    color += weight * mat.albedo.w * rc;\n"
+"                } else {\n"
+"                    float sky = 0.5 * (rdir.y + 1.0);\n"
+"                    color += weight * mat.albedo.w\n"
+"                           * mix(BG_TOP, BG_BOT, sky * 0.3);\n"
+"                }\n"
+"            }\n"
+"        }\n"
 "\n"
 "        // ── Reflection (iterative replacement for recursion) ───\n"
 "        if (mat.albedo.z > 0.0) {\n"
@@ -341,7 +381,7 @@ static inline int shader_export_glsl(const char *filename) {
 
 - **`out float t, out vec3 N, out Material mat` in `scene_hit`:** GLSL `out` parameters are the equivalent of pointer parameters in C. Where our C code fills a `HitRecord *hit` struct, the GLSL version writes into three separate `out` variables. GLSL has no pointers.
 
-- **Iterative `cast_ray` with `weight` accumulator:** The loop replaces recursion. `color += weight * local_contribution` adds the lighting for this bounce, then `weight *= mat.albedo.z` attenuates for the next bounce. When `albedo.z == 0` (non-reflective surface), the loop breaks early.
+- **Iterative `cast_ray` with `weight` accumulator:** The loop replaces recursion. `color += weight * local_contribution` adds the lighting for this bounce, then `weight *= mat.albedo.z` attenuates for the next bounce. When `albedo.z == 0` (non-reflective surface), the loop breaks early. Refractions are handled within each iteration: when `mat.albedo.w > 0`, a refracted ray is traced using GLSL's built-in `refract()` function, and its lighting contribution is added inline.
 
 - **`reflect(dir, N)` and `mix(BG_TOP, BG_BOT, sky * 0.3)` (built-ins):** These replace our manual `vec3_reflect` and `vec3_lerp`. GLSL built-ins compile to single GPU instructions.
 
@@ -443,10 +483,10 @@ In `game_render`:
   }
 ```
 
-In the HUD line 4:
+In the HUD line 3:
 
 ```c
-  snprintf(l4, sizeof(l4),
+  snprintf(l3, sizeof(l3),
     "dist:%.1f yaw:%.0f pitch:%.0f | P:ppm G:sirds L:glsl",
     state->camera.orbit_radius,
     state->camera.yaw   * (180.0f / (float)M_PI),
@@ -459,7 +499,7 @@ In the HUD line 4:
 
 - **`shader_export_glsl("raytracer.glsl")` (line 212):** The export call. The filename is hardcoded. The file is written to the current working directory (wherever the binary was launched from).
 
-- **`L:glsl` in HUD (line 175):** Added to the fourth HUD line so the user knows the keybinding exists. Follows the same terse format as `P:ppm` and `G:sirds`.
+- **`L:glsl` in HUD (line 175):** Added to the third HUD line so the user knows the keybinding exists. Follows the same terse format as `P:ppm` and `G:sirds`.
 
 ## Common mistakes
 
@@ -467,12 +507,12 @@ In the HUD line 4:
 |---------|-------|-----|
 | Shadertoy shows a compile error on `Material(...)` constructor | Shadertoy is running GLSL ES 1.0 which lacks struct constructors | Ensure you paste into a "New Shader" on shadertoy.com (GLSL ES 3.0); do not use the mobile preview |
 | Scene appears but all surfaces are black | Lights are missing or `light_int` values are zero | Verify `N_LIGHTS = 3` and `light_int` array matches the source |
-| No reflections on the mirror sphere | `MAX_DEPTH` set to 1 | Ensure `MAX_DEPTH = 3`; each iteration handles one bounce |
+| No reflections on the mirror sphere | `MAX_DEPTH` set to 1 | Ensure `MAX_DEPTH = 4`; each iteration handles one bounce |
 | Shader runs but at < 10 fps | Very old GPU or large viewport | Reduce Shadertoy resolution (click the resolution button); reduce `MAX_DEPTH` |
 | Export does nothing / no file created | Working directory is read-only or wrong path | Check `stderr` for the `cannot write` message; run the binary from a writable directory |
 | Exported file is 0 bytes | `fputs` failed silently | Verify `GLSL_RAYTRACER_SOURCE` is not empty; check disk space |
 | Checkerboard floor has Moire patterns in Shadertoy | No anti-aliasing in the shader | The CPU version uses AA samples; the GLSL version does not. Add supersampling in `mainImage` by averaging 4 sub-pixel rays |
-| Refractions missing (glass sphere is opaque) | The iterative loop only handles reflections, not refractions | This is a deliberate simplification; adding refractions requires a second ray per bounce or a more complex loop structure |
+| Refractions look wrong (glass sphere artifacts) | Snell's law eta ratio or face normal flipped | Check that `eta = 1.0/ior` when entering (dot(dir,N)<0) and `eta = ior` when exiting; ensure `faceN` is flipped for the exit case |
 
 ## Exercise
 

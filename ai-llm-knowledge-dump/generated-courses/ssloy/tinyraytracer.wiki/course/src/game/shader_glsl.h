@@ -140,7 +140,7 @@ static const char GLSL_RAYTRACER_SOURCE[] =
 "// and refractions.  GLSL forbids recursion, so we unroll into a loop\n"
 "// with a weight accumulator.\n"
 "//\n"
-"// Optimization note: this loop has at most MAX_DEPTH=3 iterations.\n"
+"// Optimization note: this loop has at most MAX_DEPTH=4 iterations.\n"
 "// The GLSL compiler may fully unroll it for better GPU performance.\n"
 "vec3 cast_ray(vec3 orig, vec3 dir) {\n"
 "    vec3  color  = vec3(0.0);\n"

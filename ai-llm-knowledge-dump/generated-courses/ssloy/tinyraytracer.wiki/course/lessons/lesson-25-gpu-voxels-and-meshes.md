@@ -1,6 +1,6 @@
 # Lesson 25 — GPU Voxels & Triangle Meshes
 
-> **What you'll build:** By the end of this lesson, the GPU rendering mode shows the full scene including voxel models (the bunny) and triangle meshes (the icosahedron) -- the last two geometry types that were missing from GPU mode. Voxel bitfields are uploaded as uniform uint arrays and tested per-bit in GLSL. Mesh triangle data is packed into an RGBA32F 1D texture and read via `texelFetch`-style sampling. Pressing V and M toggles voxels and meshes in GPU mode, matching the CPU behavior exactly.
+> **What you'll build:** By the end of this lesson, the GPU rendering mode shows the full scene including voxel models (the bunny) and triangle meshes (the icosahedron) -- the last two geometry types that were missing from GPU mode. Voxel bitfields are uploaded as uniform uint arrays and tested per-bit in GLSL. Mesh triangle data is packed into an RGBA32F 1D texture and read via `texture()` with computed UV coordinates. Pressing V and M toggles voxels and meshes in GPU mode, matching the CPU behavior exactly.
 
 ## Observable outcome
 
@@ -17,12 +17,12 @@ Press **N** twice to enter GPU mode. The voxel bunny and icosahedron mesh now ap
 
 ## Files changed
 
-| File | Change type | Summary |
-|------|-------------|---------|
-| `game/gpu_scene_glsl.h` | Modified | Added `voxel_solid()`, `voxel_color_from_id()`, `voxel_model_hit()`, `read_tri_vec3()`, `tri_hit()`, `mesh_hit()` GLSL functions; voxel/mesh branches in `scene_hit()` |
-| `game/gpu_upload.h` | Modified | Voxel fields (`vox_pos`, `vox_scale`, `vox_bitfield`, etc.) and mesh fields (`mesh_pos`, `mesh_tri_count`, `mesh_data_offset`, `tri_tex_data`) in `GpuSceneData`; packing logic in `gpu_pack_scene()` |
-| `platforms/x11/main.c` | Modified | Voxel + mesh uniform locations, RGBA32F texture creation for mesh triangles, texture unit binding (unit 0 = mesh tri tex) |
-| `platforms/raylib/main.c` | Modified | Same uniform + texture upload; textures bound to units 3-5 to avoid Raylib's internal bindings |
+| File                      | Change type | Summary                                                                                                                                                                                               |
+| ------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `game/gpu_scene_glsl.h`   | Modified    | Added `voxel_solid()`, `voxel_color_from_id()`, `voxel_model_hit()`, `read_tri_vec3()`, `tri_hit()`, `mesh_hit()` GLSL functions; voxel/mesh branches in `scene_hit()`                                |
+| `game/gpu_upload.h`       | Modified    | Voxel fields (`vox_pos`, `vox_scale`, `vox_bitfield`, etc.) and mesh fields (`mesh_pos`, `mesh_tri_count`, `mesh_data_offset`, `tri_tex_data`) in `GpuSceneData`; packing logic in `gpu_pack_scene()` |
+| `platforms/x11/main.c`    | Modified    | Voxel + mesh uniform locations, RGBA32F texture creation for mesh triangles, texture unit binding (unit 0 = mesh tri tex)                                                                             |
+| `platforms/raylib/main.c` | Modified    | Same uniform + texture upload; textures bound to units 3-5 to avoid Raylib's internal bindings                                                                                                        |
 
 ## Background -- why these geometry types need special handling
 

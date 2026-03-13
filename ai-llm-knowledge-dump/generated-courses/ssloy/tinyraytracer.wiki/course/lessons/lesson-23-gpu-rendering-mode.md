@@ -19,7 +19,7 @@ GPU mode renders the full scene with all geometry types, feature toggles, and en
 - **gpu_shader.h** — provides TWO build functions: `gpu_build_fragment_source()` assembles the L21 `GLSL_RAYTRACER_SOURCE` with a `#version 330 core` preamble, Shadertoy-compatible uniforms, camera uniforms, and `main()` epilogue for Shadertoy export; `gpu_build_scene_fragment_source()` assembles the data-driven `gpu_scene_glsl.h` body with scene-data uniforms for full in-process rendering.
 - **gpu_scene_glsl.h** — a complete data-driven GLSL raytracer body: sphere/box/voxel/mesh intersection, environment map sampling, and feature toggles driven entirely by uniform values. This replaces the hardcoded L21 scene for in-process rendering.
 - **gpu_upload.h** — defines `GpuSceneData` struct and `gpu_pack_scene()` which flattens the CPU-side scene (materials, spheres, lights, boxes, voxel bitfield, mesh triangles) into flat arrays suitable for uploading as GL uniforms and textures.
-- **X11 backend GPU path** — runtime OpenGL function pointer loading via `glXGetProcAddressARB`, a `GpuState` struct holding 20 GL function pointers, shader compilation/linking, fullscreen triangle rendering via `gl_VertexID` (no vertex buffer needed), and HUD overlay with alpha blending.
+- **X11 backend GPU path** — runtime OpenGL function pointer loading via `glXGetProcAddressARB`, a `GpuState` struct holding 27 GL function pointers (20 base + 7 for scene upload), shader compilation/linking, fullscreen triangle rendering via `gl_VertexID` (no vertex buffer needed), and HUD overlay with alpha blending.
 - **Raylib backend GPU path** — `LoadShaderFromMemory`, `BeginShaderMode`/`EndShaderMode`, `SetShaderValue` for uniforms. Much simpler than raw GL — Raylib handles all the function pointer loading, VAO creation, and uniform binding internally.
 
 ## Files changed
@@ -29,7 +29,7 @@ GPU mode renders the full scene with all geometry types, feature toggles, and en
 | `game/gpu_shader.h` | Created | `GPU_VERT_SHADER`, `GPU_FRAG_PREAMBLE`, `GPU_FRAG_EPILOGUE` macros; `gpu_build_fragment_source()` for Shadertoy export, `gpu_build_scene_fragment_source()` for in-process rendering |
 | `game/gpu_scene_glsl.h` | Created | Complete data-driven GLSL raytracer: sphere/box/voxel/mesh intersection, envmap sampling, feature toggles via uniforms |
 | `game/gpu_upload.h` | Created | `GpuSceneData` struct + `gpu_pack_scene()` for flat array packing of scene data into uniform-friendly format |
-| `platforms/x11/main.c` | Modified | `GpuState` struct with 20 GL function pointers; `gpu_init()`, `gpu_render_scene()`, `gpu_overlay_hud()`, `gpu_shutdown()` |
+| `platforms/x11/main.c` | Modified | `GpuState` struct with 27 GL function pointers; `gpu_init()`, `gpu_render_scene()`, `gpu_overlay_hud()`, `gpu_shutdown()`, `gpu_upload_scene()` |
 | `platforms/raylib/main.c` | Modified | `RaylibGpuState` struct; `rl_gpu_init()`, `rl_gpu_render()`, `rl_gpu_overlay_hud()`, `rl_gpu_shutdown()` |
 
 ## Background — from export to in-process
@@ -48,7 +48,7 @@ Vertex Shader  →  Rasterizer  →  Fragment Shader  →  Framebuffer
 
 We provide:
 - **Vertex shader**: a fullscreen triangle via `gl_VertexID` — 3 hardcoded vertices that cover the entire viewport after clipping
-- **Fragment shader**: our `GLSL_RAYTRACER_SOURCE` wrapped with uniforms and a `main()` that calls `mainImage`
+- **Fragment shader**: our `GLSL_RAYTRACER_SOURCE` (or `GPU_SCENE_GLSL_SOURCE` for full scene mode) wrapped with uniforms and a `main()` that calls `cast_ray()` directly
 
 The GPU runs the fragment shader for every pixel in parallel — no pthreads needed.
 
@@ -83,7 +83,7 @@ The header assembles a complete OpenGL fragment shader from three pieces:
   "    vec2  ndc     = (2.0 * gl_FragCoord.xy - iResolution.xy)\n" \
   "                    / iResolution.y;\n" \
   "    float cam_fov = (iCamFov > 0.0) ? tan(iCamFov / 2.0)\n" \
-  "                    : tan(FOV / 2.0);\n" \
+  "                    : tan(1.0472 / 2.0);\n"  /* PI/3 fallback */ \
   "    vec3  dir     = normalize(\n" \
   "        iCamRight   * (ndc.x * cam_fov) +\n" \
   "        iCamUp      * (ndc.y * cam_fov) +\n" \
@@ -121,7 +121,7 @@ The X11 backend uses a legacy compat context (from `glXCreateContext`), but most
 
 LOAD_GL(CreateShader);   LOAD_GL(ShaderSource);
 LOAD_GL(CompileShader);  LOAD_GL(GetShaderiv);
-/* ... 20 function pointers total ... */
+/* ... 27 function pointers total (20 base + 7 for scene upload) ... */
 ```
 
 The `GpuState` struct holds all pointers plus the compiled program, VAO, and uniform locations. `gpu_init()` compiles both shaders, links them, queries uniform locations, and stores the GL renderer string for the HUD.
@@ -130,8 +130,8 @@ The `GpuState` struct holds all pointers plus the compiled program, VAO, and uni
 
 ```c
 static void gpu_render_scene(float time_sec, float mouse_x, float mouse_y,
-                             const RtCamera *cam, const RtScene *scene,
-                             const RtSettings *settings) {
+                             const RtCamera *cam, const Scene *scene,
+                             const RenderSettings *settings) {
   glDisable(GL_TEXTURE_2D);          /* switch from legacy to modern */
   g_gpu.UseProgram(g_gpu.program);
 
@@ -202,7 +202,7 @@ void main() {
     vec2  ndc     = (2.0 * gl_FragCoord.xy - iResolution.xy)
                     / iResolution.y;
     float cam_fov = (iCamFov > 0.0) ? tan(iCamFov / 2.0)
-                    : tan(FOV / 2.0);
+                    : tan(1.0472 / 2.0);  // PI/3 fallback
     vec3  dir     = normalize(
         iCamRight   * (ndc.x * cam_fov) +
         iCamUp      * (ndc.y * cam_fov) +
@@ -249,5 +249,5 @@ The GPU shader now renders the full scene. Camera controls, feature toggles (V/F
 2. **Uniform-driven scene data** — materials, spheres, lights, and boxes are uploaded as uniform arrays; the voxel bitfield is packed into `uint` uniforms; mesh triangles are uploaded as an RGBA32F texture. This lets the GPU shader render the exact same scene as the CPU without hardcoding any geometry
 3. **The GPU was always there** — we already used it for texture upload (`glTexSubImage2D`). Adding shader compilation is a natural extension
 4. **Camera uniforms bridge CPU and GPU** — the same `camera_compute_basis()` drives both CPU ray generation and GPU uniform uploads, keeping the interactive experience identical across all three modes
-5. **X11 vs Raylib** highlights the abstraction gap — raw GL needs 20 function pointers and manual error handling; Raylib wraps it in 3 function calls
+5. **X11 vs Raylib** highlights the abstraction gap — raw GL needs 27 function pointers and manual error handling; Raylib wraps it in a few function calls
 6. **The three-mode toggle** (CPU-BASIC → CPU-OPT → GPU) provides a complete educational comparison: baseline vs optimized CPU vs GPU, with the HUD (F1 toggleable) showing implementation details for each

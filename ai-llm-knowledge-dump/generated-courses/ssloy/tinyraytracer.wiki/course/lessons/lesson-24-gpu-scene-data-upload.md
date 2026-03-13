@@ -25,13 +25,13 @@ The HUD still shows GPU renderer info on line 5. Pressing V/F/B/R/T/H toggles fe
 
 ## Files changed
 
-| File | Change type | Summary |
-|------|-------------|---------|
-| `game/gpu_scene_glsl.h` | Created | `GPU_SCENE_UNIFORMS` declarations + `GPU_SCENE_GLSL_SOURCE` body: material lookup, sphere/box intersection, scene_hit, cast_ray with feature toggles |
-| `game/gpu_upload.h` | Created | `GpuSceneData` struct (flat arrays), `gpu_pack_features()`, `gpu_pack_scene()`, `gpu_scene_data_free()` |
-| `game/gpu_shader.h` | Modified | `gpu_build_scene_fragment_source()` concatenates preamble + scene uniforms + scene GLSL body + epilogue |
-| `platforms/x11/main.c` | Modified | 7 new GL function pointers, ~30 uniform locations, `gpu_upload_scene()`, texture unit binding in render loop |
-| `platforms/raylib/main.c` | Modified | dlsym-loaded GL functions, same uniform upload pattern, texture binding to units 3-5 |
+| File                      | Change type | Summary                                                                                                                                              |
+| ------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `game/gpu_scene_glsl.h`   | Created     | `GPU_SCENE_UNIFORMS` declarations + `GPU_SCENE_GLSL_SOURCE` body: material lookup, sphere/box intersection, scene_hit, cast_ray with feature toggles |
+| `game/gpu_upload.h`       | Created     | `GpuSceneData` struct (flat arrays), `gpu_pack_features()`, `gpu_pack_scene()`, `gpu_scene_data_free()`                                              |
+| `game/gpu_shader.h`       | Modified    | `gpu_build_scene_fragment_source()` concatenates preamble + scene uniforms + scene GLSL body + epilogue                                              |
+| `platforms/x11/main.c`    | Modified    | 7 new GL function pointers, ~30 uniform locations, `gpu_upload_scene()`, texture unit binding in render loop                                         |
+| `platforms/raylib/main.c` | Modified    | dlsym-loaded GL functions, same uniform upload pattern, texture binding to units 3-5                                                                 |
 
 ## Background -- from hardcoded to data-driven
 
@@ -103,13 +103,15 @@ The feature bitfield packs toggle states into a single int:
 #define GPU_FEAT_VOXELS   (1 << 0)
 #define GPU_FEAT_FLOOR    (1 << 1)
 #define GPU_FEAT_BOXES    (1 << 2)
-/* ... */
+#define GPU_FEAT_MESHES   (1 << 3)
+/* ... REFLECT(4), REFRACT(5), SHADOWS(6), ENVMAP(7) */
 
 static inline int gpu_pack_features(const RenderSettings *r) {
   int f = 0;
   if (r->show_voxels)      f |= GPU_FEAT_VOXELS;
   if (r->show_floor)       f |= GPU_FEAT_FLOOR;
   if (r->show_boxes)       f |= GPU_FEAT_BOXES;
+  if (r->show_meshes)      f |= GPU_FEAT_MESHES;
   if (r->show_reflections) f |= GPU_FEAT_REFLECT;
   if (r->show_refractions) f |= GPU_FEAT_REFRACT;
   if (r->show_shadows)     f |= GPU_FEAT_SHADOWS;
@@ -138,6 +140,7 @@ The GLSL uniform declarations are a separate macro so `gpu_build_scene_fragment_
   "uniform vec3  uBoxCenter[8];\n" \
   "uniform vec3  uBoxHalf[8];\n" \
   "uniform int   uBoxMat[8];\n" \
+  /* ... voxel, mesh, envmap uniforms (covered in L25-L26) ... */
   "uniform int   uFeatures;\n"
 ```
 
