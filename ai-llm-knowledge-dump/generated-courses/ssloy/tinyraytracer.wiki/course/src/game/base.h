@@ -43,7 +43,7 @@ typedef struct {
 /* ── GameInput ────────────────────────────────────────────────────────── */
 typedef struct {
   union {
-    GameButtonState all[26];
+    GameButtonState all[28];
     struct {
       /* Navigation */
       GameButtonState quit;
@@ -71,8 +71,11 @@ typedef struct {
       GameButtonState toggle_envmap;      /* E */
       GameButtonState toggle_aa;          /* X */
       GameButtonState cycle_envmap_mode;  /* C (L20) */
-      /* Render scale */
+      /* Render scale + mode */
       GameButtonState scale_cycle;        /* Tab */
+      GameButtonState cycle_render_mode;  /* N (L22/L23) */
+      /* HUD */
+      GameButtonState toggle_hud;         /* F1 */
     };
   } buttons;
   MouseState mouse;

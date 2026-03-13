@@ -45,7 +45,7 @@ A real-time CPU raytracer rendered to the platform backbuffer at 60fps. The fina
 
 ## Final Observable State
 
-At the end of Lesson 21, the student has:
+At the end of Lesson 23, the student has:
 
 - A window rendering a raytraced scene at interactive frame rates
 - 4 spheres: ivory (diffuse+specular), red rubber (diffuse), mirror (reflective), glass (refractive)
@@ -61,13 +61,16 @@ At the end of Lesson 21, the student has:
 - Multi-threaded rendering via pthreads (row-parallel)
 - Adaptive quality: AA disabled during camera movement, full quality when still
 - 2×2 jittered supersampling anti-aliasing
-- Feature toggles: V(voxels) F(floor) B(boxes) M(meshes) R(reflections) T(refractions) H(shadows) E(envmap) X(AA) Tab(scale) C(envmap mode)
+- **Three render modes** (N key cycles): CPU-BASIC (baseline L01–L21), CPU-OPT (frame cap + bilinear upscale + octant BVH), GPU (OpenGL fragment shader)
+- CPU-OPT: 30fps frame rate cap via nanosleep, bilinear interpolation upscale (smooth edges at scale>1), octant-BVH voxel acceleration (~50% fewer box tests)
+- GPU: in-process OpenGL 3.3 fragment shader running the L21 GLSL raytracer — full resolution at 60fps with near-zero CPU usage
+- Feature toggles: V(voxels) F(floor) B(boxes) M(meshes) R(reflections) T(refractions) H(shadows) E(envmap) X(AA) Tab(scale) C(envmap mode) **N(render mode)**
 - **P** key exports the current frame as `out.ppm`
 - **A** key exports an anaglyph stereo image as `anaglyph.ppm` (viewable with red/cyan 3D glasses)
 - **S** key exports a side-by-side stereoscope image as `sidebyside.ppm` (viewable in VR headsets or cross-eyed)
 - **G** key exports a random-dot autostereogram as `stereogram.ppm` (viewable wall-eyed or cross-eyed)
 - **Shift+L** exports a complete GLSL Shadertoy raytracer as `raytracer.glsl`
-- HUD overlay showing FPS, frame time, ray count, scale, AA, feature toggles, envmap mode
+- HUD overlay showing FPS, frame time, ray count, scale, AA, feature toggles, envmap mode, render mode, per-mode implementation details, GPU renderer string
 - Both X11 and Raylib backends working identically
 
 ---
@@ -111,14 +114,15 @@ tinyraytracer.wiki/
         │   ├── stereo.c               ← dual-camera render, anaglyph channel merge
         │   ├── stereogram.h           ← autostereogram declarations
         │   ├── stereogram.c           ← depth buffer extraction, union-find, SIRDS rendering
-        │   ├── voxel.h                ← VoxelModel, bunny bitfield, voxel_is_solid, palette
-        │   ├── voxel.c                ← voxel_model_intersect (triple nested loop)
+        │   ├── voxel.h                ← VoxelModel, bunny bitfield, voxel_is_solid, palette, VoxelOctant
+        │   ├── voxel.c                ← voxel_model_intersect (brute-force) + voxel_model_intersect_bvh (octant BVH)
         │   ├── envmap.h               ← EnvMap, EnvMapMode, CubeMapFace, envmap_sample
         │   ├── envmap.c               ← equirect/cubemap/procedural sky sampling + stb_image
         │   ├── mesh.h                 ← Triangle, TriMesh, Moller-Trumbore ray-triangle
         │   ├── mesh.c                 ← fast_obj .obj loading, icosahedron, AABB early-out
-        │   ├── settings.h             ← RenderSettings struct + render_settings_init
-        │   └── shader_glsl.h          ← GLSL Shadertoy raytracer as C string + export
+        │   ├── settings.h             ← RenderSettings struct + RenderMode enum + render_settings_init
+        │   ├── shader_glsl.h          ← GLSL Shadertoy raytracer as C string + export
+        │   └── gpu_shader.h           ← GLSL wrapping for native OpenGL (#version 330 preamble, uniforms, main() epilogue)
         ├── utils/                          [PLATFORM — copied from template]
         │   ├── math.h, backbuffer.h, draw-shapes.h/.c, draw-text.h/.c, audio.h
         │   ├── stb_image.h            ← stb_image v2.30 (declarations only)
@@ -313,14 +317,35 @@ Every item below must appear in exactly one lesson's "New concepts" column. Item
 
 ### `src/game/settings.h` (L12)
 
-- `RenderSettings` struct: 8 show toggles (voxels, floor, boxes, meshes, reflections, refractions, shadows, envmap) + `render_scale` (1/2/3) + `aa_samples` (1/4)
-- `render_settings_init(s)` — defaults: all on, scale=2, aa=4
+- `RenderSettings` struct: 8 show toggles (voxels, floor, boxes, meshes, reflections, refractions, shadows, envmap) + `render_scale` (1/2/3) + `aa_samples` (1/4) + `render_mode` (CPU_BASIC/CPU_OPT/GPU)
+- `RenderMode` enum: `RENDER_CPU_BASIC`, `RENDER_CPU_OPT`, `RENDER_GPU`, `RENDER_MODE_COUNT`
+- `render_settings_init(s)` — defaults: all on, scale=2, aa=4, render_mode=CPU_BASIC
 
 ### `src/game/shader_glsl.h` (L21)
 
 - `GLSL_RAYTRACER_SOURCE[]` — complete GLSL Shadertoy fragment shader as C string constant
 - `shader_export_glsl(filename)` — write shader string to file
 - Shader replicates CPU raytracer: 4 spheres, 3 lights, Phong shading, checkerboard, shadows, iterative reflections (no GLSL recursion)
+
+### `src/game/gpu_shader.h` (L23)
+
+- `GPU_VERT_SHADER` — fullscreen triangle vertex shader via `gl_VertexID` (3 vertices: `(-1,-1)`, `(3,-1)`, `(-1,3)`)
+- `GPU_FRAG_PREAMBLE` — `#version 330 core`, `precision highp float`, uniform declarations (`iResolution`, `iTime`, `iMouse`), `out vec4 FragColor`
+- `GPU_FRAG_EPILOGUE` — `void main() { mainImage(FragColor, gl_FragCoord.xy); }` — bridge from Shadertoy entry point to OpenGL
+- `gpu_build_fragment_source(buf, bufsize)` — concatenates preamble + `GLSL_RAYTRACER_SOURCE` + epilogue into caller buffer
+
+### `src/game/voxel.h/.c` — Octant BVH extension (L22)
+
+- `VoxelOctant` struct: `center`, `half_size`, `cell_indices[]`, `cell_count` — one sub-AABB of the voxel grid
+- `VOXEL_OCTANTS` constant (8)
+- `octants[VOXEL_OCTANTS]` in `VoxelModel` — 8 octants partitioned at bbox center
+- `voxel_model_intersect_bvh(ray, model, hit, voxel_color_out)` — two-level hierarchy: model AABB → octant sub-AABBs → per-cell tests
+
+### `src/game/render.h/.c` — Bilinear upscale extension (L22)
+
+- `render_scene_to_float_mt(framebuffer, width, height, scene, cam, settings)` — multi-threaded float-buffer rendering
+- `bilinear_upscale(src, sw, sh, bb)` — 4-pixel bilinear interpolation from float buffer to backbuffer
+- CPU-OPT branch in `render_scene()`: at `scale > 1`, use float buffer + bilinear upscale instead of block-fill
 
 ### `src/utils/stb_image.h` (L18)
 
@@ -338,22 +363,22 @@ Every item below must appear in exactly one lesson's "New concepts" column. Item
 
 ### `src/game/main.h`
 
-- `RaytracerState` struct: `Scene scene`, `RtCamera camera`, `RenderSettings settings`, `int still_frames`, `int active_scale`, `float frame_time_ms`, `float fps_smoothed`, export flags (ppm, anaglyph, sidebyside, stereogram, stereogram_cross, glsl)
+- `RaytracerState` struct: `Scene scene`, `RtCamera camera`, `RenderSettings settings`, `int still_frames`, `int active_scale`, `float frame_time_ms`, `float fps_smoothed`, export flags (ppm, anaglyph, sidebyside, stereogram, stereogram_cross, glsl), GPU fields (`gpu_available`, `gpu_compile_ms`, `gpu_renderer[128]`), enhanced metrics (`ray_count_k`, `rays_per_sec_m`, `cpu_util_pct`, `thread_count`)
 - `game_init(state)`, `game_update(state, input, delta_time)`, `game_render(state, backbuffer)` declarations
 
 ### `src/game/main.c`
 
 - `game_init(state)` — calls `scene_init`, `camera_init`, `render_settings_init`; initializes `active_scale`
-- `game_update(state, input, delta_time)` — camera update, adaptive quality (still_frames tracking), feature toggles (V/F/B/M/R/T/H/E/X), envmap mode cycling (C), scale cycling (Tab), export triggers (P/A/S/G/Shift+G/Shift+L)
-- `game_render(state, backbuffer)` — adaptive AA (disabled during movement), timed `render_scene`, FPS smoothing, HUD overlay (4 lines: metrics, controls, toggles+envmap mode, camera state+exports), all export handlers
-- HUD: FPS (color-coded green/yellow/red), frame time ms, ray count K, scale, AA, `[moving]` indicator, feature toggle status, envmap mode (sky/eq/cube), camera orbit/yaw/pitch
+- `game_update(state, input, delta_time)` — camera update, adaptive quality (still_frames tracking), feature toggles (V/F/B/M/R/T/H/E/X), envmap mode cycling (C), scale cycling (Tab), render mode cycling (N, skip GPU if unavailable), export triggers (P/A/S/G/Shift+G/Shift+L)
+- `game_render(state, backbuffer)` — adaptive AA (disabled during movement), timed `render_scene`, frame rate cap for CPU-OPT (nanosleep), GPU mode skips render_scene, FPS smoothing, HUD overlay (5 lines: metrics, controls, toggles+envmap mode, camera state+exports, per-mode implementation details), all export handlers
+- HUD: FPS (color-coded green/yellow/red), frame time ms, ray count K, scale, AA, `[moving]` indicator, feature toggle status, envmap mode (sky/eq/cube), render mode (CPU-BASIC/CPU-OPT/GPU), camera orbit/yaw/pitch, per-mode details (threads, bilinear/block-fill, brute-force/octant-BVH, GPU renderer)
 
 ### `src/game/base.h` (adapted from template)
 
 - `GameButtonState`, `UPDATE_BUTTON`, `prepare_input_frame`, `platform_swap_input_buffers` — `[PLATFORM]`
 - `MouseState` struct: `x`, `y`, `dx`, `dy`, `scroll`, `left_down`, `right_down`, `middle_down` (Three.js OrbitControls-style input)
-- 24 named button fields: quit, camera (6: left/right/up/down/forward/backward), exports (6: ppm/anaglyph/sidebyside/stereogram/stereogram_cross/glsl), toggles (9: voxels/floor/boxes/meshes/reflections/refractions/shadows/envmap/aa), cycle_envmap_mode, scale_cycle
-- `all[26]` union array for bulk iteration
+- 24 named button fields: quit, camera (6: left/right/up/down/forward/backward), exports (6: ppm/anaglyph/sidebyside/stereogram/stereogram_cross/glsl), toggles (9: voxels/floor/boxes/meshes/reflections/refractions/shadows/envmap/aa), cycle_envmap_mode, scale_cycle, cycle_render_mode
+- `all[27]` union array for bulk iteration
 
 ### `src/platform.h` (adapted from template)
 
@@ -365,16 +390,20 @@ Every item below must appear in exactly one lesson's "New concepts" column. Item
 - `[PLATFORM]` X11 + GLX windowing, backbuffer upload, frame timing, letterbox
 - Arrow keys (`XK_Left`, `XK_Right`, `XK_Up`, `XK_Down`) mapped to camera buttons
 - `XK_p` mapped to `export_ppm`, `XK_a` mapped to `export_anaglyph` (L14), `XK_g` mapped to `export_stereogram` (L15)
+- `XK_n` / `XK_N` mapped to `cycle_render_mode` (L22/L23)
 - `XK_Escape` mapped to `quit`
 - Audio init/write calls present but produce silence (no game audio state)
+- L23 GPU: `GpuState` struct (20 GL function pointers via `glXGetProcAddressARB`), `gpu_init()` (compile/link shader), `gpu_render_scene()` (fullscreen triangle), `gpu_overlay_hud()` (alpha-blended HUD), `gpu_shutdown()`
 
 ### `src/platforms/raylib/` (adapted from template)
 
 - `[PLATFORM]` Raylib windowing, backbuffer upload, frame timing, letterbox
 - `KEY_LEFT`/`KEY_RIGHT`/`KEY_UP`/`KEY_DOWN` mapped to camera buttons
 - `KEY_P` mapped to `export_ppm`, `KEY_A` mapped to `export_anaglyph` (L14), `KEY_G` mapped to `export_stereogram` (L15)
+- `KEY_N` mapped to `cycle_render_mode` (L22/L23)
 - `KEY_ESCAPE` mapped to `quit`
 - Audio init calls present but produce silence (no game audio state)
+- L23 GPU: `RaylibGpuState` struct, `rl_gpu_init()` (`LoadShaderFromMemory`), `rl_gpu_render()` (`BeginShaderMode`/`DrawRectangle`/`EndShaderMode`), `rl_gpu_overlay_hud()`, `rl_gpu_shutdown()`
 
 ---
 
@@ -403,6 +432,8 @@ Every item below must appear in exactly one lesson's "New concepts" column. Item
 | 19 | Triangle Meshes | `TriMesh` struct; Moller-Trumbore ray-triangle; fast_obj .obj loading; procedural icosahedron | Icosahedron appears in scene (smooth-shaded); students can load any .obj file | Moller-Trumbore ray-triangle intersection (barycentric coordinates, smooth-shaded normals); fast_obj .obj loading (triangulation of quads/n-gons); AABB bounding box for early-out; M key toggle | `game/mesh.h/.c` (created), `game/scene.h` (modified — TriMesh in Scene), `game/intersect.c` (modified — mesh_intersect in scene traversal) |
 | 20 | Cube Map Textures | `CubeMapFace` struct; `EnvMapMode` enum; 6-face loading; direction-to-face UV mapping | Cube map background replaces equirect; C key cycles: sky/eq/cube; graceful fallback chain | Cube map direction-to-face (dominant axis selection, OpenGL UV convention); `envmap_load_cubemap` (6 stbi_load calls with rollback); multi-mode dispatch in `envmap_sample`; C key cycles available modes | `game/envmap.h` (modified — EnvMapMode, CubeMapFace, CUBEMAP_FACE_* defines), `game/envmap.c` (modified — load_cubemap, sample_cubemap, sample_face), `game/scene.h` (modified — fallback chain), `game/main.c` (modified — C key + HUD), `game/base.h` (modified — cycle_envmap_mode) |
 | 21 | GLSL Fragment Shaders | Complete Shadertoy GLSL raytracer as C string; Shift+L export; C-to-GLSL mapping | Shift+L writes `raytracer.glsl`; paste into shadertoy.com for GPU rendering | GLSL string constant in `shader_glsl.h`; iterative reflection (no GLSL recursion); C-to-GLSL operation mapping (vec3_add→+, vec3_dot→dot, vec3_lerp→mix, HitRecord→out params); `mainImage` entry point; GPU parallelism vs CPU pthreads | `game/shader_glsl.h` (created — GLSL_RAYTRACER_SOURCE + shader_export_glsl), `game/main.c` (modified — Shift+L export + HUD), `game/main.h` (modified — export_glsl_requested), `game/base.h` (modified — export_glsl button) |
+| 22 | CPU Optimization Techniques | Frame rate cap (nanosleep), bilinear upscale (float buffer), octant-BVH voxel acceleration; N key cycles to CPU-OPT mode | Press N → CPU-OPT: fan noise drops, bilinear smooth edges at scale>1, HUD shows "voxel:octant-BVH \| cap:30fps" | Frame rate capping with `nanosleep` (sleep unused frame budget, target 30fps); bilinear interpolation upscale (render at reduced resolution into Vec3 float buffer, 4-pixel blend to full resolution); octant-BVH acceleration (partition voxel grid into 8 sub-AABBs, skip empty octants before per-cell tests) | `game/settings.h` (modified — RenderMode enum, render_mode), `game/base.h` (modified — cycle_render_mode, all[27]), `game/main.h` (modified — GPU+metrics fields), `game/main.c` (modified — mode cycling, frame cap, 5-line HUD), `game/render.h/.c` (modified — float rendering, bilinear_upscale), `game/voxel.h/.c` (modified — VoxelOctant, octant partitioning, BVH intersect), `game/intersect.c` (modified — BVH branch), both backends (modified — N key) |
+| 23 | GPU Rendering Mode | In-process OpenGL 3.3 fragment shader running L21 GLSL raytracer; gpu_shader.h wraps existing source; N key cycles to GPU mode | Press N×2 → GPU: same 4-sphere scene at 60fps, near-zero CPU, HUD shows "GPU: [renderer]" | `gpu_shader.h` wrapping (preamble + GLSL_RAYTRACER_SOURCE + epilogue, zero duplication); X11 GL function pointer loading (glXGetProcAddressARB, GpuState struct, fullscreen triangle via gl_VertexID); Raylib shader API (LoadShaderFromMemory, BeginShaderMode/EndShaderMode) | `game/gpu_shader.h` (created — GPU_VERT_SHADER, GPU_FRAG_PREAMBLE, GPU_FRAG_EPILOGUE, gpu_build_fragment_source), `platforms/x11/main.c` (modified — GpuState, gpu_init, gpu_render_scene, gpu_overlay_hud), `platforms/raylib/main.c` (modified — RaylibGpuState, rl_gpu_init, rl_gpu_render, rl_gpu_overlay_hud) |
 
 ---
 
@@ -504,6 +535,18 @@ C key → cycle_envmap_mode → skip unavailable modes
 GLSL_RAYTRACER_SOURCE (C string constant) → shader_export_glsl → fopen/fputs/fclose
 C-to-GLSL mapping (vec3_add→+, cast_ray→iterative loop)
 Shift+L → export_glsl_requested → shader_export_glsl("raytracer.glsl")
+
+RenderMode enum (CPU_BASIC/CPU_OPT/GPU) → N key mode cycling → game_update
+nanosleep → frame rate cap (CPU-OPT: sleep unused frame budget, target 30fps)
+render_scene_to_float_mt (Vec3 float buffer) → bilinear_upscale (4-pixel blend → backbuffer)
+VoxelOctant (8 sub-AABBs) → voxel_model_intersect_bvh (model AABB → octant AABB → per-cell)
+RenderMode → intersect.c branch (CPU-OPT → BVH, CPU-BASIC → brute-force)
+
+GLSL_RAYTRACER_SOURCE → gpu_build_fragment_source (preamble + source + epilogue)
+gpu_build_fragment_source → gpu_init (compile vertex + fragment, link program)
+gpu_init → gpu_render_scene (bind program, set uniforms, draw fullscreen triangle)
+gpu_render_scene → gpu_overlay_hud (alpha-blend HUD texture on top)
+RenderMode == RENDER_GPU → main loop branch (skip render_scene, call gpu_render_scene)
 ```
 
 ---
@@ -533,8 +576,10 @@ Shift+L → export_glsl_requested → shader_export_glsl("raytracer.glsl")
 | 19 | Moller-Trumbore ray-triangle intersection (barycentric coordinates); `TriMesh` struct; fast_obj .obj loading (`fastObjMesh`); AABB bounding box early-out; M key toggle | `Scene`, `scene_intersect`, `HitRecord`, `Ray`, `Vec3`, `vec3_cross`, `vec3_dot`, `vec3_sub`, `box_intersect` (L13 AABB), `RenderSettings` toggle | Apply |
 | 20 | `CubeMapFace` struct; `EnvMapMode` enum; 6-face cube map loading; direction-to-face UV (dominant axis + OpenGL convention); C key mode cycling | `EnvMap` (L18), `stbi_load`, `envmap_sample`, `vec3_make`, `fabsf` comparisons, `RenderSettings` toggle pattern | Apply |
 | 21 | GLSL string constant (`shader_glsl.h`); iterative reflection (GLSL forbids recursion); C-to-GLSL operation mapping; `mainImage` entry point; Shift+L export | All L01–L16 concepts (GLSL version mirrors CPU raytracer); `fopen`/`fputs` (L02 I/O pattern) | Analyze |
+| 22 | Frame rate cap (`nanosleep`, sleep unused budget, target 30fps); bilinear interpolation upscale (Vec3 float buffer, 4-pixel blend); octant-BVH acceleration (`VoxelOctant`, 8 sub-AABBs, skip empty octants) | `RenderSettings` (L12), `render_scene` (L11), `voxel_model_intersect` (L16), `box_intersect` (L13), `pthreads` (L11), `scene_intersect` (L04), `nanosleep` timing, `N` key mode cycling | Apply |
+| 23 | `gpu_shader.h` wrapping (preamble + `GLSL_RAYTRACER_SOURCE` + epilogue); X11 GL function pointer loading (`glXGetProcAddressARB`, `GpuState`, fullscreen triangle via `gl_VertexID`, HUD alpha blend overlay); Raylib shader API (`LoadShaderFromMemory`, `BeginShaderMode`/`EndShaderMode`) | `GLSL_RAYTRACER_SOURCE` (L21), `RenderMode` enum (L22), OpenGL texture upload (platform layer), `glXGetProcAddressARB` (VSync setup), HUD overlay, mode cycling | Apply |
 
-**Coverage check:** Every item in the topic inventory maps to exactly one "New concepts" cell above. Platform items marked `[PLATFORM]` appear only in the "re-used" column. The `vec3_reflect` formula is taught in L06 (specular) and reused in L08 (reflections). The PPM writer is created in L02, wired to the P key in L12, and extended for RGB buffers in L14. The `Box` struct from L13 integrates into the existing `scene_intersect` and inherits all lighting/shadow/reflection behavior. L16 reuses `box_intersect` from L13 to compose many small boxes into a voxel object — demonstrating how a simple primitive becomes a building block for complex shapes. Cognitive levels progress from Apply (L01–L06) through Analyze (L07 — shadow acne debugging) back to Apply (L08–L14), Analyze (L15 — parallax/depth constraints), and Apply (L16 — bitfield + voxel composition).
+**Coverage check:** Every item in the topic inventory maps to exactly one "New concepts" cell above. Platform items marked `[PLATFORM]` appear only in the "re-used" column. The `vec3_reflect` formula is taught in L06 (specular) and reused in L08 (reflections). The PPM writer is created in L02, wired to the P key in L12, and extended for RGB buffers in L14. The `Box` struct from L13 integrates into the existing `scene_intersect` and inherits all lighting/shadow/reflection behavior. L16 reuses `box_intersect` from L13 to compose many small boxes into a voxel object — demonstrating how a simple primitive becomes a building block for complex shapes. L22 optimizes the CPU path introduced in L01–L21 with frame capping, bilinear upscale, and octant-BVH acceleration. L23 bridges L21's GLSL export to an in-process GPU shader, demonstrating the CPU→GPU transition with zero code duplication. Cognitive levels progress from Apply (L01–L06) through Analyze (L07 — shadow acne debugging) back to Apply (L08–L14), Analyze (L15 — parallax/depth constraints), Apply (L16 — bitfield + voxel composition), Apply (L22 — optimization techniques), and Apply (L23 — GPU shader integration).
 
 **Raylib name conflicts:** Source code uses `RtMaterial`, `RtCamera`, `RtRay` to avoid collisions with Raylib's built-in `Material`, `Camera`, and `Ray` types. PLAN.md topic inventory uses the conceptual names for clarity; the `Rt` prefix is a platform adaptation detail, not a new concept.
 
@@ -647,3 +692,6 @@ These changes are applied when copying the Platform Foundation Course template t
 | `MAX_VOXEL_MODELS` | 4 | `scene.h` | L16 |
 | `MAX_MESHES` | 4 | `scene.h` | L19 |
 | `CUBEMAP_FACE_POS_X` .. `NEG_Z` | 0–5 | `envmap.h` | L20 |
+| `RENDER_CPU_BASIC` / `RENDER_CPU_OPT` / `RENDER_GPU` | 0 / 1 / 2 | `settings.h` | L22 |
+| `RENDER_MODE_COUNT` | 3 | `settings.h` | L22 |
+| `VOXEL_OCTANTS` | 8 | `voxel.h` | L22 |
