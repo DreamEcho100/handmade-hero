@@ -49,11 +49,62 @@ Use this file with the Copilot CLI agent to convert a source file or project int
 >
 > Update `PLAN-TRACKER.md` as each source file is completed.
 >
+> **Phase 1.5 — Freeze & Reconcile (mandatory before writing lessons).**
+> After Phase 1 is complete and all builds pass, perform a **buildability audit**:
+>
+> 1. **File audit:** List every `.h` and `.c` file in `course/src/game/`. For each file, verify
+>    it appears in exactly one lesson's "Files created" column in PLAN.md. If a file was added
+>    during Phase 1 iterations (e.g., performance optimization, feature toggle, third-party lib
+>    integration) but isn't assigned to any lesson, **assign it now**.
+>
+> 2. **Signature evolution audit:** For every function that changed signature during Phase 1
+>    (e.g., gained parameters), document the **incremental signature at each lesson**. Example:
+>    - L04: `scene_intersect(ray, scene, hit)` — 3 args
+>    - L12: `scene_intersect(ray, scene, hit, voxel_color, settings)` — 5 args
+>    The lesson that adds parameters must show the BEFORE and AFTER explicitly.
+>
+> 3. **Namespace collision check:** If the project uses Raylib (or any library that defines
+>    common type names), verify no course-defined types collide. Common collisions:
+>    `Material`, `Camera`, `Ray`, `Color`, `Image`, `Texture`. Prefix with project abbreviation
+>    (e.g., `RtMaterial`, `RtCamera`, `RtRay`) and document this in PLAN.md.
+>
+> 4. **Incremental button/input audit:** Count how many `GameInput` buttons exist at each
+>    lesson milestone. A student in L01 should not see 24 buttons that reference features
+>    from L16. Document the button list growth: L01 (1 button), L11 (7), L12 (22), etc.
+>
+> 5. **Performance budget:** For CPU-intensive courses (raytracing, simulation), verify the
+>    final program runs at interactive frame rates (>15 fps) on a mid-range laptop. If not,
+>    add render scaling, multi-threading, or spatial acceleration BEFORE freezing the code.
+>    Document the performance characteristics in PLAN.md.
+>
+> 6. **Update PLAN.md:** Reconcile the plan with the actual code. Every discrepancy found
+>    in steps 1-5 must be resolved. The plan is the contract — it must match the code exactly
+>    before any lesson is written.
+>
+> This phase is done when every source file, function signature, button, and constant in the
+> code is accurately reflected in PLAN.md.
+>
 > **Phase 2 — Build the course lessons from the verified source code.**
 > Write every lesson file by walking through the _already-correct_ source code produced in
 > Phase 1. The source code is frozen during this phase — lessons describe _what was built_, not
 > _what might be built_. A lesson must never reference a code path that does not exist in the
 > Phase 1 output.
+>
+> **Critical lesson-writing rules (learned from prior courses):**
+>
+> - **Show code as it exists at that lesson, not the final version.** If a function has 3
+>   parameters in L04 and gains 2 more in L12, the L04 lesson shows the 3-parameter version.
+>   The L12 lesson shows the BEFORE (3 args) and AFTER (5 args) explicitly.
+> - **Every file created must be compilable at the lesson that creates it.** If L03 creates
+>   `intersect.c`, the student must be able to run `./build-dev.sh` after L03 with zero errors.
+>   Do not create files that reference types/functions from future lessons.
+> - **Use NULL-check patterns for optional parameters.** When a parameter (like `RenderSettings*`)
+>   is added later, earlier lessons can pass `NULL` and the function checks
+>   `if (!settings || settings->show_X)` to maintain backward compatibility.
+> - **Third-party library integration patterns:** Document whether a lib is header-only
+>   (`#define FOO_IMPLEMENTATION` before include), compiled separately (add to SOURCES in
+>   build-dev.sh), or already linked by a backend (Raylib bundles stb_image — use `extern`
+>   declarations to avoid duplicate symbols).
 >
 > Update `PLAN-TRACKER.md` as each lesson is completed.
 >
@@ -64,6 +115,9 @@ Use this file with the Copilot CLI agent to convert a source file or project int
 > - Source-first lessons guarantee that every code snippet the student types actually compiles.
 >   Lessons derived from incomplete source produce step-by-step instructions that fail on the
 >   student's machine with errors that have nothing to do with the lesson topic.
+> - **Phase 1.5 reconciliation** catches the inevitable drift between plan and code that occurs
+>   during iterative development. Without it, lessons reference files that don't exist, show
+>   function signatures that are wrong, or introduce 24 buttons in lesson 1.
 > - Iterative build-test-debug during Phase 1 means every lesson is grounded in code that has
 >   already run correctly — not code that was written and assumed to work.
 
@@ -225,7 +279,7 @@ The target student is a JavaScript/web developer learning C and low-level game p
      GameInput → double-buffered input → prepare_input_frame
      GAME_PHASE → change_phase → audio transitions
      ```
-   - A **per-lesson skill inventory table** — one row per lesson, columns: Lesson | New concepts | Concepts re-used from prior lessons. This table is the primary tool for catching gaps: if a lesson re-uses a concept not yet in prior rows, the lesson plan has a gap. Every item from the topic inventory must appear in exactly one "New concepts" cell.
+   - A **per-lesson skill inventory table** — one row per lesson, columns: Lesson | New concepts | Concepts re-used from prior lessons | Cognitive level. This table is the primary tool for catching gaps: if a lesson re-uses a concept not yet in prior rows, the lesson plan has a gap. Every item from the topic inventory must appear in exactly one "New concepts" cell. The **Cognitive level** column uses one of three values drawn from Bloom's Taxonomy — _Understand_ (student reads and recognises the pattern), _Apply_ (student writes it themselves), _Analyze_ (student must diagnose a failure or explain an unexpected result). Verify that no lesson demands a higher cognitive level than its predecessor delivered: you cannot ask a student to _Analyze_ an arena bug if they have only _Understood_ arenas and never _Applied_ them.
    - The planned file structure for the course output, including which new files appear in each lesson
    - A note for every place the course deviates from the standard layout (see Step 2) and why
 7. **Do not start writing lessons until PLAN.md exists, the topic inventory is complete, and every item in the inventory maps to a lesson row in the skill inventory table.**
@@ -534,6 +588,8 @@ Suggested structure:
 
 Keep this section focused on the 1–3 new concepts. Do not re-explain concepts from earlier lessons beyond a one-line reminder with a lesson reference.
 
+> **Magic words check:** After writing this section, scan every technical term you used. If a term is not (a) defined here, or (b) introduced in an earlier lesson and cited by lesson number, it is a _magic word_ — a term the student has heard but never had explained. Either define it in one sentence here or add a parenthetical lesson reference. Common offenders in low-level courses: `cache line`, `translation unit`, `relocation`, `object` (C standard sense), `sequence point`, `calling convention`, `address space`. When in doubt, define it — a one-sentence definition costs nothing and a silent gap costs a student hours.
+
 ## Code walkthrough (required)
 
 Present the complete, final state of every changed code block. For each block:
@@ -582,6 +638,34 @@ A good exercise:
 Example:
 
 > **Exercise:** Make the piece fall twice as fast when the player holds Down, and return to normal speed on release. Hint: check `input->move_down.ended_down` in `game_update()` and select between two interval values.
+
+## Breaking Lab (optional)
+
+Include only when the lesson introduces a concept whose failure mode the student must be able to recognise independently before the next lesson builds on it. A Breaking Lab is structurally different from an Exercise: the student receives code that **compiles and links without errors but contains a latent bug**, and must find and fix it without seeing the answer. This is the highest-yield form of low-level debugging practice — it proves ownership of the concept, not just the recipe.
+
+A good Breaking Lab:
+
+- Contains **exactly one bug** consistent with the new concept's failure mode (e.g., a wrong-stride pixel write for a backbuffer lesson, a signed-overflow for a UB lesson, a lost remainder for a timer accumulator lesson).
+- Compiles cleanly — the bug is logical, not syntactic.
+- Has a specific, observable symptom the student can see or measure without a debugger (wrong pixel row, crash on frame 2, inconsistent drop speed).
+- Includes a **diagnostic hint** that names the _class_ of bug without identifying its location.
+- Does **not** require any concept from a future lesson.
+
+Example:
+
+> **Breaking Lab:** The following `game_update` contains one bug. The game compiles and opens, but the piece falls at an inconsistent speed that depends on the frame rate. Find and fix it.
+>
+> ```c
+> state->fall_timer += delta_time;
+> if (state->fall_timer >= FALL_INTERVAL) {
+>     piece_fall(state);
+>     state->fall_timer = 0.0f;  /* <-- look here */
+> }
+> ```
+>
+> Diagnostic hint: this bug class involves what happens to sub-interval time when the condition fires — think about what information is discarded.
+
+If you cannot construct a plausible single-bug scenario for this lesson, omit the section — not every lesson warrants one.
 
 ## JS ↔ C concept map (optional)
 
@@ -4271,3 +4355,122 @@ Document deviations clearly and explain the reasoning.
 - Raylib examples — Simple game patterns (good for quick prototypes)
 - Lazy Foo SDL tutorials — Cross-platform basics
 - Game Programming Patterns (Robert Nystrom) — Architecture patterns; read after you understand the data-oriented approach
+
+---
+
+## Lessons Learned from Prior Courses
+
+> This section documents hard-won lessons from building actual courses. Follow these
+> guidelines to avoid repeating the same mistakes.
+
+### Completed courses (reference implementations)
+
+| Course | Location | Lessons | Key patterns |
+|--------|----------|---------|--------------|
+| Platform Foundation | `generated-courses/platform-backend/` | 14 | Backend infrastructure template |
+| TinyRaytracer (ssloy) | `generated-courses/ssloy/tinyraytracer.wiki/` | 19 | CPU raytracing; multi-threading; stereo; voxels; envmap; meshes |
+
+### Pitfalls and how to avoid them
+
+**1. Code evolves during Phase 1 but the plan doesn't keep up.**
+During iterative development, you'll add features not in the original plan (performance
+optimizations, input controls, feature toggles). Each time you create a new file or change
+a function signature, **immediately** assign it to a lesson in PLAN.md. Don't defer this —
+by the end of Phase 1 you'll have 15+ untracked changes and the plan will be useless.
+
+**2. Function signatures grow silently.**
+A function starts with 3 parameters in L04, gains a 4th in L12, and a 5th in L16. If the
+lesson for L04 shows the final 5-parameter version, the student's code won't compile when
+they follow L04 (they haven't created the types for params 4 and 5 yet).
+
+**Solution:** Use the **NULL-check pattern**. Design functions to accept optional parameters
+as pointers that can be `NULL` in early lessons:
+```c
+/* L04 version: student passes NULL for settings (doesn't exist yet) */
+int scene_intersect(RtRay ray, const Scene *scene, HitRecord *hit,
+                    Vec3 *voxel_color_out, const RenderSettings *settings);
+/* Implementation: */ if (!settings || settings->show_X) { /* always true when NULL */ }
+```
+
+**3. Raylib defines common type names.**
+Raylib's headers define `Material`, `Camera`, `Ray`, `Color`, `Image`, `Texture`, `Mesh`,
+`BoundingBox`, and many others. If your course defines any of these, the Raylib build will
+fail with "typedef redefinition with different types". **Always prefix** course types with
+a 2-3 letter abbreviation: `RtMaterial`, `RtCamera`, `RtRay`.
+
+**4. CPU-intensive courses need a performance strategy from day one.**
+Raytracing, simulation, and pathfinding are inherently expensive. Plan for:
+- **Render scaling** (half or quarter resolution with upscale)
+- **Multi-threading** (pthreads row-parallel for embarrassingly parallel workloads)
+- **Spatial acceleration** (AABB bounding boxes at minimum; BVH for large scenes)
+- **Adaptive quality** (reduce work while camera/input is active; refine when still)
+- **Hoisting per-frame constants** out of per-pixel loops (camera basis, FOV, etc.)
+Don't wait for the user to complain about performance — build these in during Phase 1.
+
+**5. Third-party single-header libraries need specific integration patterns.**
+- **stb_image:** If Raylib is a backend, it already links stb_image internally. Use `extern`
+  declarations in your code and compile `stb_image.c` only for the X11 backend.
+- **fast_obj (or any IMPLEMENTATION-define lib):** Put `#define FAST_OBJ_IMPLEMENTATION`
+  before the `#include` in exactly ONE `.c` file. Document this pattern in the lesson.
+- **Header-only math libs:** Use `static inline` for hot-path functions; the compiler
+  inlines them and there are no duplicate symbol issues.
+
+**6. Anti-aliasing should be adaptive, not global.**
+2×2 jittered supersampling (4 rays per pixel) costs 4× performance. Enable it only when
+the camera is still (no input for N frames). While the camera is moving, use 1 sample per
+pixel. The student won't notice the quality difference during motion but will appreciate
+the smooth edges when examining a still frame.
+
+**7. Mouse controls are expected for 3D courses.**
+Any course with a 3D scene should implement Three.js-style OrbitControls:
+- Left-drag → orbit (rotate around target)
+- Right/middle-drag → pan (translate target)
+- Scroll → zoom (adjust orbit radius)
+- WASD → keyboard equivalent
+This requires `MouseState` in `GameInput` with `x, y, dx, dy, scroll, left/right/middle_down`.
+
+### Approach for building ssloy-style courses
+
+ssloy's wiki tutorials (tinyraytracer, tinyraycaster, tinyrenderer, tinykaboom) share a
+common structure: 8-10 algorithmic steps, each producing a visible result, building on the
+previous step. The approach for converting these to build-along courses:
+
+1. **Map wiki steps to lessons 1:1** where possible. Each ssloy step = 1 lesson (or 2 if
+   the step introduces >3 concepts).
+
+2. **Port C++ to Modern C** using the standard translations:
+   - `std::vector<T>` → fixed array `T arr[MAX]` + `int count`
+   - Operator overloading → explicit `vec3_add/sub/scale/dot` functions
+   - `std::ofstream` → `fopen/fwrite/fclose`
+   - Constructors → compound literals `(T){.field = value}`
+   - `std::numeric_limits<float>::max()` → `FLT_MAX`
+
+3. **Replace offline rendering with real-time backbuffer.** ssloy's code renders once to
+   a file. Course code renders every frame to the platform backbuffer. This means:
+   - Performance matters (add threading + scaling)
+   - Interactive camera is expected (add orbit controls)
+   - Feature toggles let students explore (add V/F/B/R/T/H keys)
+
+4. **Add a "Polish + Interactivity" lesson** (L11-L12 equivalent) between the core
+   algorithm lessons and the extension lessons. This is where threading, mouse controls,
+   settings, toggles, AA, HUD, and frame timing are introduced. It's always the largest
+   lesson but produces the most satisfying result — the program goes from "static image
+   that takes 2 seconds to render" to "smooth interactive viewer".
+
+5. **End with ssloy's homework assignments as lessons**, not exercises. ssloy's Step 10
+   (environment mapping + triangle meshes) is too important to leave as homework — make
+   them full lessons with complete code walkthroughs.
+
+### Approach for non-ssloy courses
+
+For courses based on other source material (game engines, physics simulations, audio
+synthesizers, etc.), the same Phase 0→1→1.5→2 workflow applies. Key differences:
+
+- **Identify the "minimum visible result"** — what's the smallest thing the student can
+  see/hear after lesson 1? A colored window? A bouncing ball? A sine wave tone? Start there.
+- **Map dependencies, not chapters.** Source material chapters may not match the dependency
+  order needed for incremental building. Re-order ruthlessly.
+- **Every lesson must compile and produce visible output.** If a lesson adds a data structure
+  that isn't visible until the next lesson, merge them.
+- **Performance is a feature, not an afterthought.** If the final program is too slow to be
+  interactive, the student won't enjoy the course. Budget performance from Phase 0.

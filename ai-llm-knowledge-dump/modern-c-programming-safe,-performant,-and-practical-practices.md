@@ -489,6 +489,8 @@ Data-oriented layout (cache-friendly):
 Updating positions reads 12 B per enemy, 100% useful data
 ```
 
+**SoA layout is also the structural precondition for compiler auto-vectorization.** A contiguous `float x[N]` array can be processed with SIMD instructions — 4 or 8 values per cycle using SSE2/AVX. An interleaved AoS `Enemy` struct array cannot: the padding bytes between each `x` field break the contiguous run the SIMD unit requires. Cache efficiency and auto-vectorizability share the same root cause — both depend on the hot data being physically adjacent in memory. Getting the layout right once buys both benefits for free.
+
 ### JS analogy
 
 JS objects are hash maps internally — each property lookup is an indirection. A JS `Float32Array`
