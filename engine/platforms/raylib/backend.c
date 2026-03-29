@@ -13,6 +13,7 @@
 #include "./inputs/mouse.h"
 
 #include <raylib.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -31,6 +32,7 @@ typedef struct {
 } BackBufferMeta;
 
 de100_file_scoped_global_var BackBufferMeta g_game_buffer_meta = {0};
+de100_file_scoped_global_var bool g_was_focused = true;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Backbuffer Management
@@ -85,18 +87,10 @@ update_window_from_backbuffer(GameBackBuffer *backbuffer) {
   int window_width = GetScreenWidth();
   int window_height = GetScreenHeight();
 
-  // Center the backbuffer in the window
   int offset_x = (window_width - backbuffer->width) / 2;
   int offset_y = (window_height - backbuffer->height) / 2;
 
-  // Or fixed offset like Casey:
-  // int offset_x = 10;
-  // int offset_y = 10;
-
   UpdateTexture(g_game_buffer_meta.texture, backbuffer->memory.base);
-
-  // ClearBackground(BLACK) already clears the whole window
-  // Just draw the texture at an offset instead of (0, 0)
   DrawTexture(g_game_buffer_meta.texture, offset_x, offset_y, WHITE);
 }
 
@@ -106,25 +100,47 @@ update_window_from_backbuffer(GameBackBuffer *backbuffer) {
 
 de100_file_scoped_fn inline void
 audio_generate_and_send(EngineGameState *game, GameMainCode *game_main_code) {
-  // Fill ALL available buffers (Raylib double-buffers internally)
-  for (int i = 0; i < 4; i++) {
-    u32 samples_to_generate = raylib_get_samples_to_write(&game->audio);
+  u32 samples_to_generate = raylib_get_samples_to_write(&game->audio);
 #if DE100_INTERNAL
-    if (FRAME_LOG_EVERY_THREE_SECONDS_CHECK) {
-      printf("[AUDIO] samples_to_generate=%d\n", samples_to_generate);
-    }
+  if (FRAME_LOG_EVERY_ONE_SECONDS_CHECK) {
+    raylib_debug_audio_latency(&game->audio);
+  }
 #endif
 
-    if (samples_to_generate == 0)
-      break;
+  if (samples_to_generate == 0)
+    return;
 
-    if (samples_to_generate > (u32)game->audio.max_sample_count) {
-      samples_to_generate = (u32)game->audio.max_sample_count;
+  if (samples_to_generate > (u32)game->audio.max_sample_count) {
+    samples_to_generate = (u32)game->audio.max_sample_count;
+  }
+  // Cap per-frame work to prevent cascade: if the ring drained too much,
+  // recover over multiple frames instead of generating a huge batch at once
+  // (which would make the mixer even slower and cause more underruns).
+  u32 max_per_frame = g_raylib_audio_output.latency_frames; // ~2 game frames
+  if (samples_to_generate > max_per_frame) {
+    samples_to_generate = max_per_frame;
+  }
+
+  game->audio.sample_count = (i32)samples_to_generate;
+  game_main_code->functions.get_audio_samples(&game->memory, &game->audio);
+  raylib_send_samples(&game->audio);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Focus handling (pause/resume audio)
+// ═══════════════════════════════════════════════════════════════════════════
+
+de100_file_scoped_fn inline void handle_focus_change(void) {
+  bool is_focused = IsWindowFocused();
+  if (is_focused != g_was_focused) {
+    if (is_focused) {
+      printf("Window gained focus\n");
+      raylib_resume_audio();
+    } else {
+      printf("Window lost focus\n");
+      raylib_pause_audio();
     }
-
-    game->audio.sample_count = (i32)samples_to_generate;
-    game_main_code->functions.get_audio_samples(&game->memory, &game->audio);
-    raylib_send_samples(&game->audio);
+    g_was_focused = is_focused;
   }
 }
 
@@ -154,7 +170,6 @@ de100_file_scoped_fn inline int raylib_init(EngineState *engine) {
             "⚠️  Audio failed to initialize, continuing without sound\n");
     return 1;
   }
-
   resize_back_buffer(&engine->game.backbuffer, engine->game.backbuffer.width,
                      engine->game.backbuffer.height);
 
@@ -177,7 +192,6 @@ int platform_main(void) {
     engine_shutdown(&engine);
     return 1;
   }
-
   engine.platform.game_bootstrap_code.functions.init(
       &engine.game.thread_context, &engine.game.memory, engine.game.inputs,
       &engine.game.backbuffer);
@@ -185,14 +199,16 @@ int platform_main(void) {
   printf("✅ Entering main loop...\n");
 
   while (!WindowShouldClose() && is_game_running) {
-    handle_game_reload_check(&engine.platform.game_main_code,
-                             &engine.platform.paths);
-    prepare_input_frame(engine.platform.old_inputs, engine.game.inputs);
+    // Hot-reload: clear audio buffer on reload to prevent glitches
+    bool reloaded = handle_game_reload_check(&engine.platform.game_main_code,
+                                             &engine.platform.paths);
+    if (reloaded) {
+      raylib_clear_audio_buffer(&engine.game.audio);
+    }
 
-    // if (IsWindowResized()) {
-    //   resize_back_buffer(&engine.game.backbuffer, GetScreenWidth(),
-    //                      GetScreenHeight());
-    // }
+    handle_focus_change();
+
+    prepare_input_frame(engine.platform.old_inputs, engine.game.inputs);
 
     handle_keyboard_inputs(&engine.platform, &engine.game);
     raylib_poll_gamepad(engine.game.inputs);
@@ -249,12 +265,6 @@ int platform_main(void) {
 
     engine_swap_inputs(&engine);
   }
-
-#if DE100_INTERNAL
-  if (FRAME_LOG_EVERY_FIVE_SECONDS_CHECK) {
-    raylib_debug_audio_overlay();
-  }
-#endif
 
   // ═══════════════════════════════════════════════════════════════════
   // Cleanup

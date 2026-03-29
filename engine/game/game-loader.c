@@ -440,7 +440,7 @@ bool32 game_main_code_needs_reload(GameMainCode *game_code,
   return false;
 }
 
-void handle_game_reload_check(GameMainCode *game_code,
+bool handle_game_reload_check(GameMainCode *game_code,
                               GameCodePaths *game_code_paths) {
   // ═══════════════════════════════════════════════════════════
   // 🔄 HOT RELOAD CHECK (Casey's Day 21/22 pattern)
@@ -481,7 +481,9 @@ void handle_game_reload_check(GameMainCode *game_code,
     } else {
       printf("⚠️  Hot reload failed, using stubs\n");
     }
+    return true;
   }
+  return false;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

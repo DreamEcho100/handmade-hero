@@ -147,17 +147,13 @@ typedef struct {
 
   i32 latency_sample_count;
   i32 latency_microseconds;
+  i32 safety_sample_count;
 
-  // Day 20DirectSound has SafetyBytes:
-  // - Accounts for frame timing variance
-  // - Prevents audio underruns
-  // - Calculated as: (SamplesPerSecond * BytesPerSample / GameUpdateHz) / 3
+  // Platform-level master volume (0.0 to 1.0, default 1.0)
+  f32 master_volume;
 
-  // ALSA needs safety_sample_count:
-  // - Same purpose
-  // - Same calculation (but in samples, not bytes)
-  // - Formula: (samples_per_second / game_update_hz) / 3
-  i32 safety_sample_count; // Safety margin (1/3 frame worth of samples)
+  // Pause state
+  bool is_paused;
 } LinuxSoundOutput;
 
 extern LinuxSoundOutput g_linux_audio_output;
@@ -268,5 +264,33 @@ void linux_audio_fps_change_handling(GameAudioOutputBuffer *audio_output,
 void linux_send_samples_to_alsa(LinuxAudioConfig *audio_config,
                                 GameAudioOutputBuffer *source);
 void linux_clear_audio_buffer(LinuxAudioConfig *audio_config);
+
+/** Pause ALSA playback (e.g., on focus loss). */
+void linux_pause_audio(LinuxAudioConfig *audio_config);
+
+/** Resume ALSA playback (e.g., on focus gain). */
+void linux_resume_audio(LinuxAudioConfig *audio_config);
+
+/** Reset debug statistics. */
+void linux_audio_reset_stats(LinuxAudioConfig *audio_config);
+
+/** Set platform-level master volume (0.0 to 1.0). */
+void linux_set_master_volume(f32 volume);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TODO: FUTURE FEATURES
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Multi-stream support:
+//   ALSA uses a single snd_pcm_t device. For separate music + SFX streams,
+//   either open multiple PCM devices (may not be supported by all hardware)
+//   or do software mixing: two internal buffers mixed before snd_pcm_writei.
+//
+// Audio file loading:
+//   X11/ALSA has no built-in file loading. Would need stb_vorbis, dr_wav,
+//   or similar for WAV/OGG decoding. Pre-decode into PCM buffers in
+//   GameMemory, then mix during get_audio_samples.
+//
+// ═══════════════════════════════════════════════════════════════════════════
 
 #endif // DE100_PLATFORMS_X11_AUDIO_H

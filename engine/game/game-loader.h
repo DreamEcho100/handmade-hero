@@ -192,7 +192,12 @@ void unload_game_bootstrap_code(GameBootstrapCode *game_code);
 bool32 game_main_code_needs_reload(GameMainCode *game_code,
                                    char *source_lib_name);
 
-void handle_game_reload_check(GameMainCode *game_code,
+/**
+ * Check if game code needs hot-reload and reload if so.
+ * @return true if a reload was performed, false otherwise.
+ *         Callers can use this to clear audio buffers, reset stats, etc.
+ */
+bool handle_game_reload_check(GameMainCode *game_code,
                               GameCodePaths *game_code_paths);
 
 // ═══════════════════════════════════════════════════════════════════════════

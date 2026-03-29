@@ -2,15 +2,21 @@
 
 ## Overview
 
-The engine's audio system is split into two layers:
+The engine's audio system is split into layers:
 
-| Layer                   | Owner                                       | Purpose                           |
-| ----------------------- | ------------------------------------------- | --------------------------------- |
-| `GameAudioOutputBuffer` | Shared (`engine/game/audio.h`)              | Contract between game and backend |
-| `LinuxAudioConfig`      | X11 backend (`platforms/x11/audio.h`)       | ALSA ring-buffer state            |
-| `g_raylib_audio_output` | Raylib backend (`platforms/raylib/audio.c`) | Raylib push-buffer state          |
+| Layer | Owner | Purpose |
+|-------|-------|---------|
+| `GameAudioOutputBuffer` | Shared (`engine/game/audio.h`) | Contract between game and backend |
+| `AudioSampleFormat` | Set by backend, read by game | Backend decides hardware format (I16, F32, etc.) |
+| `audio_write_sample` / `audio_read_sample` | `engine/game/audio-helpers.h` | Format-agnostic PCM read/write |
+| `De100AudioMixer` | `engine/game/audio-mixer.h` | Playing sound pool, volume fading, pitch, chaining |
+| `De100LoadedSound` | `engine/game/audio-loader.h` | WAV file loading into PCM buffers |
+| `De100WavResult` | `engine/_common/parsers/wav.h` | RIFF/WAV byte parser |
+| `LinuxAudioConfig` | X11 backend (`platforms/x11/audio.h`) | ALSA ring-buffer state |
+| `RaylibSoundOutput` | Raylib backend (`platforms/raylib/audio.h`) | Lock-free SPSC ring buffer + callback |
+| Audio hooks | `platforms/_common/hooks/audio.h` | Platform-agnostic pause/resume/volume |
 
-The game code only ever touches `GameAudioOutputBuffer`. Backend internals are completely hidden.
+The game code only ever touches `GameAudioOutputBuffer` and the `engine/game/` utilities. Backend internals are completely hidden.
 
 ---
 
@@ -35,10 +41,23 @@ Finally `game_init` runs. It reads persistent `GameMemory` and initialises the g
 
 The main loop calls `audio_generate_and_send`:
 
-- **Raylib**: polls `IsAudioStreamProcessed` up to 4 times; each time it fires, sets `game->audio.sample_count` and calls `get_audio_samples`, then `raylib_send_samples`.
-- **X11/ALSA**: computes how far the write cursor is behind the latency target, sets `sample_count` accordingly, calls `get_audio_samples`, writes to the ALSA ring buffer with `snd_pcm_writei`.
+- **Raylib**: queries ring buffer fill level via `raylib_get_samples_to_write()` (target latency minus current buffered). Sets `game->audio.sample_count`, calls `get_audio_samples`, then copies PCM into the SPSC ring buffer via `raylib_send_samples()`. The audio callback (running on miniaudio's thread) pulls data from the ring buffer independently.
+- **X11/ALSA**: computes how far the write cursor is behind the latency target via `snd_pcm_delay()` + `snd_pcm_avail()`, sets `sample_count` accordingly, calls `get_audio_samples`, writes to ALSA with `snd_pcm_writei`.
 
-`get_audio_samples` lands in the game DLL (`game_get_audio_samples` in `main.c`). It reads `HHGameAudioState` from `GameMemory`, mixes all voices in `f32`, and writes each stereo frame via `audio_write_sample(buf, frame_index, left_f32, right_f32)`. That helper reads `buf->format` (set by the backend at init) and converts to the correct PCM format at the output boundary. The backend then moves those bytes to hardware.
+`get_audio_samples` lands in the game DLL (`game_get_audio_samples` in `main.c`). It:
+1. Reads `HHGameAudioState` from `GameMemory`
+2. Mixes synthesis voices (oscillators, SFX) in `f32` and writes via `audio_write_sample()`
+3. Calls `de100_mixer_output()` to mix loaded WAV sounds on top (reads existing buffer into float, accumulates all playing sounds, writes back with clamping)
+
+`audio_write_sample` reads `buf->format` (set by the backend at init) and converts normalised `f32` to the correct PCM format. `audio_read_sample` does the reverse. The backend then moves those bytes to hardware.
+
+### Audio Format Ownership
+
+The **backend decides** the `AudioSampleFormat` because it knows what its hardware API expects:
+- Raylib: `AUDIO_FORMAT_F32` (matches miniaudio's internal format, no double conversion)
+- X11/ALSA: `AUDIO_FORMAT_I16` (matches `SND_PCM_FORMAT_S16_LE`)
+
+The **game is format-agnostic** — it always mixes in `f32` and calls `audio_write_sample()` / `audio_read_sample()` which handle conversion for any format (I16, I32, F32, F64). The engine allocates `samples_buffer` for the largest possible format (F64) so any backend works.
 
 ### What `audio-helpers.h` and `audio.h` Provide
 
@@ -46,22 +65,57 @@ The main loop calls `audio_generate_and_send`:
 - `GameAudioState` — a minimal engine-level audio state (`SoundSource tone`, `f32 master_volume`). Games with complex needs define their own (e.g., `HHGameAudioState`).
 - `De100SoundPlayer` — a playback-cursor player for pre-loaded PCM: stores a pointer to the sample data, cursor, loop flag, gain. The game advances it per-sample in the fill callback.
 - `de100_audio_midi_to_freq(midi_note)` — standard MIDI note → Hz (`A4 = 440 Hz`).
-- `audio_write_sample(buf, frame_index, L, R)` — write one normalised stereo frame (`-1.0..1.0`) into `buf->samples_buffer`, converting to whatever `buf->format` the backend set (`AUDIO_FORMAT_I16`, `I32`, `F32`, `F64`). Dispatches via `_Generic` on the type of `L`: pass `f32` values for the `f32` path, `f64` for higher precision.
+- `audio_write_sample(buf, frame_index, L, R)` — write one normalised stereo frame (`-1.0..1.0`) into `buf->samples_buffer`, converting to whatever `buf->format` the backend set. Clamps to `[-1, 1]`. Dispatches via `_Generic` on the type of `L`.
+- `audio_read_sample(buf, frame_index, &left, &right)` — read one stereo frame back as normalised `f32`. Used by the mixer to preserve existing buffer contents when accumulating loaded sounds.
 - `audio_format_bytes_per_sample(fmt)` — returns bytes per stereo frame for an `AudioSampleFormat`.
 - `de100_audio_calculate_pan(pan, &left_vol, &right_vol)` — linear panning from `[-1, 1]`.
+- `de100_audio_ramp_volume(current, target, speed)` — per-sample volume smoothing (fixed speed).
+- `de100_audio_ramp_speed_for_duration(seconds, sample_rate)` — compute speed for time-based fading.
 - MIDI note constants: `DE100_MIDI_C4`, `DE100_MIDI_A4`, `DE100_MIDI_REST`, etc.
 
-`HHGameAudioState` (in `main.h`) adds a `SoundSource tone`, a `De100SoundPlayer sfx`, and separate `master_volume`, `sfx_volume`, `music_volume` floats. Per-category volume is applied as a multiplier in the fill callback — there is no bus mixer yet.
+**New audio utilities (added after commit `a92927d`):**
 
-### What Is Currently Missing
+- `engine/_common/parsers/wav.h` — RIFF/WAV parser. `de100_wav_parse(data, size)` returns `De100WavResult` with PCM pointers. Supports 16-bit PCM, 1-N channels, any sample rate.
+- `engine/game/audio-loader.h` — `de100_audio_load_wav_file(path)` reads a WAV file and returns `De100LoadedSound` with owned PCM memory.
+- `engine/game/audio-mixer.h` — `De100AudioMixer` playing sound pool with linked-list free pool, `de100_mixer_play()`, `de100_mixer_output()` (mixes all sounds in float then writes back), `de100_mixer_change_volume()` (per-channel, time-based fading), `de100_mixer_change_pitch()` (playback speed via linear interpolation), `De100SoundChain` (None/Loop/Advance).
+- `engine/game/audio-sync-test.h` — self-contained audio latency tester (metronome, input beep, frequency sweep). Toggle at runtime.
+- `engine/platforms/_common/hooks/audio.h` — platform-agnostic hooks: `de100_audio_pause()`, `de100_audio_resume()`, `de100_audio_set_master_volume()`, `de100_audio_get_latency_ms()`, `de100_audio_get_underrun_count()`.
 
-| Gap                                               | Impact                                                                                    |
-| ------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| No audio file loader (WAV, OGG, MP3)              | Every sound must be synthesised — no pre-recorded SFX or music                            |
-| No streaming ring buffer                          | Music files too large to load fully must wait; nothing decodes ahead                      |
-| No `sample_clock` in `GameAudioOutputBuffer`      | A/V sync requires backend-specific code (`running_sample_index`, `total_samples_written`) |
-| No bus mixer                                      | All voices mix to one flat stream; per-bus volume control requires a mixer layer          |
-| No `backend_pause_audio` / `backend_resume_audio` | Focus-loss handling is ad-hoc per backend                                                 |
+`HHGameAudioState` (in `main.h`) adds a `SoundSource tone`, a `De100SoundPlayer sfx`, and separate `master_volume`, `sfx_volume`, `music_volume` floats. The game also has a `De100AudioMixer mixer` and `De100LoadedSound` instances for WAV playback. Per-category volume is applied as a multiplier in the fill callback.
+
+### What Was Added (since commit `a92927d` / game `d13d5b1`)
+
+| Feature | File | Status |
+|---------|------|--------|
+| WAV/RIFF parser | `engine/_common/parsers/wav.h` | Done |
+| Audio file loader | `engine/game/audio-loader.h` | Done |
+| Playing sound pool + mixer | `engine/game/audio-mixer.h` | Done (scalar, no SIMD) |
+| Volume fading (per-channel, time-based) | `engine/game/audio-mixer.h` | Done |
+| Pitch/speed control with interpolation | `engine/game/audio-mixer.h` | Done |
+| Sound chaining (None/Loop/Advance) | `engine/game/audio-mixer.h` | Done |
+| `audio_read_sample()` helper | `engine/game/audio-helpers.h` | Done |
+| Timed volume ramp helper | `engine/game/audio-helpers.h` | Done |
+| Audio hooks (platform-agnostic) | `engine/platforms/_common/hooks/audio.h` | Done |
+| Raylib: SPSC ring buffer + callback | `engine/platforms/raylib/audio.c` | Done (was polling) |
+| Raylib: F32 format (was I16) | `engine/platforms/raylib/audio.c` | Done |
+| Both: pause/resume on focus loss | Both `backend.c` files | Done |
+| Both: hot-reload audio silence | Both `backend.c` files | Done |
+| Both: master volume | Both `audio.c` files | Done |
+| Both: stats reset | Both `audio.c` files | Done |
+| Format-agnostic engine allocation | `engine/engine.c` | Done (F64 ceiling) |
+| Audio sync test | `engine/game/audio-sync-test.h` | Done |
+
+### What Is Still Missing
+
+| Gap | Impact |
+|-----|--------|
+| SIMD mixer (SSE/NEON) | Scalar mixing causes underruns with 4+ simultaneous sounds at `-O0` |
+| No streaming ring buffer | Music files must be fully loaded (~29MB for a 2.5min track) |
+| No `sample_clock` in `GameAudioOutputBuffer` | A/V sync requires backend-specific code |
+| No bus mixer | All voices mix to one flat stream; no per-bus EQ/effects |
+| LRU sound memory | Large libraries need eviction; currently all sounds stay in memory |
+| Async sound loading | File loads block the game thread |
+| OGG/MP3 decoding | Only uncompressed WAV supported |
 
 ---
 

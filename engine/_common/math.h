@@ -122,12 +122,13 @@ DE100_DEFINE_FLOOR_SAFE(f64, u32, 0, DE100_U32_MAX)
 
 DE100_DEFINE_CEIL(f32, i32)
 DE100_DEFINE_CEIL(f32, u32)
-DE100_DEFINE_CEIL(f64, i32) DE100_DEFINE_CEIL(f64, u32)
+DE100_DEFINE_CEIL(f64, i32)
+DE100_DEFINE_CEIL(f64, u32)
 
-    DE100_DEFINE_CEIL_SAFE(f32, i32, DE100_I32_MIN, DE100_I32_MAX)
-        DE100_DEFINE_CEIL_SAFE(f32, u32, 0, DE100_U32_MAX)
-            DE100_DEFINE_CEIL_SAFE(f64, i32, DE100_I32_MIN, DE100_I32_MAX)
-                DE100_DEFINE_CEIL_SAFE(f64, u32, 0, DE100_U32_MAX)
+DE100_DEFINE_CEIL_SAFE(f32, i32, DE100_I32_MIN, DE100_I32_MAX)
+DE100_DEFINE_CEIL_SAFE(f32, u32, 0, DE100_U32_MAX)
+DE100_DEFINE_CEIL_SAFE(f64, i32, DE100_I32_MIN, DE100_I32_MAX)
+DE100_DEFINE_CEIL_SAFE(f64, u32, 0, DE100_U32_MAX)
 
 #define de100_ceilf_to_i32(x)                                                  \
   _Generic((x), f32: ceil_f32_to_i32, f64: ceil_f64_to_i32)(x)
@@ -139,25 +140,31 @@ DE100_DEFINE_CEIL(f64, i32) DE100_DEFINE_CEIL(f64, u32)
 #define de100_ceilf_to_u32_safe(x)                                             \
   _Generic((x), f32: ceil_f32_to_u32_safe, f64: ceil_f64_to_u32_safe)(x)
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // ROUND FUNCTIONS
-    // ═══════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
+// ROUND FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════
 
-    DE100_DEFINE_ROUND(f32, i32, DE100_ROUND_HALF_F32)
-        DE100_DEFINE_ROUND(f32, u32, DE100_ROUND_HALF_F32)
-            DE100_DEFINE_ROUND(f64, i32, DE100_ROUND_HALF_F64)
-                DE100_DEFINE_ROUND(f64, u32, DE100_ROUND_HALF_F64)
+DE100_DEFINE_ROUND(f32, i32, DE100_ROUND_HALF_F32) //
+//
+DE100_DEFINE_ROUND(f32, u32, DE100_ROUND_HALF_F32) //
+//
+DE100_DEFINE_ROUND(f64, i32, DE100_ROUND_HALF_F64) //
+//
+DE100_DEFINE_ROUND(f64, u32, DE100_ROUND_HALF_F64) //
+//
 
-                    DE100_DEFINE_ROUND_SAFE(f32, i32, DE100_I32_MIN,
-                                            DE100_I32_MAX, DE100_ROUND_HALF_F32)
-                        DE100_DEFINE_ROUND_SAFE(f32, u32, 0, DE100_U32_MAX,
-                                                DE100_ROUND_HALF_F32)
-                            DE100_DEFINE_ROUND_SAFE(f64, i32, DE100_I32_MIN,
-                                                    DE100_I32_MAX,
-                                                    DE100_ROUND_HALF_F64)
-                                DE100_DEFINE_ROUND_SAFE(f64, u32, 0,
-                                                        DE100_U32_MAX,
-                                                        DE100_ROUND_HALF_F64)
+DE100_DEFINE_ROUND_SAFE(f32, i32, DE100_I32_MIN, DE100_I32_MAX,
+                        DE100_ROUND_HALF_F32) //
+                                              //
+DE100_DEFINE_ROUND_SAFE(f32, u32, 0, DE100_U32_MAX,
+                        DE100_ROUND_HALF_F32) //
+                                              //
+DE100_DEFINE_ROUND_SAFE(f64, i32, DE100_I32_MIN, DE100_I32_MAX,
+                        DE100_ROUND_HALF_F64) //
+                                              //
+DE100_DEFINE_ROUND_SAFE(f64, u32, 0, DE100_U32_MAX,
+                        DE100_ROUND_HALF_F64) //
+                                              //
 
 #define de100_roundf_to_i32(x)                                                 \
   _Generic((x), f32: round_f32_to_i32, f64: round_f64_to_i32)(x)
@@ -168,14 +175,12 @@ DE100_DEFINE_CEIL(f64, i32) DE100_DEFINE_CEIL(f64, u32)
   _Generic((x), f32: round_f32_to_i32_safe, f64: round_f64_to_i32_safe)(x)
 #define de100_roundf_to_u32_safe(x)                                            \
   _Generic((x), f32: round_f32_to_u32_safe, f64: round_f64_to_u32_safe)(x)
-    // ═══════════════════════════════════════════════════════════════════════════
-    // COMMON UTILITY FUNCTIONS
-    // ═══════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
+// COMMON UTILITY FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════
 
-    // Min
-    de100_file_scoped_fn inline f32 min_f32(f32 a, f32 b) {
-  return a < b ? a : b;
-}
+// Min
+de100_file_scoped_fn inline f32 min_f32(f32 a, f32 b) { return a < b ? a : b; }
 de100_file_scoped_fn inline f64 min_f64(f64 a, f64 b) { return a < b ? a : b; }
 de100_file_scoped_fn inline i32 min_i32(i32 a, i32 b) { return a < b ? a : b; }
 de100_file_scoped_fn inline u32 min_u32(u32 a, u32 b) { return a < b ? a : b; }

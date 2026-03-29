@@ -129,6 +129,47 @@ _audio_write_sample_f64(GameAudioOutputBuffer *buf, i32 frame_index, f64 left,
       (buf), (frame_index), (L), (R))
 
 // ─────────────────────────────────────────────────────────────────────────────
+// audio_read_sample — read one stereo frame from a GameAudioOutputBuffer
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Mirrors audio_write_sample() but in reverse: reads a frame from the buffer
+// and returns normalized f32 left/right values.
+//
+// Usage:
+//   f32 left, right;
+//   audio_read_sample(buf, frame_index, &left, &right);
+//
+// ─────────────────────────────────────────────────────────────────────────────
+
+de100_file_scoped_fn inline void
+audio_read_sample(GameAudioOutputBuffer *buf, i32 frame_index, f32 *out_left,
+                  f32 *out_right) {
+  i32 base = frame_index * 2;
+  switch (buf->format) {
+  case AUDIO_FORMAT_I16: {
+    i16 *s = (i16 *)buf->samples_buffer;
+    *out_left = (f32)s[base] / 32767.0f;
+    *out_right = (f32)s[base + 1] / 32767.0f;
+  } break;
+  case AUDIO_FORMAT_I32: {
+    i32 *s = (i32 *)buf->samples_buffer;
+    *out_left = (f32)((f64)s[base] / 2147483647.0);
+    *out_right = (f32)((f64)s[base + 1] / 2147483647.0);
+  } break;
+  case AUDIO_FORMAT_F32: {
+    f32 *s = (f32 *)buf->samples_buffer;
+    *out_left = s[base];
+    *out_right = s[base + 1];
+  } break;
+  case AUDIO_FORMAT_F64: {
+    f64 *s = (f64 *)buf->samples_buffer;
+    *out_left = (f32)s[base];
+    *out_right = (f32)s[base + 1];
+  } break;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Stereo Panning
 // ─────────────────────────────────────────────────────────────────────────────
 // Calculate left/right volumes from pan position.
@@ -185,6 +226,24 @@ de100_file_scoped_fn inline f32 de100_audio_ramp_volume(f32 current, f32 target,
 }
 
 #define DE100_AUDIO_VOLUME_RAMP_SPEED 0.002f
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Timed Volume Ramping
+// ─────────────────────────────────────────────────────────────────────────────
+// Same as de100_audio_ramp_volume but with duration-based speed calculation.
+// Call per-sample. Returns the per-sample speed to pass to de100_audio_ramp_volume.
+//
+// Usage:
+//   f32 speed = de100_audio_ramp_speed_for_duration(2.0f, 48000);
+//   // Then per-sample:
+//   vol = de100_audio_ramp_volume(vol, target, speed);
+//
+de100_file_scoped_fn inline f32
+de100_audio_ramp_speed_for_duration(f32 duration_seconds, i32 sample_rate) {
+  if (duration_seconds <= 0.0f || sample_rate <= 0)
+    return 1.0f; // instant
+  return 1.0f / ((f32)sample_rate * duration_seconds);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Waveform Generators

@@ -183,8 +183,10 @@ int engine_init(EngineState *engine) {
   // currently set AUDIO_FORMAT_I16 during their init.  If a future backend
   // sets a wider format the allocation here should be updated to use:
   //   audio_format_bytes_per_sample(format) * max_sample_count
-  // For now I16 is the only format, so sizeof(i16)*2 is always correct.
-  const int bytes_per_sample = (int)(sizeof(i16) * 2); // 16-bit stereo
+  // Allocate for the largest possible format (F64 stereo = 16 bytes/frame)
+  // so the buffer works regardless of which backend format is chosen at init.
+  const int bytes_per_sample =
+      audio_format_bytes_per_sample(AUDIO_FORMAT_F64); // largest format
   const u32 audio_hz = game->config.audio_game_update_hz != 0
                            ? game->config.audio_game_update_hz
                            : 60;

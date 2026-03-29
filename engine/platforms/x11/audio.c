@@ -39,6 +39,7 @@
 #include "../../_common/base.h"
 #include "../../_common/memory.h"
 #include "../../game/audio.h"
+#include "../../game/audio-helpers.h"
 
 #include <dlfcn.h>
 #include <stdio.h>
@@ -359,6 +360,9 @@ bool linux_init_audio(LinuxAudioConfig *audio_config,
   // STEP 1: Check if ALSA was loaded
   // ─────────────────────────────────────────────────────────────────────
 
+  g_linux_audio_output.master_volume = 1.0f;
+  g_linux_audio_output.is_paused = false;
+
   if (!g_linux_audio_output.alsa_library) {
     fprintf(stderr, "\u274c Audio: ALSA library not loaded\n");
     audio_config->is_initialized = false;
@@ -496,9 +500,15 @@ bool linux_init_audio(LinuxAudioConfig *audio_config,
   // STEP 6: Store configuration
   // ─────────────────────────────────────────────────────────────────────
 
+  // The ALSA backend's hardware format — determined by snd_pcm_set_params()
+  // above (LINUX_SND_PCM_FORMAT_S16_LE). All buffer sizing and the game's
+  // audio_output->format are derived from this single source of truth.
+  const AudioSampleFormat alsa_format = AUDIO_FORMAT_I16;
+  const i32 alsa_bps = audio_format_bytes_per_sample(alsa_format);
+
   // Platform audio config (read by the whole platform layer)
   audio_config->samples_per_second = samples_per_second;
-  audio_config->bytes_per_sample = sizeof(i16) * 2; // 16-bit stereo
+  audio_config->bytes_per_sample = alsa_bps;
   audio_config->running_sample_index = 0;
   audio_config->game_update_hz = game_update_hz;
   audio_config->latency_samples = latency_sample_count;
@@ -513,18 +523,12 @@ bool linux_init_audio(LinuxAudioConfig *audio_config,
   // ─────────────────────────────────────────────────────────────────────
   // STEP 7: Allocate sample buffer for game to fill
   // ─────────────────────────────────────────────────────────────────────
-  //
-  // This is where the game writes samples before we send them to ALSA.
-  // We allocate enough for several frames worth (handles timing variance).
-  //
-  // ─────────────────────────────────────────────────────────────────────
 
   // Allocate enough for max samples per call
   u32 sample_buffer_size =
       (audio_output && audio_output->max_sample_count > 0)
-          ? (u32)audio_output->max_sample_count * (u32)(sizeof(i16) * 2)
-          : (u32)(samples_per_second / game_update_hz * 3) *
-                (u32)(sizeof(i16) * 2);
+          ? (u32)audio_output->max_sample_count * (u32)alsa_bps
+          : (u32)(samples_per_second / game_update_hz * 3) * (u32)alsa_bps;
 
   g_linux_audio_output.sample_buffer =
       de100_memory_alloc(NULL, sample_buffer_size,
@@ -587,7 +591,7 @@ bool linux_init_audio(LinuxAudioConfig *audio_config,
 
   audio_config->is_initialized = true;
   if (audio_output) {
-    audio_output->format = AUDIO_FORMAT_I16; /* ALSA: S16_LE hardware */
+    audio_output->format = alsa_format;
     audio_output->is_initialized = true;
   }
 
@@ -838,6 +842,16 @@ void linux_send_samples_to_alsa(LinuxAudioConfig *audio_config,
   //
   // ─────────────────────────────────────────────────────────────────────
 
+  // Apply platform-level master volume (format-agnostic via helpers)
+  f32 vol = g_linux_audio_output.master_volume;
+  if (vol < 1.0f) {
+    for (i32 i = 0; i < source->sample_count; i++) {
+      f32 left, right;
+      audio_read_sample(source, i, &left, &right);
+      audio_write_sample(source, i, left * vol, right * vol);
+    }
+  }
+
   snd_pcm_sframes_t frames_written =
       SndPcmWritei(g_linux_audio_output.pcm_handle, source->samples_buffer,
                    (snd_pcm_uframes_t)source->sample_count);
@@ -876,6 +890,10 @@ void linux_clear_audio_buffer(LinuxAudioConfig *audio_config) {
   if (!audio_config->is_initialized || !g_linux_audio_output.pcm_handle) {
     return;
   }
+
+  // Don't write to ALSA when paused (PCM is in dropped state)
+  if (g_linux_audio_output.is_paused)
+    return;
 
   // Fill our buffer with silence
   de100_mem_set(g_linux_audio_output.sample_buffer.base, 0,
@@ -1026,6 +1044,72 @@ void linux_audio_fps_change_handling(GameAudioOutputBuffer *audio_output,
   printf("[AUDIO] FPS changed: new latency=%d samples, safety=%d samples\n",
          g_linux_audio_output.latency_sample_count,
          g_linux_audio_output.safety_sample_count);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PAUSE / RESUME
+// ═══════════════════════════════════════════════════════════════════════════
+
+void linux_pause_audio(LinuxAudioConfig *audio_config) {
+  if (!audio_config->is_initialized || !g_linux_audio_output.pcm_handle)
+    return;
+  if (g_linux_audio_output.is_paused)
+    return;
+
+  SndPcmDrop(g_linux_audio_output.pcm_handle);
+  g_linux_audio_output.is_paused = true;
+  printf("[AUDIO] Paused\n");
+}
+
+void linux_resume_audio(LinuxAudioConfig *audio_config) {
+  if (!audio_config->is_initialized || !g_linux_audio_output.pcm_handle)
+    return;
+  if (!g_linux_audio_output.is_paused)
+    return;
+
+  SndPcmPrepare(g_linux_audio_output.pcm_handle);
+
+  // Pre-fill with silence to prevent clicks on resume
+  if (g_linux_audio_output.sample_buffer.base) {
+    de100_mem_set(g_linux_audio_output.sample_buffer.base, 0,
+                  g_linux_audio_output.sample_buffer_size);
+    i32 prefill = audio_config->latency_samples;
+    snd_pcm_sframes_t written = SndPcmWritei(
+        g_linux_audio_output.pcm_handle,
+        g_linux_audio_output.sample_buffer.base, (snd_pcm_uframes_t)prefill);
+    // Re-sync running_sample_index so debug markers don't show a discontinuity
+    if (written > 0) {
+      audio_config->running_sample_index = written;
+    }
+  }
+
+  SndPcmStart(g_linux_audio_output.pcm_handle);
+  g_linux_audio_output.is_paused = false;
+  printf("[AUDIO] Resumed\n");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STATS RESET
+// ═══════════════════════════════════════════════════════════════════════════
+
+void linux_audio_reset_stats(LinuxAudioConfig *audio_config) {
+  (void)audio_config;
+#if DE100_INTERNAL
+  de100_mem_set(g_debug_audio_markers, 0, sizeof(g_debug_audio_markers));
+  g_debug_marker_index = 0;
+#endif
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MASTER VOLUME
+// ═══════════════════════════════════════════════════════════════════════════
+
+void linux_set_master_volume(f32 volume) {
+  if (volume < 0.0f)
+    volume = 0.0f;
+  if (volume > 1.0f)
+    volume = 1.0f;
+  g_linux_audio_output.master_volume = volume;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

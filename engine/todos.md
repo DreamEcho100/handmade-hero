@@ -9,6 +9,11 @@
 - [ ] Implement proper error handling and reporting for all functions. and refactor what's needed to be on internal/dev mode only or/and every range of time.
 - [ ] review the usages of `target_seconds_per_frame`
 - [ ] For the `build-common.sh`, for `"$GAME_DIR/adapters/$backend/inputs/joystick.c"`, first check if the path exist and based on it you can decide to add it to the sources or not, this will allow for not needing to have empty files for the adapters that don't have any platform specific code, and also it will allow for having different platforms with different inputs handling without needing to have empty files for the ones that don't need it. and pass a macro to decide on the platform/backend whether to use the platform specific code or not, for example `#if DE100_USE_PLATFORM_JOYSTICK_INPUTS` and define it on the `PlatformConfig` based on the platform/backend.
+- [ ] Take concepts from "ai-llm-knowledge-dump/generated-courses/platform-backend":
+  - [ ] The handling different window scaling modes.
+  - [ ] The computing the aspect size based on the window size and the target aspect ratio.
+  - [ ] The scaling/adapting of rendering of shapes and text based on the window scaling mode and the aspect ratio.
+  - [ ] Use `XkbSetDetectableAutoRepeat` on the X11 backend to be able to detect the key repeat events and handle them correctly, and also to be able to detect when a key is released while it's being repeated.
 
 ## Future TODOs
 

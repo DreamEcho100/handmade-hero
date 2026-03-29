@@ -459,8 +459,25 @@ int platform_main(void) {
 
     frame_timing_begin();
 
-    handle_game_reload_check(&engine.platform.game_main_code,
-                             &engine.platform.paths);
+    // Hot-reload: clear audio buffer on reload to prevent glitches
+    bool reloaded = handle_game_reload_check(
+        &engine.platform.game_main_code, &engine.platform.paths);
+    if (reloaded) {
+      linux_clear_audio_buffer(&x11->audio_config);
+    }
+
+    // Focus-based audio pause/resume
+    {
+      static bool was_active = true;
+      if (g_window_is_active != was_active) {
+        if (g_window_is_active) {
+          linux_resume_audio(&x11->audio_config);
+        } else {
+          linux_pause_audio(&x11->audio_config);
+        }
+        was_active = g_window_is_active;
+      }
+    }
 
     prepare_input_frame(engine.platform.old_inputs, engine.game.inputs);
     x11_poll_mouse(x11->display, x11->window, engine.game.inputs);
