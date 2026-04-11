@@ -118,6 +118,7 @@ In here currently, for example, Raylib is treated **as a backend**, not as _"the
 ├── backend.h
 ├── build-common.sh # build utils and helpers for the games build process
 ├── _common/ # Cross‑platform utilities
+│   ├── parsers/ # Format parsers (wav.h, etc.)
 │   └── ... # (memory, files, time, threading, DLLs, etc.)
 ├── engine.c
 ├── engine.h
@@ -130,12 +131,16 @@ In here currently, for example, Raylib is treated **as a backend**, not as _"the
 ├── main.c
 ├── platforms/
 │   ├── _common/ # Shared platform logic (NOT game logic)
+│   │   ├── hooks/ # Platform-agnostic hook declarations
+│   │   │   ├── utils.h # (de100_get_frame_time, de100_get_fps, ...)
+│   │   │   └── audio.h # (de100_audio_pause, de100_audio_set_master_volume, ...)
 │   │   └── ...
 │   └── [platform]/ # platform _(raylib/x11)_ logic here like handling audio, game-loop, inputs...
-│       ├── hooks/ # a platform interfaces that are exposed to the game, either as utilities to be used like in `de100_get_frame_time` or headers to implement on the game in case of specific inputs like keyboard and joystick
-│       │   ├─── inputs/ # _(joystick.h, keyboard.h)_
+│       ├── hooks/ # Platform interfaces exposed to the game
+│       │   ├── inputs/ # _(joystick.h, keyboard.h)_
 │       │   │   └── ...
-│       │   └── utils.c Like `de100_get_frame_time`, `de100_get_time`, `de100_get_fps`, ...
+│       │   ├── utils.c # `de100_get_frame_time`, `de100_get_time`, `de100_get_fps`, ...
+│       │   └── audio.c # `de100_audio_pause`, `de100_audio_set_master_volume`, ...
 │       └── ... # other platform specific code like backend.c, audio.c, inputs/mouse.c
 └── todos.md
 ```

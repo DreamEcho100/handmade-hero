@@ -763,10 +763,10 @@ static void gpu_render_scene(float time_sec, float mouse_x, float mouse_y,
   /* Set camera uniforms from CPU orbit camera state. */
   if (cam) {
     CameraBasis cb = camera_compute_basis(cam, (int)w, (int)h);
-    g_gpu.Uniform3f(g_gpu.u_cam_origin,  cb.origin.x,  cb.origin.y,  cb.origin.z);
-    g_gpu.Uniform3f(g_gpu.u_cam_forward, cb.forward.x, cb.forward.y, cb.forward.z);
-    g_gpu.Uniform3f(g_gpu.u_cam_right,   cb.right.x,   cb.right.y,   cb.right.z);
-    g_gpu.Uniform3f(g_gpu.u_cam_up,      cb.up.x,      cb.up.y,      cb.up.z);
+    g_gpu.Uniform3f(g_gpu.u_cam_origin,  cb.cam_pos.x,     cb.cam_pos.y,     cb.cam_pos.z);
+    g_gpu.Uniform3f(g_gpu.u_cam_forward, cb.cam_forward.x, cb.cam_forward.y, cb.cam_forward.z);
+    g_gpu.Uniform3f(g_gpu.u_cam_right,   cb.cam_right.x,   cb.cam_right.y,   cb.cam_right.z);
+    g_gpu.Uniform3f(g_gpu.u_cam_up,      cb.cam_up.x,      cb.cam_up.y,      cb.cam_up.z);
     g_gpu.Uniform1f(g_gpu.u_cam_fov,     cam->fov);
   }
 
@@ -859,14 +859,13 @@ int main(void) {
   if (init_window() != 0) return 1;
   setup_vsync();
 
-  /* ── Backbuffer ──────────────────────────────────────────────────────── */
-  Backbuffer bb = {
-    .width = GAME_W, .height = GAME_H,
-    .bytes_per_pixel = 4, .pitch = GAME_W * 4,
-  };
-  bb.pixels = (uint32_t *)malloc((size_t)(GAME_W * GAME_H) * 4);
-  if (!bb.pixels) { fprintf(stderr, "Out of memory\n"); return 1; }
-  memset(bb.pixels, 0, (size_t)(GAME_W * GAME_H) * 4);
+  /* ── Platform props (backbuffer + audio buffer + arenas) ─────────────── */
+  PlatformGameProps props = {0};
+  if (platform_game_props_init(&props) != 0) {
+    fprintf(stderr, "Out of memory\n");
+    shutdown_window();
+    return 1;
+  }
 
   /* ── Game state ──────────────────────────────────────────────────────── */
   RaytracerState state;
@@ -899,16 +898,16 @@ int main(void) {
     elapsed_time += dt;
 
     game_update(&state, curr_input, dt);
-    game_render(&state, &bb);
+    game_render(&state, &props.backbuffer, props.world_config);
 
     /* Display: GPU mode renders via shader, then overlays HUD.
      * CPU modes blit the backbuffer as before. */
     if (state.settings.render_mode == RENDER_GPU && g_gpu.ready) {
       gpu_render_scene(elapsed_time, curr_input->mouse.x, curr_input->mouse.y,
                        &state.camera, &state.scene, &state.settings);
-      gpu_overlay_hud(&bb);
+      gpu_overlay_hud(&props.backbuffer);
     } else {
-      display_backbuffer(&bb);
+      display_backbuffer(&props.backbuffer);
     }
 
     timing_mark_work_done();
@@ -921,7 +920,7 @@ int main(void) {
   print_frame_stats();
 #endif
   gpu_shutdown();
-  free(bb.pixels);
+  platform_game_props_free(&props);
   shutdown_window();
   return 0;
 }

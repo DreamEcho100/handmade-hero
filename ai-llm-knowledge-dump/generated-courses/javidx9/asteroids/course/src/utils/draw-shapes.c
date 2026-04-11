@@ -1,178 +1,215 @@
-/* =============================================================================
- * utils/draw-shapes.c — Primitive Drawing Implementations
- * =============================================================================
+/* ═══════════════════════════════════════════════════════════════════════════
+ * utils/draw-shapes.c — Primitive Drawing (Rects + Lines)
+ * ═══════════════════════════════════════════════════════════════════════════
  *
- * PIXEL INDEXING — READ THIS FIRST
- * ─────────────────────────────────
- * Pixels are stored in a flat (1-D) array, row by row, left to right.
- * To access pixel at column x, row y:
+ * LESSON 03 — draw_rect: pure rasterizer implementation.
+ *             Float positions/colors, unified alpha blending, pitch-based
+ *             row pointer, clipping.
  *
- *   index = y * (bb->pitch / 4) + x
+ * LESSON 05 — draw_line: Bresenham integer line algorithm.
+ *             Used by draw_wireframe to render ship and asteroid outlines.
  *
- * Why (pitch / 4)?
- *   pitch is the byte width of one row (e.g. 512 * 4 = 2048 bytes).
- *   bb->pixels is uint32_t* (4 bytes per element).
- *   Dividing pitch by 4 converts from byte-offset to uint32_t element-offset.
- *
- * Toroidal modular arithmetic:
- *   ((x % w) + w) % w   →  always in [0, w-1], works for negative x too.
- *   JavaScript equivalent:  ((x % w) + w) % w  (same formula!)
- * =============================================================================
+ * Both functions are coordinate-system-agnostic: they take pixel values and
+ * draw.  Any game-unit → pixel conversion happens at the call site.
+ * ═══════════════════════════════════════════════════════════════════════════
  */
 
-#include "draw-shapes.h"
+#include "./draw-shapes.h"
+#include "./math.h"
 
-/* ══════ draw_pixel_w — Toroidal Pixel Write ════════════════════════════════
-
-   Wraps x and y into the backbuffer using modular arithmetic.
-   COURSE NOTE: The reference asteroids.c uses `x % width` directly, which
-   in C gives a negative result for negative x (undefined behaviour on some
-   platforms before C99).  The double-mod trick is the portable fix.      */
-void draw_pixel_w(AsteroidsBackbuffer *bb, int x, int y, uint32_t color) {
-    /* Wrap x: handle negative values with the double-mod trick.
-       Same formula as JS:  ((x % w) + w) % w                             */
-    x = ((x % bb->width)  + bb->width)  % bb->width;
-    y = ((y % bb->height) + bb->height) % bb->height;
-
-    /* Row-major index: y rows down, then x columns across.
-       Dividing pitch (bytes) by 4 gives uint32_t element offset.         */
-    bb->pixels[y * (bb->pitch / 4) + x] = color;
-}
-
-/* ══════ draw_pixel — Clipped Pixel Write ═══════════════════════════════════ */
-void draw_pixel(AsteroidsBackbuffer *bb, int x, int y, uint32_t color) {
-    if (x < 0 || x >= bb->width || y < 0 || y >= bb->height) return;
-    bb->pixels[y * (bb->pitch / 4) + x] = color;
-}
-
-/* ══════ draw_line — Bresenham's Line Algorithm (Toroidal) ══════════════════
+/* ─────────────────────────────────────────────────────────────────────────
+ * draw_rect
+ * ─────────────────────────────────────────────────────────────────────────
+ * Fill a rectangle at pixel coordinates with float colors.
  *
- * Bresenham's algorithm draws a rasterised line using only integer arithmetic.
- * It tracks the accumulated error between the ideal (floating-point) line and
- * the nearest grid pixel, stepping the "minor" axis when the error overflows.
+ * LESSON 03 — Three-tier alpha handling:
+ *   1. a <= 0  → skip entirely (fully transparent)
+ *   2. a >= 1  → direct pixel write (opaque fast path, no read-back)
+ *   3. else    → per-pixel alpha composite: out = src*a + dst*(1-a)
  *
- * Key variables:
- *   dx, dy   — total extent in x and y (always positive)
- *   sx, sy   — step direction (+1 or -1)
- *   err      — accumulated error × 2 (multiplied to avoid fractions)
- *
- * Why toroidal?  Each asteroid, ship, and bullet is drawn as a wireframe
- * (series of line segments).  If an asteroid drifts off the right edge, the
- * line connecting its last vertex to its first must wrap around so the shape
- * appears seamlessly from the left edge.
+ * Float colors [0.0–1.0] are converted to 8-bit at rasterization time.
  */
-void draw_line(AsteroidsBackbuffer *bb,
-               int x0, int y0, int x1, int y1,
-               uint32_t color)
-{
-    /* Compute absolute extent */
-    int dx = x1 - x0;  if (dx < 0) dx = -dx;
-    int dy = y1 - y0;  if (dy < 0) dy = -dy;
+void draw_rect(Backbuffer *backbuffer,
+               float x, float y, float w, float h,
+               float r, float g, float b, float a) {
+  if (!backbuffer || !backbuffer->pixels) return;
+  if (a <= 0.0f) return;
 
-    /* Step direction: +1 if moving right/down, -1 if moving left/up */
-    int sx = (x0 < x1) ? 1 : -1;
-    int sy = (y0 < y1) ? 1 : -1;
+  float clamped_r = CLAMP(r, 0.0f, 1.0f);
+  float clamped_g = CLAMP(g, 0.0f, 1.0f);
+  float clamped_b = CLAMP(b, 0.0f, 1.0f);
+  float clamped_a = CLAMP(a, 0.0f, 1.0f);
 
-    /* Initial error: start at midpoint between first and second pixel */
-    int err = dx - dy;
+  int x0 = MAX((int)x, 0);
+  int y0 = MAX((int)y, 0);
+  int x1 = MIN((int)(x + w), backbuffer->width);
+  int y1 = MIN((int)(y + h), backbuffer->height);
 
-    /* Draw pixels until we reach the end point */
-    for (;;) {
-        /* Each pixel goes through the toroidal writer so lines wrap. */
-        draw_pixel_w(bb, x0, y0, color);
+  if (x0 >= x1 || y0 >= y1) return;
 
-        /* Are we done? */
-        if (x0 == x1 && y0 == y1) break;
+  /* LESSON 03 — pitch / bytes_per_pixel gives the stride in uint32_t units.
+   * Store once, then do one addition per row instead of one multiplication. */
+  int stride = backbuffer->pitch / backbuffer->bytes_per_pixel;
 
-        /* Double the error to keep it in integer space.               */
-        int e2 = err * 2;
+  if (clamped_a >= 1.0f) {
+    /* ── Opaque fast path ──────────────────────────────────────────────
+     * No need to read the destination pixel. Convert float color to the
+     * packed 0xAARRGGBB format and write directly. */
+    uint32_t color = (uint32_t)(clamped_r * 255.0f)
+                   | ((uint32_t)(clamped_g * 255.0f) << 8)
+                   | ((uint32_t)(clamped_b * 255.0f) << 16)
+                   | 0xFF000000u;
 
-        /* Step x if the accumulated error is large enough in x-axis.  */
-        if (e2 > -dy) { err -= dy; x0 += sx; }
-
-        /* Step y if the accumulated error is large enough in y-axis.  */
-        if (e2 <  dx) { err += dx; y0 += sy; }
+    for (int row = y0; row < y1; row++) {
+      uint32_t *dst = backbuffer->pixels + row * stride + x0;
+      for (int col = x0; col < x1; col++) {
+        *dst++ = color;
+      }
     }
+  } else {
+    /* ── Alpha blend path ──────────────────────────────────────────────
+     * Blend formula (per channel):
+     *   out = src * a/255 + dst * (1 - a/255)
+     *       = (src * src_a + dst * inv_alpha) >> 8
+     *
+     * Integer approximation: >> 8 instead of / 255 (fast, ≈0.4% error).
+     * Forces output alpha to 0xFF (fully opaque result). */
+    int src_a = (int)(clamped_a * 255.0f);
+    int inv_alpha = 255 - src_a;
+    int src_r = (int)(clamped_r * 255.0f);
+    int src_g = (int)(clamped_g * 255.0f);
+    int src_b = (int)(clamped_b * 255.0f);
+
+    for (int row = y0; row < y1; row++) {
+      uint32_t *dst = backbuffer->pixels + row * stride + x0;
+      for (int col = x0; col < x1; col++) {
+        uint32_t dest_pixel = *dst;
+        int dest_r = (dest_pixel      ) & 0xFF;
+        int dest_g = (dest_pixel >>  8) & 0xFF;
+        int dest_b = (dest_pixel >> 16) & 0xFF;
+
+        int out_r = (src_r * src_a + dest_r * inv_alpha) >> 8;
+        int out_g = (src_g * src_a + dest_g * inv_alpha) >> 8;
+        int out_b = (src_b * src_a + dest_b * inv_alpha) >> 8;
+
+        *dst++ = (uint32_t)out_r
+               | ((uint32_t)out_g << 8)
+               | ((uint32_t)out_b << 16)
+               | 0xFF000000u;
+      }
+    }
+  }
 }
 
-/* ══════ draw_rect — Clipped Solid Rectangle ════════════════════════════════ */
-void draw_rect(AsteroidsBackbuffer *bb,
-               int x, int y, int w, int h,
-               uint32_t color)
-{
-    /* Clamp to backbuffer bounds (no toroidal wrap — HUD must stay on screen) */
-    int x0 = x < 0 ? 0 : x;
-    int y0 = y < 0 ? 0 : y;
-    int x1 = x + w;  if (x1 > bb->width)  x1 = bb->width;
-    int y1 = y + h;  if (y1 > bb->height) y1 = bb->height;
-
-    int stride = bb->pitch / 4;  /* uint32_t elements per row */
-    for (int py = y0; py < y1; py++) {
-        for (int px = x0; px < x1; px++) {
-            bb->pixels[py * stride + px] = color;
-        }
-    }
-}
-
-/* ══════ draw_rect_blend — Alpha-Blended Rectangle ══════════════════════════
+/* ─────────────────────────────────────────────────────────────────────────
+ * draw_line
+ * ─────────────────────────────────────────────────────────────────────────
+ * Draw a straight line using Bresenham's integer algorithm.
  *
- * Standard "over" compositing (Porter-Duff):
- *   result = src_alpha/255 * src_colour  +  (1 - src_alpha/255) * dst_colour
+ * LESSON 05 — Bresenham's algorithm:
+ *   • No floating-point arithmetic in the inner loop — only integer adds.
+ *   • The error accumulator decides when to step on the minor axis.
+ *   • Handles all octants by swapping roles of x and y (the `steep` flag).
  *
- * CHANNEL EXTRACTION (CRITICAL — matches GAME_RGBA byte layout):
- *   uint32_t value = 0xAABBGGRR  (little-endian memory: [R][G][B][A])
- *   R = bits  0-7  → (color >>  0) & 0xFF
- *   G = bits  8-15 → (color >>  8) & 0xFF
- *   B = bits 16-23 → (color >> 16) & 0xFF
- *   A = bits 24-31 → (color >> 24) & 0xFF
- *
- * JS equivalent (Canvas 2D API):
- *   ctx.globalAlpha = alpha / 255;
- *   ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
- *   ctx.fillRect(x, y, w, h);
+ * Pixels are CLIPPED (not toroidal): a line that goes off-screen stops at
+ * the boundary.  For Asteroids this means a wireframe model that straddles
+ * the screen edge has a straight cut — acceptable since the game wraps
+ * entire objects, not individual edges.
  */
-void draw_rect_blend(AsteroidsBackbuffer *bb,
-                     int x, int y, int w, int h,
-                     uint32_t color)
-{
-    /* Extract source channels — R is the LOW byte (bits 0-7) */
-    uint8_t sa = (uint8_t)((color >> 24) & 0xFF);  /* alpha         */
-    uint8_t sr = (uint8_t)((color >>  0) & 0xFF);  /* red   (low)   */
-    uint8_t sg = (uint8_t)((color >>  8) & 0xFF);  /* green (mid)   */
-    uint8_t sb = (uint8_t)((color >> 16) & 0xFF);  /* blue  (high)  */
+void draw_line(Backbuffer *backbuffer,
+               float x0f, float y0f, float x1f, float y1f,
+               float r, float g, float b, float a) {
+  if (!backbuffer || !backbuffer->pixels) return;
+  if (a <= 0.0f) return;
 
-    if (sa == 0) return;    /* fully transparent — nothing to draw */
+  int ix0 = (int)x0f;
+  int iy0 = (int)y0f;
+  int ix1 = (int)x1f;
+  int iy1 = (int)y1f;
 
-    /* Clamp to backbuffer bounds */
-    int x0 = x < 0 ? 0 : x;
-    int y0 = y < 0 ? 0 : y;
-    int x1 = x + w;  if (x1 > bb->width)  x1 = bb->width;
-    int y1 = y + h;  if (y1 > bb->height) y1 = bb->height;
+  /* Convert float color to 8-bit once. */
+  float cr = CLAMP(r, 0.0f, 1.0f);
+  float cg = CLAMP(g, 0.0f, 1.0f);
+  float cb = CLAMP(b, 0.0f, 1.0f);
 
-    int stride = bb->pitch / 4;
+  int src_a = (int)(CLAMP(a, 0.0f, 1.0f) * 255.0f);
+  int inv_a = 255 - src_a;
+  int src_r = (int)(cr * 255.0f);
+  int src_g = (int)(cg * 255.0f);
+  int src_b = (int)(cb * 255.0f);
 
-    for (int py = y0; py < y1; py++) {
-        for (int px = x0; px < x1; px++) {
-            uint32_t dst = bb->pixels[py * stride + px];
+  int stride = backbuffer->pitch / backbuffer->bytes_per_pixel;
+  int bw = backbuffer->width;
+  int bh = backbuffer->height;
 
-            /* Extract destination channels (same byte layout) */
-            uint8_t dr = (uint8_t)((dst >>  0) & 0xFF);
-            uint8_t dg = (uint8_t)((dst >>  8) & 0xFF);
-            uint8_t db = (uint8_t)((dst >> 16) & 0xFF);
+  /* LESSON 05 — Bresenham setup.
+   * If the line is "steep" (dy > dx) we swap x and y axes so the outer
+   * loop always steps one unit in the dominant axis.                      */
+  int steep = 0;
+  {
+    int adx = ix1 - ix0; if (adx < 0) adx = -adx;
+    int ady = iy1 - iy0; if (ady < 0) ady = -ady;
+    if (ady > adx) steep = 1;
+  }
 
-            /* Linear blend:  result = src * (alpha/255) + dst * (1 - alpha/255)
-               Integer arithmetic: multiply by alpha, then divide by 255.
-               +127 rounds to nearest rather than truncating.              */
-            uint8_t rr = (uint8_t)((sr * sa + dr * (255 - sa) + 127) / 255);
-            uint8_t rg = (uint8_t)((sg * sa + dg * (255 - sa) + 127) / 255);
-            uint8_t rb = (uint8_t)((sb * sa + db * (255 - sa) + 127) / 255);
+  if (steep) {
+    int tmp;
+    tmp = ix0; ix0 = iy0; iy0 = tmp;
+    tmp = ix1; ix1 = iy1; iy1 = tmp;
+  }
 
-            /* Pack result back into GAME_RGBA byte order (R in low byte)  */
-            bb->pixels[py * stride + px] =
-                ((uint32_t)255 << 24) |
-                ((uint32_t)rb  << 16) |
-                ((uint32_t)rg  <<  8) |
-                ((uint32_t)rr  <<  0);
-        }
+  /* Ensure we always step left-to-right (or top-to-bottom when steep). */
+  if (ix0 > ix1) {
+    int tmp;
+    tmp = ix0; ix0 = ix1; ix1 = tmp;
+    tmp = iy0; iy0 = iy1; iy1 = tmp;
+  }
+
+  int dx = ix1 - ix0;
+  int dy = iy1 - iy0;
+  int y_step = (dy < 0) ? -1 : 1;
+  if (dy < 0) dy = -dy;
+
+  int error = dx / 2;
+  int y = iy0;
+
+  for (int x = ix0; x <= ix1; x++) {
+    /* Map back to screen coordinates. */
+    int px = steep ? y : x;
+    int py = steep ? x : y;
+
+    /* Clip to backbuffer bounds. */
+    if (px >= 0 && px < bw && py >= 0 && py < bh) {
+      uint32_t *dst = backbuffer->pixels + py * stride + px;
+
+      if (src_a >= 255) {
+        /* Opaque fast path */
+        *dst = (uint32_t)src_r
+             | ((uint32_t)src_g << 8)
+             | ((uint32_t)src_b << 16)
+             | 0xFF000000u;
+      } else {
+        /* Alpha blend */
+        uint32_t dest_pixel = *dst;
+        int dest_r = (dest_pixel      ) & 0xFF;
+        int dest_g = (dest_pixel >>  8) & 0xFF;
+        int dest_b = (dest_pixel >> 16) & 0xFF;
+
+        int out_r = (src_r * src_a + dest_r * inv_a) >> 8;
+        int out_g = (src_g * src_a + dest_g * inv_a) >> 8;
+        int out_b = (src_b * src_a + dest_b * inv_a) >> 8;
+
+        *dst = (uint32_t)out_r
+             | ((uint32_t)out_g << 8)
+             | ((uint32_t)out_b << 16)
+             | 0xFF000000u;
+      }
     }
+
+    error -= dy;
+    if (error < 0) {
+      y += y_step;
+      error += dx;
+    }
+  }
 }

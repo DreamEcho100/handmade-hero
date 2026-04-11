@@ -46,7 +46,7 @@
  * LESSON 09 — Why 44100 Hz and 16-bit signed (CD quality, widest compat).  */
 #define AUDIO_SAMPLE_RATE     44100
 #define AUDIO_CHANNELS        2
-#define AUDIO_BYTES_PER_FRAME (AUDIO_CHANNELS * sizeof(int16_t))
+#define AUDIO_BYTES_PER_FRAME (AUDIO_CHANNELS * sizeof(float))
 
 /* LESSON 11/12 — Chunk size for stream-fill loop.
  * 4096 frames ≈ 93 ms at 44100 Hz.  Matches Raylib's
@@ -54,33 +54,25 @@
 #define AUDIO_CHUNK_SIZE      4096
 
 /* ── AudioOutputBuffer ────────────────────────────────────────────────────
- * LESSON 09 — Flat int16_t array in interleaved stereo format:
+ * LESSON 09 — Flat float array in interleaved stereo format:
  *   [L0, R0, L1, R1, L2, R2, ...]
  * Each pair (Li, Ri) is one "sample frame".
  * `sample_count` is the max frames the buffer can hold.
  * `max_sample_count` is a safety cap: never write more than this.         */
 typedef struct {
-  int16_t *samples;         /* Allocated by platform on startup.           */
-  int      sample_count;    /* Frames allocated (capacity).                */
-  int      max_sample_count;/* Safety cap; set = sample_count on init.     */
+  float *samples;           /* Allocated by platform on startup.           */
+  int    sample_count;      /* Frames allocated (capacity).                */
+  int    max_sample_count;  /* Safety cap; set = sample_count on init.     */
 } AudioOutputBuffer;
 
-/* LESSON 09 — Format-agnostic write helper.
- * Converts float L/R values in [-1.0, +1.0] to int16_t and writes the
- * interleaved pair at frame `frame_index`.
- *
- * Wrapping the conversion here means: if we ever switch to float32 PCM,
- * only this function changes — not every synthesis loop.                   */
+/* LESSON 09 — Float32 write helper.
+ * Writes float L/R values in [-1.0, +1.0] directly to the interleaved
+ * buffer at frame `frame_index`.  No int16_t conversion needed.          */
 static inline void audio_write_sample(AudioOutputBuffer *buf,
                                       int frame_index,
                                       float l, float r) {
-  /* Clamp to [-1, 1] then scale. */
-  if (l >  1.0f) l =  1.0f;
-  if (l < -1.0f) l = -1.0f;
-  if (r >  1.0f) r =  1.0f;
-  if (r < -1.0f) r = -1.0f;
-  buf->samples[frame_index * AUDIO_CHANNELS + 0] = (int16_t)(l * 32767.0f);
-  buf->samples[frame_index * AUDIO_CHANNELS + 1] = (int16_t)(r * 32767.0f);
+  buf->samples[frame_index * AUDIO_CHANNELS + 0] = l;
+  buf->samples[frame_index * AUDIO_CHANNELS + 1] = r;
 }
 
 /* ── ToneGenerator ────────────────────────────────────────────────────────

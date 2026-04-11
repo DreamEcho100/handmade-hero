@@ -1,111 +1,53 @@
 #!/bin/bash
-# ─────────────────────────────────────────────────────────────────────────────
-# build-dev.sh — Platform Foundation Course
-#
-# Usage:
-#   ./build-dev.sh [--backend=x11|raylib] [-r|--run] [-d|--debug]
-#
-# Options:
-#   --backend=x11      Build with X11/GLX + ALSA backend (Linux)
-#   --backend=raylib   Build with Raylib backend (default)
-#   -r, --run          Run the binary after a successful build
-#   -d, --debug        Enable debug flags: -O0 -g -DDEBUG -fsanitize=address,undefined
-#
-# Output: ./build/game
-#
-# ─────────────────────────────────────────────────────────────────────────────
-# LESSON 01 — SOURCES variable, --backend flag, -r/-d flags introduced here.
-# ─────────────────────────────────────────────────────────────────────────────
+# LESSON 01 -- Build script. Only supports --backend=raylib at this stage.
+# L02 adds the x11 backend case.
+# SOURCES grows as new .c files are introduced in later lessons.
 set -e
 mkdir -p build
 
 BACKEND="raylib"
 RUN_AFTER_BUILD=false
-DEBUG=false
+DEBUG=true
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --backend=*)
-            BACKEND="${1#*=}"
-        ;;
-        -r|--run)
-            RUN_AFTER_BUILD=true
-        ;;
-        -d|--debug)
-            DEBUG=true
-        ;;
-        --help|-h)
-            echo "Usage: $0 [--backend=x11|raylib] [-r|--run] [-d|--debug]"
-            exit 0
-        ;;
-        *)
-            echo "Unknown option: $1" >&2
-            exit 1
-        ;;
+        --backend=*) BACKEND="${1#*=}" ;;
+        -r|--run)    RUN_AFTER_BUILD=true ;;
+        *) echo "Unknown: $1" >&2; exit 1 ;;
     esac
     shift
 done
 
-# ── Common source files ────────────────────────────────────────────────────
-# SOURCES lists every file shared by both backends.
-# Platform-specific files are appended below in the backend case.
-#
-# NOTE: game/demo.c and game/audio_demo.c are course demo files only.
-# When a game course copies this template, replace them with:
-#   game/main.c   (game_init, game_update, game_render)
-#   game/audio.c  (game_get_audio_samples, game_audio_update, SOUND_DEFS)
-# SOURCES="src/utils/draw-shapes.c src/utils/draw-text.c src/game/demo.c src/game/audio_demo.c"
-SOURCES=""
+# Shared source files (both backends compile these).
+# Empty for now -- add each .c file as you create it in later lessons:
+#   L03: add src/game/demo.c
+#   L04: add src/utils/draw-shapes.c
+#   L06: add src/utils/draw-text.c
+SOURCES="src/game/demo.c src/utils/draw-shapes.c src/utils/draw-text.c src/utils/backbuffer.c"
 
-# ── Compiler flags ─────────────────────────────────────────────────────────
-BASE_FLAGS="-Wall -Wextra -DBACKEND=$BACKEND"
-
-if [[ "$DEBUG" == true ]]; then
-    FLAGS="$BASE_FLAGS -O0 -g -DDEBUG -fsanitize=address,undefined"
-    echo "🐛 Debug build (ASan + UBSan enabled)"
-else
-    FLAGS="$BASE_FLAGS -O2"
-fi
-
-# ── Backend-specific setup ─────────────────────────────────────────────────
-DETECTED_OS=""
-case "$(uname -s)" in
-    Linux*)               DETECTED_OS="linux" ;;
-    Darwin*)              DETECTED_OS="macos" ;;
-    MINGW*|MSYS*|CYGWIN*) DETECTED_OS="windows" ;;
-    *)                    DETECTED_OS="posix" ;;
-esac
+# Always build in debug mode during development.
+# -O0:      no optimization (accurate debugger line numbers)
+# -g:       include debug symbols
+# -DDEBUG:  define the DEBUG macro for debug-only code paths
+# -fsanitize=address,undefined: catch memory bugs and UB at runtime
+FLAGS="-Wall -Wextra -O0 -g -DDEBUG -fsanitize=address,undefined -DBACKEND=$BACKEND"
 
 case "$BACKEND" in
-    x11)
-        BACKEND_LIBS="-lm -lX11 -lxkbcommon -lasound -lGL -lGLX"
-        # SOURCES="$SOURCES src/platforms/x11/base.c src/platforms/x11/audio.c src/platforms/x11/main.c"
-        SOURCES="$SOURCES src/platforms/x11/base.c src/platforms/x11/main.c"
-    ;;
     raylib)
-        case "$DETECTED_OS" in
-            windows) BACKEND_LIBS="-lm -lraylib -lpthread -ldl" ;;
-            macos)   BACKEND_LIBS="-lm -lraylib -lpthread -framework Cocoa -framework IOKit" ;;
-            *)       BACKEND_LIBS="-lm -lraylib -lpthread -ldl" ;;
-        esac
+        BACKEND_LIBS="-lm -lraylib -lpthread -ldl"
         SOURCES="$SOURCES src/platforms/raylib/main.c"
     ;;
+    x11)
+        BACKEND_LIBS="-lm -lX11 -lxkbcommon -lGL -lGLX"
+        SOURCES="$SOURCES src/platforms/x11/base.c src/platforms/x11/main.c"
+    ;;
     *)
-        echo "Error: Unknown backend '$BACKEND'" >&2
-        echo "Available: x11, raylib" >&2
+        echo "Unknown backend '$BACKEND'. Supported: raylib, x11" >&2
         exit 1
     ;;
 esac
 
-BINARY="./build/game"
-INCLUDE_FLAGS="-Isrc"
+clang $FLAGS -Isrc -o ./build/game $SOURCES $BACKEND_LIBS
+echo "Build complete: ./build/game (backend=$BACKEND)"
 
-echo "Building platform-backend course (backend=$BACKEND)..."
-clang $FLAGS $INCLUDE_FLAGS -o "$BINARY" $SOURCES $BACKEND_LIBS
-echo "✓ Build complete: $BINARY"
-
-if [[ "$RUN_AFTER_BUILD" == true ]]; then
-    echo ""
-    echo "═══ Running ═══"
-    exec "$BINARY"
-fi
+if [[ "$RUN_AFTER_BUILD" == true ]]; then exec ./build/game; fi

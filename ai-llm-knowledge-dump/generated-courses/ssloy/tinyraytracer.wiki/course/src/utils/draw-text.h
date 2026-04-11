@@ -2,7 +2,7 @@
 #define UTILS_DRAW_TEXT_H
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * utils/draw-text.h — Platform Foundation Course
+ * utils/draw-text.h — TinyRaytracer Course
  * ═══════════════════════════════════════════════════════════════════════════
  *
  * LESSON 06 — FONT_8X8[128][8] bitmap font, LSB-first mask (1 << col),
@@ -23,8 +23,11 @@
  * IMPORTANT: Do NOT use (0x80 >> col).  That assumes BIT7-left encoding and
  * will mirror every glyph horizontally.
  *
- * GLYPH_W / GLYPH_H are the base glyph dimensions.
+ * GLYPH_W / GLYPH_H are the base glyph dimensions in pixels.
  * Pass scale > 1 to draw_char/draw_text to enlarge each glyph pixel.
+ *
+ * Like draw_rect, these functions take pixel coordinates as floats.
+ * Coordinate conversion (game units → pixels) happens at the call site.
  * ═══════════════════════════════════════════════════════════════════════════
  */
 
@@ -38,14 +41,21 @@
  * Exported so game courses can extend it (e.g., custom tile glyphs).      */
 extern const uint8_t FONT_8X8[128][8];
 
-/* draw_char — render a single ASCII character at pixel (x, y).
- * scale=1 → 8×8 pixels; scale=2 → 16×16 pixels, etc.
- * Non-printable or out-of-range c is rendered as a space. */
-void draw_char(Backbuffer *bb, int x, int y, int scale, char c, uint32_t color);
+/* draw_char — render a single ASCII character.
+ * x, y: position in pixel space (float for sub-pixel precision)
+ * scale: pixel multiplier (1 → 8×8, 2 → 16×16, etc.)
+ * r, g, b, a: color channels [0.0–1.0], alpha blending handled automatically.
+ * Non-printable or out-of-range c is rendered as '?'. */
+void draw_char(Backbuffer *backbuffer, float x, float y, int scale, char c,
+               float r, float g, float b, float a);
 
-/* draw_text — render a null-terminated string starting at (x, y).
- * Characters advance by GLYPH_W * scale horizontally.
+/* draw_text — render a null-terminated string.
+ * x, y: starting position in pixel space (float)
+ * scale: pixel multiplier for glyph size
+ * r, g, b, a: color channels [0.0–1.0]
+ * Characters advance by GLYPH_W * scale pixels horizontally.
  * Newline ('\n') is supported: y advances by GLYPH_H * scale, x resets. */
-void draw_text(Backbuffer *bb, int x, int y, int scale, const char *text, uint32_t color);
+void draw_text(Backbuffer *backbuffer, float x, float y, int scale,
+               const char *text, float r, float g, float b, float a);
 
 #endif /* UTILS_DRAW_TEXT_H */

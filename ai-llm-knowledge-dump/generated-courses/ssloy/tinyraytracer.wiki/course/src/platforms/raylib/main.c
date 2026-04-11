@@ -309,10 +309,10 @@ static void rl_gpu_render(float elapsed_time, float mouse_x, float mouse_y,
   /* Set camera uniforms from CPU orbit camera state. */
   if (cam) {
     CameraBasis cb = camera_compute_basis(cam, (int)w, (int)h);
-    float origin[3]  = { cb.origin.x,  cb.origin.y,  cb.origin.z };
-    float forward[3] = { cb.forward.x, cb.forward.y, cb.forward.z };
-    float right[3]   = { cb.right.x,   cb.right.y,   cb.right.z };
-    float up[3]      = { cb.up.x,      cb.up.y,      cb.up.z };
+    float origin[3]  = { cb.cam_pos.x,     cb.cam_pos.y,     cb.cam_pos.z };
+    float forward[3] = { cb.cam_forward.x, cb.cam_forward.y, cb.cam_forward.z };
+    float right[3]   = { cb.cam_right.x,   cb.cam_right.y,   cb.cam_right.z };
+    float up[3]      = { cb.cam_up.x,      cb.cam_up.y,      cb.cam_up.z };
     float fov_val    = cam->fov;
     SetShaderValue(g_rl_gpu.shader, g_rl_gpu.u_cam_origin,  origin,  SHADER_UNIFORM_VEC3);
     SetShaderValue(g_rl_gpu.shader, g_rl_gpu.u_cam_forward, forward, SHADER_UNIFORM_VEC3);
@@ -388,22 +388,20 @@ int main(void) {
   if (!IsWindowReady()) { fprintf(stderr, "InitWindow failed\n"); return 1; }
   SetWindowState(FLAG_WINDOW_RESIZABLE);
 
-  Backbuffer bb = {
-    .width = GAME_W, .height = GAME_H,
-    .bytes_per_pixel = 4, .pitch = GAME_W * 4,
-  };
-  bb.pixels = (uint32_t *)malloc((size_t)(GAME_W * GAME_H) * 4);
-  if (!bb.pixels) { CloseWindow(); return 1; }
-  memset(bb.pixels, 0, (size_t)(GAME_W * GAME_H) * 4);
+  /* ── Platform props (backbuffer + audio buffer + arenas) ─────────────── */
+  PlatformGameProps props = {0};
+  if (platform_game_props_init(&props) != 0) {
+    CloseWindow(); return 1;
+  }
 
   Image img = {
-    .data = bb.pixels, .width = GAME_W, .height = GAME_H,
+    .data = props.backbuffer.pixels, .width = GAME_W, .height = GAME_H,
     .mipmaps = 1, .format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8,
   };
   g_texture = LoadTextureFromImage(img);
   SetTextureFilter(g_texture, TEXTURE_FILTER_POINT);
   if (!IsTextureValid(g_texture)) {
-    free(bb.pixels); CloseWindow(); return 1;
+    platform_game_props_free(&props); CloseWindow(); return 1;
   }
 
   RaytracerState state;
@@ -489,22 +487,22 @@ int main(void) {
     float dt = GetFrameTime();
     elapsed_time += dt;
     game_update(&state, curr_input, dt);
-    game_render(&state, &bb);
+    game_render(&state, &props.backbuffer, props.world_config);
 
     /* Display: GPU mode renders via shader, then overlays HUD.
      * CPU modes blit the backbuffer as before. */
     if (state.settings.render_mode == RENDER_GPU && g_rl_gpu.ready) {
       rl_gpu_render(elapsed_time, curr_input->mouse.x, curr_input->mouse.y,
                     &state.camera, &state.scene, &state.settings);
-      rl_gpu_overlay_hud(&bb);
+      rl_gpu_overlay_hud(&props.backbuffer);
     } else {
-      display_backbuffer(&bb);
+      display_backbuffer(&props.backbuffer);
     }
   }
 
   rl_gpu_shutdown();
   if (IsTextureValid(g_texture)) UnloadTexture(g_texture);
-  free(bb.pixels);
+  platform_game_props_free(&props);
   CloseWindow();
   return 0;
 }

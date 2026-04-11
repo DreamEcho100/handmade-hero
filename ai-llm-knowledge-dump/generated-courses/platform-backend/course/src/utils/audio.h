@@ -33,8 +33,10 @@
  *
  * audio_write_sample helper
  * ──────────────────────────
- * LESSON 09 — Wraps the int16_t conversion in one place.  When a future
- * course upgrades to float PCM, only this helper changes.
+ * LESSON 16 — Upgraded to float32 PCM output.  The buffer holds float
+ * samples directly; no int16_t scaling or clamping is needed.  All
+ * synthesis already worked in float — this removes the last conversion at
+ * the write boundary.  Raylib: bitsPerSample=32.  ALSA: FLOAT_LE format.
  *
  * ═══════════════════════════════════════════════════════════════════════════
  */
@@ -43,44 +45,127 @@
 #include <string.h>   /* memset */
 
 /* ── PCM constants ────────────────────────────────────────────────────────
- * LESSON 09 — Why 44100 Hz and 16-bit signed (CD quality, widest compat).  */
-#define AUDIO_SAMPLE_RATE     44100
+ * LESSON 13 — 48000 Hz, stereo (matches engine default).                  */
+#define AUDIO_SAMPLE_RATE     48000
 #define AUDIO_CHANNELS        2
-#define AUDIO_BYTES_PER_FRAME (AUDIO_CHANNELS * sizeof(int16_t))
 
-/* LESSON 11/12 — Chunk size for stream-fill loop.
- * 4096 frames ≈ 93 ms at 44100 Hz.  Matches Raylib's
- * SetAudioStreamBufferSizeDefault(4096).                                   */
+/* LESSON 15/16 — Chunk size for stream-fill loop.
+ * 4096 frames ≈ 85 ms at 48000 Hz.                                        */
 #define AUDIO_CHUNK_SIZE      4096
 
-/* ── AudioOutputBuffer ────────────────────────────────────────────────────
- * LESSON 09 — Flat int16_t array in interleaved stereo format:
- *   [L0, R0, L1, R1, L2, R2, ...]
- * Each pair (Li, Ri) is one "sample frame".
- * `sample_count` is the max frames the buffer can hold.
- * `max_sample_count` is a safety cap: never write more than this.         */
+/* ── AudioSampleFormat ───────────────────────────────────────────────────
+ * LESSON 13 — The backend decides the PCM format based on what the
+ * hardware API expects. The game never needs to know — it mixes in float
+ * and calls audio_write_sample() / audio_read_sample() which handle
+ * conversion for any format.
+ *
+ * Engine equivalent: AudioSampleFormat in engine/game/audio.h              */
+typedef enum {
+  AUDIO_FORMAT_I16 = 0,   /* 16-bit signed — ALSA S16_LE                  */
+  AUDIO_FORMAT_I32,       /* 32-bit signed — professional interfaces       */
+  AUDIO_FORMAT_F32,       /* 32-bit float  — Raylib/miniaudio, CoreAudio   */
+  AUDIO_FORMAT_F64,       /* 64-bit float  — DAWs, offline rendering       */
+} AudioSampleFormat;
+
+/* Bytes per stereo frame for a given format.                               */
+static inline int audio_format_bytes_per_sample(AudioSampleFormat fmt) {
+  switch (fmt) {
+  case AUDIO_FORMAT_I16: return (int)(sizeof(int16_t) * 2);
+  case AUDIO_FORMAT_I32: return (int)(sizeof(int32_t) * 2);
+  case AUDIO_FORMAT_F32: return (int)(sizeof(float) * 2);
+  case AUDIO_FORMAT_F64: return (int)(sizeof(double) * 2);
+  }
+  return (int)(sizeof(int16_t) * 2); /* safe default */
+}
+
+/* ── AudioOutputBuffer ───────────────────────────────────────────────────
+ * LESSON 13 — The shared contract between the platform layer and game.
+ * Flat interleaved stereo: [L0, R0, L1, R1, L2, R2, ...]
+ *
+ * The `format` field is set by the backend at init. Game code writes via
+ * audio_write_sample() and reads via audio_read_sample() — never casts
+ * samples_buffer directly.
+ *
+ * Engine equivalent: GameAudioOutputBuffer in engine/game/audio.h          */
 typedef struct {
-  int16_t *samples;         /* Allocated by platform on startup.           */
-  int      sample_count;    /* Frames allocated (capacity).                */
-  int      max_sample_count;/* Safety cap; set = sample_count on init.     */
+  int   samples_per_second;  /* Sample rate (e.g., 48000) — set at init   */
+  int   sample_count;        /* Frames to generate THIS call              */
+  int   max_sample_count;    /* Buffer capacity — never exceed this       */
+  void *samples_buffer;      /* Opaque PCM buffer — format described below*/
+  AudioSampleFormat format;  /* Set by backend; use write/read helpers    */
+  int   is_initialized;      /* Backend sets true after init              */
 } AudioOutputBuffer;
 
-/* LESSON 09 — Format-agnostic write helper.
- * Converts float L/R values in [-1.0, +1.0] to int16_t and writes the
- * interleaved pair at frame `frame_index`.
+/* ── audio_write_sample ──────────────────────────────────────────────────
+ * LESSON 13 — Write one normalised stereo frame (-1.0 to 1.0) into the
+ * buffer. Clamps and converts to whatever format the backend set.
+ * The game always mixes in float — conversion happens here at the
+ * platform boundary.
  *
- * Wrapping the conversion here means: if we ever switch to float32 PCM,
- * only this function changes — not every synthesis loop.                   */
+ * Engine equivalent: audio_write_sample() in engine/game/audio-helpers.h   */
 static inline void audio_write_sample(AudioOutputBuffer *buf,
                                       int frame_index,
                                       float l, float r) {
-  /* Clamp to [-1, 1] then scale. */
-  if (l >  1.0f) l =  1.0f;
-  if (l < -1.0f) l = -1.0f;
-  if (r >  1.0f) r =  1.0f;
-  if (r < -1.0f) r = -1.0f;
-  buf->samples[frame_index * AUDIO_CHANNELS + 0] = (int16_t)(l * 32767.0f);
-  buf->samples[frame_index * AUDIO_CHANNELS + 1] = (int16_t)(r * 32767.0f);
+  /* Clamp to normalised range */
+  if (l > 1.0f) l = 1.0f; if (l < -1.0f) l = -1.0f;
+  if (r > 1.0f) r = 1.0f; if (r < -1.0f) r = -1.0f;
+  int base = frame_index * 2;
+  switch (buf->format) {
+  case AUDIO_FORMAT_I16: {
+    int16_t *s = (int16_t *)buf->samples_buffer;
+    s[base] = (int16_t)(l * 32767.0f);
+    s[base + 1] = (int16_t)(r * 32767.0f);
+  } break;
+  case AUDIO_FORMAT_I32: {
+    int32_t *s = (int32_t *)buf->samples_buffer;
+    s[base] = (int32_t)(l * 2147483647.0f);
+    s[base + 1] = (int32_t)(r * 2147483647.0f);
+  } break;
+  case AUDIO_FORMAT_F32: {
+    float *s = (float *)buf->samples_buffer;
+    s[base] = l;
+    s[base + 1] = r;
+  } break;
+  case AUDIO_FORMAT_F64: {
+    double *s = (double *)buf->samples_buffer;
+    s[base] = (double)l;
+    s[base + 1] = (double)r;
+  } break;
+  }
+}
+
+/* ── audio_read_sample ───────────────────────────────────────────────────
+ * LESSON 13 — Read one stereo frame back as normalised float.
+ * Used by the mixer to preserve existing buffer contents when
+ * accumulating loaded sounds on top of synthesis.
+ *
+ * Engine equivalent: audio_read_sample() in engine/game/audio-helpers.h    */
+static inline void audio_read_sample(AudioOutputBuffer *buf,
+                                     int frame_index,
+                                     float *out_l, float *out_r) {
+  int base = frame_index * 2;
+  switch (buf->format) {
+  case AUDIO_FORMAT_I16: {
+    int16_t *s = (int16_t *)buf->samples_buffer;
+    *out_l = (float)s[base] / 32767.0f;
+    *out_r = (float)s[base + 1] / 32767.0f;
+  } break;
+  case AUDIO_FORMAT_I32: {
+    int32_t *s = (int32_t *)buf->samples_buffer;
+    *out_l = (float)((double)s[base] / 2147483647.0);
+    *out_r = (float)((double)s[base + 1] / 2147483647.0);
+  } break;
+  case AUDIO_FORMAT_F32: {
+    float *s = (float *)buf->samples_buffer;
+    *out_l = s[base];
+    *out_r = s[base + 1];
+  } break;
+  case AUDIO_FORMAT_F64: {
+    double *s = (double *)buf->samples_buffer;
+    *out_l = (float)s[base];
+    *out_r = (float)s[base + 1];
+  } break;
+  }
 }
 
 /* ── ToneGenerator ────────────────────────────────────────────────────────

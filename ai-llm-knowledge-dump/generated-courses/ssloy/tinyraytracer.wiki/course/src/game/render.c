@@ -109,15 +109,18 @@ int camera_update(RtCamera *cam, const void *input_ptr, float delta_time) {
 
 /* ── Pre-compute camera basis ONCE per frame ──────────────────────────── */
 CameraBasis camera_compute_basis(const RtCamera *cam, int width, int height) {
-  CameraBasis b;
-  b.origin = cam->position;
-  b.forward = vec3_normalize(vec3_sub(cam->target, cam->position));
-  Vec3 world_up = vec3_make(0.0f, 1.0f, 0.0f);
-  b.right = vec3_normalize(vec3_cross(b.forward, world_up));
-  b.up = vec3_cross(b.right, b.forward);
-  b.half_fov = tanf(cam->fov / 2.0f);
-  b.aspect = (float)width / (float)height;
-  return b;
+  GameCamera3D cfg;
+  cfg.cam_pos    = cam->position;
+  cfg.cam_target = cam->target;
+  cfg.cam_up     = vec3_make(0.0f, 1.0f, 0.0f);
+  cfg.fov        = cam->fov;
+  cfg.near_plane = 0.001f;
+  cfg.far_plane  = 1000.0f;
+  /* make_render_context_3d needs a Backbuffer for aspect + px_w/px_h. */
+  Backbuffer fake_bb = {0};
+  fake_bb.width  = width;
+  fake_bb.height = height;
+  return make_render_context_3d(&fake_bb, cfg);
 }
 
 /* ── Sub-pixel ray trace (accepts float offsets for AA jitter) ────────── */
@@ -125,14 +128,14 @@ static inline Vec3 trace_subpixel(float fpx, float fpy, int width, int height,
                                   const CameraBasis *basis, const Scene *scene,
                                   const RenderSettings *settings) {
   float x =
-      (2.0f * fpx / (float)width - 1.0f) * basis->half_fov * basis->aspect;
-  float y = -(2.0f * fpy / (float)height - 1.0f) * basis->half_fov;
+      (2.0f * fpx / (float)width - 1.0f) * basis->half_fov_tan * basis->aspect;
+  float y = -(2.0f * fpy / (float)height - 1.0f) * basis->half_fov_tan;
 
   Vec3 dir = vec3_normalize(
-      vec3_add(vec3_add(vec3_scale(basis->right, x), vec3_scale(basis->up, y)),
-               basis->forward));
+      vec3_add(vec3_add(vec3_scale(basis->cam_right, x), vec3_scale(basis->cam_up, y)),
+               basis->cam_forward));
 
-  RtRay ray = {.origin = basis->origin, .direction = dir};
+  RtRay ray = {.origin = basis->cam_pos, .direction = dir};
   return cast_ray(ray, scene, 0, settings);
 }
 

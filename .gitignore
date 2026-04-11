@@ -33,6 +33,8 @@ day002_raylib
 #
 _ignore/**
 */**/_ignore
+__pycache__
 
 # 
 test-game-in-raylib
+md-viewer

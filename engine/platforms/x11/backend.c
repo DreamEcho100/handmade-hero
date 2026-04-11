@@ -21,6 +21,7 @@
 #include <X11/X.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
+#include <X11/XKBlib.h>
 #include <X11/extensions/Xrandr.h>
 #include <linux/joystick.h>
 #include <stdbool.h>
@@ -321,6 +322,25 @@ de100_file_scoped_fn inline int x11_init(EngineState *engine) {
   if (!x11->display) {
     fprintf(stderr, "❌ Cannot connect to X server\n");
     return 1;
+  }
+
+  // Suppress X11 auto-repeat synthetic KeyRelease/KeyPress pairs.
+  // Without this, holding a key generates fake release+press events ~30Hz,
+  // causing half_transition_count to increment every cycle (not just on
+  // initial press). With this, X11 behaves like Windows: only real physical
+  // press/release events are delivered.
+  // NOTE: This only affects action input (game buttons). Text input via
+  // XLookupString/XIM is a separate path that still receives repeat events.
+  {
+    Bool xkb_ok;
+    XkbSetDetectableAutoRepeat(x11->display, True, &xkb_ok);
+    if (xkb_ok) {
+      printf("[X11] Auto-repeat suppression enabled\n");
+    } else {
+      fprintf(stderr,
+              "[X11] Warning: XkbSetDetectableAutoRepeat failed — held keys "
+              "may fire half_transition_count repeatedly\n");
+    }
   }
 
   x11->screen = DefaultScreen(x11->display);

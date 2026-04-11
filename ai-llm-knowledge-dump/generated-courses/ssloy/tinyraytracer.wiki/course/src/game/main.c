@@ -6,18 +6,19 @@
  */
 
 #include "main.h"
-#include "render.h"
-#include "ppm.h"
-#include "stereo.h"
-#include "stereogram.h"
-#include "shader_glsl.h"
+#include "../platform.h"
 #include "../utils/draw-shapes.h"
 #include "../utils/draw-text.h"
-#include "../platform.h"
+#include "../utils/render.h"
+#include "ppm.h"
+#include "render.h"
+#include "shader_glsl.h"
+#include "stereo.h"
+#include "stereogram.h"
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
-#include <unistd.h>  /* sysconf for thread count */
+#include <unistd.h> /* sysconf for thread count */
 
 /* -- High-resolution timer ------------------------------------------------- */
 static double get_time_sec(void) {
@@ -28,8 +29,10 @@ static double get_time_sec(void) {
 
 static int get_thread_count(void) {
   long n = sysconf(_SC_NPROCESSORS_ONLN);
-  if (n < 1) n = 1;
-  if (n > 32) n = 32;
+  if (n < 1)
+    n = 1;
+  if (n > 32)
+    n = 32;
   return (int)n;
 }
 
@@ -38,10 +41,10 @@ void game_init(RaytracerState *state) {
   scene_init(&state->scene);
   camera_init(&state->camera);
   render_settings_init(&state->settings);
-  state->active_scale  = state->settings.render_scale;
-  state->fps_smoothed  = 30.0f;
-  state->thread_count  = get_thread_count();
-  state->show_hud      = 1;
+  state->active_scale = state->settings.render_scale;
+  state->fps_smoothed = 30.0f;
+  state->thread_count = get_thread_count();
+  state->show_hud = 1;
 }
 
 void game_update(RaytracerState *state, GameInput *input, float delta_time) {
@@ -53,7 +56,8 @@ void game_update(RaytracerState *state, GameInput *input, float delta_time) {
   if (cam_moved) {
     state->still_frames = 0;
   } else {
-    if (state->still_frames < 1000) state->still_frames++;
+    if (state->still_frames < 1000)
+      state->still_frames++;
   }
 
   /* Feature toggles */
@@ -124,14 +128,19 @@ void game_update(RaytracerState *state, GameInput *input, float delta_time) {
 /* -- Mode label strings ---------------------------------------------------- */
 static const char *render_mode_label(RenderMode m) {
   switch (m) {
-  case RENDER_CPU_BASIC: return "[CPU-BASIC]";
-  case RENDER_CPU_OPT:   return "[CPU-OPT]";
-  case RENDER_GPU:        return "[GPU]";
-  default:                return "[???]";
+  case RENDER_CPU_BASIC:
+    return "[CPU-BASIC]";
+  case RENDER_CPU_OPT:
+    return "[CPU-OPT]";
+  case RENDER_GPU:
+    return "[GPU]";
+  default:
+    return "[???]";
   }
 }
 
-void game_render(RaytracerState *state, Backbuffer *bb) {
+void game_render(RaytracerState *state, Backbuffer *bb,
+                 GameWorldConfig world_config) {
   RenderMode mode = state->settings.render_mode;
 
   /* Build per-frame settings:
@@ -165,7 +174,7 @@ void game_render(RaytracerState *state, Backbuffer *bb) {
       float target_ms = 33.3f;
       float sleep_ms = target_ms - work_ms;
       if (sleep_ms > 1.0f) {
-        struct timespec ts = { 0, (long)(sleep_ms * 1e6f) };
+        struct timespec ts = {0, (long)(sleep_ms * 1e6f)};
         nanosleep(&ts, NULL);
       }
     }
@@ -180,28 +189,45 @@ void game_render(RaytracerState *state, Backbuffer *bb) {
   }
 
   state->frame_time_ms = render_ms;
-  state->ray_count_k   = rays_k;
+  state->ray_count_k = rays_k;
 
   /* Exponential moving average for smooth FPS display. */
   float instant_fps = (render_ms > 0.1f) ? (1000.0f / render_ms) : 999.0f;
-  if (mode == RENDER_GPU) instant_fps = 60.0f; /* placeholder until platform sets it */
+  if (mode == RENDER_GPU)
+    instant_fps = 60.0f; /* placeholder until platform sets it */
   state->fps_smoothed = state->fps_smoothed * 0.9f + instant_fps * 0.1f;
 
   /* Derived metrics. */
-  state->rays_per_sec_m = (render_ms > 0.1f)
-      ? ((float)rays_k * 1000.0f) / (render_ms * 1000.0f)
-      : 0.0f;
+  state->rays_per_sec_m =
+      (render_ms > 0.1f) ? ((float)rays_k * 1000.0f) / (render_ms * 1000.0f)
+                         : 0.0f;
   float target_budget = (mode == RENDER_CPU_OPT) ? 33.3f : 16.67f;
   state->cpu_util_pct = (target_budget > 0.1f && render_ms > 0.0f)
-      ? (render_ms / target_budget) * 100.0f
-      : 0.0f;
+                            ? (render_ms / target_budget) * 100.0f
+                            : 0.0f;
 
   /* -- HUD overlay --------------------------------------------------------- */
   if (state->show_hud) {
-    draw_rect_blend(bb, 4, 4, 580, 104, GAME_RGBA(0, 0, 0, 180));
+    /* HUD context: inherit coord origin from platform's world_config,
+     * strip camera pan/zoom so HUD stays fixed on screen at full scale.
+     * HUD uses BOTTOM_LEFT (same as game world): y=0 is screen bottom,
+     * y=GAME_UNITS_H is screen top.  HUD_TOP_Y(offset) converts an
+     * "offset from the top edge" into the correct world-y coordinate. */
+    GameWorldConfig hud_cfg = world_config; /* inherit origin from platform */
+    hud_cfg.camera_x = 0.0f;
+    hud_cfg.camera_y = 0.0f;
+    hud_cfg.camera_zoom = 1.0f;
+    RenderContext ctx = make_render_context(bb, hud_cfg);
+
+    /* Background rect: 0.08 margin from top, 2.08 units tall. */
+    draw_rect(bb, world_rect_px_x(&ctx, 0.08f, 11.6f),
+              world_rect_px_y(&ctx, HUD_TOP_Y(0.08f + 2.08f), 2.08f),
+              world_w(&ctx, 11.6f), world_h(&ctx, 2.08f), 0.0f, 0.0f, 0.0f,
+              0.706f);
 
     int s = state->active_scale;
-    if (s < 1) s = 1;
+    if (s < 1)
+      s = 1;
     int rw = bb->width / s;
     int rh = bb->height / s;
     int aa = frame_settings.aa_samples;
@@ -209,95 +235,103 @@ void game_render(RaytracerState *state, Backbuffer *bb) {
     /* Line 1: Mode + metrics */
     char l1[160];
     if (mode == RENDER_GPU) {
-      snprintf(l1, sizeof(l1),
-        "%s %.0f fps | GPU | compile:%.0fms",
-        render_mode_label(mode), state->fps_smoothed, state->gpu_compile_ms);
+      snprintf(l1, sizeof(l1), "%s %.0f fps | GPU | compile:%.0fms",
+               render_mode_label(mode), state->fps_smoothed,
+               state->gpu_compile_ms);
     } else {
       snprintf(l1, sizeof(l1),
-        "%s %.1f fps | %.1f ms | %dK rays | %.1fM r/s | cpu:%d%% %s",
-        render_mode_label(mode),
-        state->fps_smoothed, state->frame_time_ms,
-        state->ray_count_k, state->rays_per_sec_m,
-        (int)state->cpu_util_pct,
-        state->still_frames < 3 ? "[moving]" : "");
+               "%s %.1f fps | %.1f ms | %dK rays | %.1fM r/s | cpu:%d%% %s",
+               render_mode_label(mode), state->fps_smoothed,
+               state->frame_time_ms, state->ray_count_k, state->rays_per_sec_m,
+               (int)state->cpu_util_pct,
+               state->still_frames < 3 ? "[moving]" : "");
     }
-    draw_text(bb, 8, 8, 1, l1,
-      state->fps_smoothed >= 30.0f ? COLOR_GREEN :
-      state->fps_smoothed >= 15.0f ? COLOR_YELLOW : COLOR_RED);
+    draw_text(bb, world_x(&ctx, 0.16f), world_y(&ctx, HUD_TOP_Y(0.16f)), 1, l1,
+              state->fps_smoothed >= 30.0f   ? COLOR_GREEN
+              : state->fps_smoothed >= 15.0f ? COLOR_YELLOW
+                                             : COLOR_RED);
 
     /* Line 2: Feature toggles + envmap mode */
     char l2[160];
     {
       const char *envmap_mode_str =
-        state->scene.envmap.mode == ENVMAP_CUBEMAP  ? "cube" :
-        state->scene.envmap.mode == ENVMAP_EQUIRECT ? "eq" : "sky";
+          state->scene.envmap.mode == ENVMAP_CUBEMAP    ? "cube"
+          : state->scene.envmap.mode == ENVMAP_EQUIRECT ? "eq"
+                                                        : "sky";
       snprintf(l2, sizeof(l2),
-        "V:%s F:%s B:%s M:%s R:%s T:%s H:%s E:%s X:%s C:%s",
-        state->settings.show_voxels      ? "on" : "--",
-        state->settings.show_floor       ? "on" : "--",
-        state->settings.show_boxes       ? "on" : "--",
-        state->settings.show_meshes      ? "on" : "--",
-        state->settings.show_reflections ? "on" : "--",
-        state->settings.show_refractions ? "on" : "--",
-        state->settings.show_shadows     ? "on" : "--",
-        state->settings.show_envmap      ? "on" : "--",
-        state->settings.aa_samples >= 4  ? "AA" : "--",
-        envmap_mode_str);
+               "V:%s F:%s B:%s M:%s R:%s T:%s H:%s E:%s X:%s C:%s",
+               state->settings.show_voxels ? "on" : "--",
+               state->settings.show_floor ? "on" : "--",
+               state->settings.show_boxes ? "on" : "--",
+               state->settings.show_meshes ? "on" : "--",
+               state->settings.show_reflections ? "on" : "--",
+               state->settings.show_refractions ? "on" : "--",
+               state->settings.show_shadows ? "on" : "--",
+               state->settings.show_envmap ? "on" : "--",
+               state->settings.aa_samples >= 4 ? "AA" : "--", envmap_mode_str);
     }
-    draw_text(bb, 8, 20, 1, l2, COLOR_GREEN);
+    draw_text(bb, world_x(&ctx, 0.16f), world_y(&ctx, HUD_TOP_Y(0.40f)), 1, l2,
+              COLOR_GREEN);
 
     /* Line 3: Camera + exports */
     char l3[128];
-    snprintf(l3, sizeof(l3),
-      "dist:%.1f yaw:%.0f pitch:%.0f | P:ppm G:sirds L:glsl",
-      state->camera.orbit_radius,
-      state->camera.yaw   * (180.0f / (float)M_PI),
-      state->camera.pitch  * (180.0f / (float)M_PI));
-    draw_text(bb, 8, 32, 1, l3, COLOR_YELLOW);
+    snprintf(
+        l3, sizeof(l3), "dist:%.1f yaw:%.0f pitch:%.0f | P:ppm G:sirds L:glsl",
+        state->camera.orbit_radius, state->camera.yaw * (180.0f / (float)M_PI),
+        state->camera.pitch * (180.0f / (float)M_PI));
+    draw_text(bb, world_x(&ctx, 0.16f), world_y(&ctx, HUD_TOP_Y(0.64f)), 1, l3,
+              COLOR_YELLOW);
 
     /* Line 4: Mode-specific details */
     char l4[160];
     switch (mode) {
     case RENDER_CPU_BASIC:
-      snprintf(l4, sizeof(l4),
-        "threads:%d | scale:%d (%dx%d block-fill) aa:%d | voxel:brute-force",
-        state->thread_count, s, rw, rh, aa);
+      snprintf(
+          l4, sizeof(l4),
+          "threads:%d | scale:%d (%dx%d block-fill) aa:%d | voxel:brute-force",
+          state->thread_count, s, rw, rh, aa);
       break;
     case RENDER_CPU_OPT:
       snprintf(l4, sizeof(l4),
-        "threads:%d | scale:%d (%dx%d bilinear) aa:%d | voxel:octant-BVH | cap:30fps",
-        state->thread_count, s, rw, rh, aa);
+               "threads:%d | scale:%d (%dx%d bilinear) aa:%d | "
+               "voxel:octant-BVH | cap:30fps",
+               state->thread_count, s, rw, rh, aa);
       break;
     case RENDER_GPU:
       snprintf(l4, sizeof(l4),
-        "GPU: %.40s | full scene: %dsph %dbox %dvox %dmesh",
-        state->gpu_renderer[0] ? state->gpu_renderer : "N/A",
-        state->scene.sphere_count, state->scene.box_count,
-        state->scene.voxel_model_count, state->scene.mesh_count);
+               "GPU: %.40s | full scene: %dsph %dbox %dvox %dmesh",
+               state->gpu_renderer[0] ? state->gpu_renderer : "N/A",
+               state->scene.sphere_count, state->scene.box_count,
+               state->scene.voxel_model_count, state->scene.mesh_count);
       break;
     default:
       l4[0] = '\0';
       break;
     }
-    draw_text(bb, 8, 44, 1, l4, GAME_RGBA(180, 180, 255, 255));
+    draw_text(bb, world_x(&ctx, 0.16f), world_y(&ctx, HUD_TOP_Y(0.88f)), 1, l4,
+              0.706f, 0.706f, 1.0f, 1.0f);
 
     /* Line 5: Controls */
     char l5[160];
-    snprintf(l5, sizeof(l5),
-      "Arrow/WASD:cam N:mode Tab:scale F1:hud Esc:quit");
-    draw_text(bb, 8, 56, 1, l5, COLOR_WHITE);
+    snprintf(l5, sizeof(l5), "Arrow/WASD:cam N:mode Tab:scale F1:hud Esc:quit");
+    draw_text(bb, world_x(&ctx, 0.16f), world_y(&ctx, HUD_TOP_Y(1.12f)), 1, l5,
+              COLOR_WHITE);
 
     /* Line 6: Controls (exports + toggles) */
     char l6[160];
-    snprintf(l6, sizeof(l6),
-      "V:vox F:flr B:box M:mesh R:refl T:refr H:shad E:env X:aa C:envmode");
-    draw_text(bb, 8, 68, 1, l6, COLOR_WHITE);
+    snprintf(
+        l6, sizeof(l6),
+        "V:vox F:flr B:box M:mesh R:refl T:refr H:shad E:env X:aa C:envmode");
+    draw_text(bb, world_x(&ctx, 0.16f), world_y(&ctx, HUD_TOP_Y(1.36f)), 1, l6,
+              COLOR_WHITE);
 
     /* Line 7: Mouse + export controls */
     char l7[160];
     snprintf(l7, sizeof(l7),
-      "Mouse: LMB=orbit RMB/MMB=pan Scroll=zoom | P:ppm Shift+A/S:stereo G:sirds Shift+L:glsl");
-    draw_text(bb, 8, 80, 1, l7, GAME_RGBA(180, 180, 180, 255));
+             "Mouse: LMB=orbit RMB/MMB=pan Scroll=zoom | P:ppm "
+             "Shift+A/S:stereo G:sirds Shift+L:glsl");
+    draw_text(bb, world_x(&ctx, 0.16f), world_y(&ctx, HUD_TOP_Y(1.60f)), 1, l7,
+              0.706f, 0.706f, 0.706f, 1.0f);
   }
 
   /* -- Exports ------------------------------------------------------------ */
@@ -306,27 +340,23 @@ void game_render(RaytracerState *state, Backbuffer *bb) {
     state->export_ppm_requested = 0;
   }
   if (state->export_anaglyph_requested) {
-    render_anaglyph(bb->width, bb->height,
-                    &state->scene, &state->camera, "anaglyph.ppm",
-                    &state->settings);
+    render_anaglyph(bb->width, bb->height, &state->scene, &state->camera,
+                    "anaglyph.ppm", &state->settings);
     state->export_anaglyph_requested = 0;
   }
   if (state->export_sidebyside_requested) {
-    render_side_by_side(bb->width, bb->height,
-                        &state->scene, &state->camera, "sidebyside.ppm",
-                        &state->settings);
+    render_side_by_side(bb->width, bb->height, &state->scene, &state->camera,
+                        "sidebyside.ppm", &state->settings);
     state->export_sidebyside_requested = 0;
   }
   if (state->export_stereogram_requested) {
-    render_autostereogram(bb->width, bb->height,
-                          &state->scene, &state->camera, "stereogram.ppm",
-                          &state->settings);
+    render_autostereogram(bb->width, bb->height, &state->scene, &state->camera,
+                          "stereogram.ppm", &state->settings);
     state->export_stereogram_requested = 0;
   }
   if (state->export_stereogram_cross_requested) {
-    render_autostereogram_crosseyed(bb->width, bb->height,
-                                    &state->scene, &state->camera,
-                                    "stereogram_cross.ppm",
+    render_autostereogram_crosseyed(bb->width, bb->height, &state->scene,
+                                    &state->camera, "stereogram_cross.ppm",
                                     &state->settings);
     state->export_stereogram_cross_requested = 0;
   }

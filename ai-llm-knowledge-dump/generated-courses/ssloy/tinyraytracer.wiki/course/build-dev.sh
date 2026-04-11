@@ -18,6 +18,7 @@ set -e
 mkdir -p build
 
 BACKEND="raylib"
+COORD_MODE="explicit"
 RUN_AFTER_BUILD=false
 DEBUG=false
 
@@ -25,6 +26,9 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --backend=*)
             BACKEND="${1#*=}"
+        ;;
+        --coord-mode=*)
+            COORD_MODE="${1#*=}"
         ;;
         -r|--run)
             RUN_AFTER_BUILD=true
@@ -49,10 +53,18 @@ done
 #   stb_image.h  → STB_IMAGE_IMPLEMENTATION in utils/stb_image_impl.c (X11 only;
 #                  Raylib links its own internal copy)
 #   fast_obj.h   → FAST_OBJ_IMPLEMENTATION  in mesh.c
-SOURCES="src/utils/draw-shapes.c src/utils/draw-text.c src/game/main.c src/game/intersect.c src/game/lighting.c src/game/raytracer.c src/game/render.c src/game/stereo.c src/game/stereogram.c src/game/voxel.c src/game/envmap.c src/game/mesh.c"
+SOURCES="src/utils/draw-shapes.c src/utils/draw-text.c src/utils/backbuffer.c src/game/main.c src/game/intersect.c src/game/lighting.c src/game/raytracer.c src/game/render.c src/game/stereo.c src/game/stereogram.c src/game/voxel.c src/game/envmap.c src/game/mesh.c"
+
+# ── Coord mode flag ────────────────────────────────────────────────────────
+case "$COORD_MODE" in
+    explicit) COORD_MODE_FLAG="-DRENDER_COORD_MODE=1" ;;
+    implicit) COORD_MODE_FLAG="-DRENDER_COORD_MODE=2" ;;
+    hybrid)   COORD_MODE_FLAG="-DRENDER_COORD_MODE=3" ;;
+    *) echo "Unknown coord-mode: $COORD_MODE"; exit 1 ;;
+esac
 
 # ── Compiler flags ─────────────────────────────────────────────────────────
-BASE_FLAGS="-Wall -Wextra -DBACKEND=$BACKEND"
+BASE_FLAGS="-Wall -Wextra -DBACKEND=$BACKEND $COORD_MODE_FLAG"
 
 if [[ "$DEBUG" == true ]]; then
     FLAGS="$BASE_FLAGS -O0 -g -DDEBUG -fsanitize=address,undefined"

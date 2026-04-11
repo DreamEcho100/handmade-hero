@@ -33,7 +33,9 @@ If you want to enhance the audio further in the future:
 
 When you're ready to integrate Tetris with the engine:
 
-```c:games/tetris/src/audio.c
+`:games/tetris/src/audio.c`
+
+```c
 // Before: Tetris-specific types in utils/audio.h
 // After: Use engine helpers + game-specific extensions
 

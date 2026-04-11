@@ -2,7 +2,7 @@
 #define UTILS_BACKBUFFER_H
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * utils/backbuffer.h — Platform Foundation Course
+ * utils/backbuffer.h — TinyRaytracer Course
  * ═══════════════════════════════════════════════════════════════════════════
  *
  * LESSON 03 — Backbuffer struct, pitch, GAME_RGB/RGBA macro, color constants.
@@ -38,6 +38,24 @@
  *
  * Both platforms use the SAME in-memory layout and the SAME upload format.
  * There is NO R↔B swap needed in this course.
+ *
+ * COORDINATE SYSTEM
+ * ─────────────────
+ * draw_rect() takes pixel coordinates as floats — it is a pure rasterizer
+ * that knows nothing about game units or coordinate systems.
+ *
+ * Game code defines a unit system (e.g., GAME_UNITS_W × GAME_UNITS_H) and
+ * computes a scale factor (units_to_pixels).  Conversion happens at the
+ * CALL SITE, like Handmade Hero's meters_to_pixels pattern:
+ *   draw_rect(backbuffer, x * u2p, y * u2p, w * u2p, h * u2p, r, g, b, a);
+ *
+ * COLOR MODEL
+ * ───────────
+ * All drawing functions accept float colors in [0.0–1.0] per channel (r,g,b,a).
+ * Alpha blending is handled automatically — no separate "blend" function needed.
+ *   a >= 1.0  → opaque fast path (direct pixel write)
+ *   a <= 0.0  → fully transparent (skip entirely)
+ *   otherwise → per-pixel alpha composite: out = src*a + dst*(1-a)
  * ═══════════════════════════════════════════════════════════════════════════
  */
 
@@ -52,29 +70,35 @@ typedef struct {
   int       bytes_per_pixel; /* 4 for RGBA8888.                              */
 } Backbuffer;
 
-/* GAME_RGBA — pack (r,g,b,a) into a uint32_t (0xAARRGGBB on little-endian).
+/* GAME_RGBA — pack (r,g,b,a) as uint8 values into a uint32_t (0xAARRGGBB).
  * In memory on little-endian: [R][G][B][A] at bytes [0][1][2][3].
- *
- * LESSON 03 — why the macro packs in this order, and why BOTH platforms
- * use GL_RGBA / PIXELFORMAT_UNCOMPRESSED_R8G8B8A8 with no extra swap. */
+ * Used internally by the rasterizer; game code should use float colors. */
 #define GAME_RGBA(r, g, b, a) \
   ( ((uint32_t)(a) << 24) | ((uint32_t)(b) << 16) | \
     ((uint32_t)(g) <<  8) |  (uint32_t)(r) )
 
 #define GAME_RGB(r, g, b) GAME_RGBA((r), (g), (b), 255)
 
-/* Named color constants — add more as needed for each game course. */
-#define COLOR_BLACK      GAME_RGB(  0,   0,   0)
-#define COLOR_WHITE      GAME_RGB(255, 255, 255)
-#define COLOR_RED        GAME_RGB(220,  50,  50)
-#define COLOR_GREEN      GAME_RGB( 50, 205,  50)
-#define COLOR_BLUE       GAME_RGB( 50,  50, 220)
-#define COLOR_YELLOW     GAME_RGB(255, 215,   0)
-#define COLOR_CYAN       GAME_RGB(  0, 220, 220)
-#define COLOR_MAGENTA    GAME_RGB(220,   0, 220)
-#define COLOR_ORANGE     GAME_RGB(255, 140,   0)
-#define COLOR_GRAY       GAME_RGB(128, 128, 128)
-#define COLOR_DARK_GRAY  GAME_RGB( 64,  64,  64)
-#define COLOR_BG         GAME_RGB( 20,  20,  30)  /* Default canvas background */
+/* ── Float color constants ────────────────────────────────────────────────
+ * Each macro expands to four float arguments: r, g, b, a  (all [0.0–1.0]).
+ * Usage:  draw_rect(backbuffer, 0, 0, width, height, COLOR_RED);
+ *
+ * This "multi-arg macro" pattern keeps the API signature clean (separate
+ * float params like Handmade Hero) while giving named colors for readability.
+ * ──────────────────────────────────────────────────────────────────────── */
+#define COLOR_BLACK      0.0f,   0.0f,   0.0f,   1.0f
+#define COLOR_WHITE      1.0f,   1.0f,   1.0f,   1.0f
+#define COLOR_RED        0.863f, 0.196f, 0.196f, 1.0f
+#define COLOR_GREEN      0.196f, 0.804f, 0.196f, 1.0f
+#define COLOR_BLUE       0.196f, 0.196f, 0.863f, 1.0f
+#define COLOR_YELLOW     1.0f,   0.843f, 0.0f,   1.0f
+#define COLOR_CYAN       0.0f,   0.863f, 0.863f, 1.0f
+#define COLOR_MAGENTA    0.863f, 0.0f,   0.863f, 1.0f
+#define COLOR_ORANGE     1.0f,   0.549f, 0.0f,   1.0f
+#define COLOR_GRAY       0.502f, 0.502f, 0.502f, 1.0f
+#define COLOR_DARK_GRAY  0.251f, 0.251f, 0.251f, 1.0f
+#define COLOR_BG         0.078f, 0.078f, 0.118f, 1.0f
+
+int backbuffer_resize(Backbuffer *backbuffer, int new_width, int new_height);
 
 #endif /* UTILS_BACKBUFFER_H */

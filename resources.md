@@ -19,17 +19,19 @@
 
 - [Understandable RayTracing in 256 lines of bare C++](https://github.com/ssloy/tinyraytracer/wiki)
 
-## YouTube Playlists
+## YouTube
 
-- [Beginner C Videos By - Jacob Sorber _(@JacobSorber)_](https://www.youtube.com/playlist?list=PL9IEJIKnBJjG5H0ylFAzpzs9gSmW_eICB)
+- [Playlist - Beginner C Videos By - Jacob Sorber _(@JacobSorber)_](https://www.youtube.com/playlist?list=PL9IEJIKnBJjG5H0ylFAzpzs9gSmW_eICB)
 - [Pitfalls of Object Oriented Programming, Revisited - Tony Albrecht (TGC 2017)](https://youtu.be/VAT9E-M-PoE?si=XPRMfNUkrZFs90C9)
 - [Practical Optimizations](https://youtu.be/NAVbI1HIzCE?si=iuNdnk68oGFqV6IW)
 - [Building a Data-Oriented Future - Mike Acton](https://youtu.be/u8B3j8rqYMw?si=oyLQUlNRpBr6yd61)
+- [Debugging and the art of avoiding bugs](https://youtu.be/sfrnU3-EpPI?si=_80BzoMRH0xF87zb)
 
 ## Free Books/Ebooks
 
 - [So you think you know C?](https://wordsandbuttons.online/SYTYKC.pdf)
 - [Game Programming Patterns](https://gameprogrammingpatterns.com/contents.html)
+- [Game Math](https://gamemath.com/book/)
 
 ## Paid Books/Ebooks
 

@@ -2003,7 +2003,9 @@ This is **expected behavior** due to how memory-mapped files work!
 
 Casey mentions this in Day 25 - you can **pre-fault** the pages during initialization so the first recording is also fast:
 
-```c:project/engine/platforms/_common/replay-buffer.c
+`:project/engine/platforms/_common/replay-buffer.c`
+
+```c
 // ═══════════════════════════════════════════════════════════════════════════
 // OPTION 1: Pre-fault by touching every page (simple but blocking)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2064,7 +2066,9 @@ ReplayBufferInitResult replay_buffers_init(const char *exe_directory,
 
 Linux has a flag that tells the kernel to pre-fault all pages:
 
-```c:project/engine/platforms/_common/replay-buffer.c
+`:project/engine/platforms/_common/replay-buffer.c`
+
+```c
 #if defined(__linux__)
 
 de100_file_scoped_fn void *
@@ -2156,7 +2160,9 @@ This is acceptable because:
 
 Here's the minimal change to make first recording fast on Linux:
 
-```c:project/engine/platforms/_common/replay-buffer.c
+`:project/engine/platforms/_common/replay-buffer.c`
+
+```c
 #else // POSIX
 
 de100_file_scoped_fn void *
@@ -2323,7 +2329,9 @@ Casey creates 4 buffers for **future flexibility**, but only uses slot 1 in Day 
 
 For your learning project, **simplify to 1 buffer**:
 
-```c:project/engine/game/memory.h
+`:project/engine/game/memory.h`
+
+```c
 // Change from:
 #define MAX_REPLAY_BUFFERS 4
 
@@ -2333,7 +2341,9 @@ For your learning project, **simplify to 1 buffer**:
 
 Or even simpler - just embed the single buffer directly:
 
-```c:project/engine/game/memory.h
+`:project/engine/game/memory.h`
+
+```c
 typedef struct {
     // Memory tracking
     u64 total_size;
@@ -2355,7 +2365,9 @@ typedef struct {
 
 And simplify the API:
 
-```c:project/engine/platforms/_common/replay-buffer.h
+`:project/engine/platforms/_common/replay-buffer.h`
+
+```c
 // Instead of:
 bool replay_buffers_init(const char *exe_directory, GameMemoryState *state);
 bool replay_buffer_save_state(GameMemoryState *state, i32 slot_index);

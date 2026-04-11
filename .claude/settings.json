@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "*",
+      "Bash(find /home/viavi/Desktop/workspaces/github/DreamEcho100/handmade-hero/ai-llm-knowledge-dump/generated-courses/game-engine-architecture/ -name \"*.md\" -type f -exec wc -w {} +)"
+    ],
+    "deny": [],
+    "defaultMode": "bypassPermissions"
+  }
+}

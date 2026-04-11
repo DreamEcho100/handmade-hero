@@ -2,6 +2,7 @@
 #define GAME_RENDER_H
 
 #include "../utils/backbuffer.h"
+#include "../utils/render3d.h"
 #include "scene.h"
 #include "settings.h"
 #include "vec3.h"
@@ -32,15 +33,14 @@ typedef struct {
   float orbit_radius;
 } RtCamera;
 
-/* Pre-computed per-frame camera data (computed ONCE, used by all pixels). */
-typedef struct {
-  Vec3 origin;
-  Vec3 forward;
-  Vec3 right;
-  Vec3 up;
-  float half_fov;
-  float aspect;
-} CameraBasis;
+/* Pre-computed per-frame camera data (computed ONCE, used by all pixels).
+ * CameraBasis is an alias for RenderContext3D — the same struct from
+ * utils/render3d.h.  Field mapping:
+ *   origin   → cam_pos       forward → cam_forward
+ *   right    → cam_right     up      → cam_up
+ *   half_fov → half_fov_tan  aspect  → aspect (unchanged)
+ */
+typedef RenderContext3D CameraBasis;
 
 void camera_init(RtCamera *cam);
 

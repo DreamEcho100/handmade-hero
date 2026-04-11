@@ -135,7 +135,9 @@ Here's a clean way to do what you're proposing:
 
 ### The Key Insight: ONE Handler Function Per Event Type
 
-```c:games/handmade-hero/input_handlers.h
+`:games/handmade-hero/input_handlers.h`
+
+```c
 #ifndef DE100_ENGINE_INPUT_HANDLERS_H
 #define DE100_ENGINE_INPUT_HANDLERS_H
 
@@ -170,7 +172,9 @@ void game_handle_x11_key_event(KeySym keysym, bool is_down,
 #endif
 ```
 
-```c:games/handmade-hero/input_handlers.c
+`:games/handmade-hero/input_handlers.c`
+
+```c
 #include "input_handlers.h"
 #include "../engine/game/input.h"
 
@@ -212,7 +216,9 @@ void game_handle_x11_key_event(KeySym keysym, bool is_down,
 
 ### Platform Calls This Instead of Inline Handling
 
-```c:engine/platform/x11/inputs/keyboard.c
+`:engine/platform/x11/inputs/keyboard.c`
+
+```c
 #include "keyboard.h"
 #include "../../../../games/handmade-hero/input_handlers.h"  // Game provides this!
 
@@ -294,7 +300,9 @@ Casey uses `bool IsDown` pattern. Stick with that.
 
 Your `build.sh` idea is fine:
 
-```bash:games/handmade-hero/build.sh
+`:games/handmade-hero/build.sh`
+
+```bash
 #!/bin/bash
 
 PLATFORM=${1:-x11}  # Default to x11
@@ -551,7 +559,9 @@ You're thinking about this correctly. Let me validate and clarify:
 
 ### 1. Game's X11 Input Handler
 
-```c:games/handmade-hero/platform/x11_input.h
+`:games/handmade-hero/platform/x11_input.h`
+
+```c
 #ifndef DE100_ENGINE_PLATFORM_X11_INPUT_H
 #define DE100_ENGINE_PLATFORM_X11_INPUT_H
 
@@ -569,7 +579,9 @@ void game_clear_input_state(GameInput* game_input);
 #endif
 ```
 
-```c:games/handmade-hero/platform/x11_input.c
+`:games/handmade-hero/platform/x11_input.c`
+
+```c
 #include "x11_input.h"
 #include "../../engine/game/input.h"
 
@@ -637,7 +649,9 @@ void game_clear_input_state(GameInput* game_input) {
 
 ### 2. Game's Raylib Input Handler (Different Pattern!)
 
-```c:games/handmade-hero/platform/raylib_input.h
+`:games/handmade-hero/platform/raylib_input.h`
+
+```c
 #ifndef DE100_ENGINE_PLATFORM_RAYLIB_INPUT_H
 #define DE100_ENGINE_PLATFORM_RAYLIB_INPUT_H
 
@@ -649,7 +663,9 @@ void game_poll_raylib_input(GameInput* game_input);
 #endif
 ```
 
-```c:games/handmade-hero/platform/raylib_input.c
+`:games/handmade-hero/platform/raylib_input.c`
+
+```c
 #include "raylib_input.h"
 #include <raylib.h>
 
@@ -684,7 +700,9 @@ void game_poll_raylib_input(GameInput* game_input) {
 
 ### 3. Platform Calls These
 
-```c:engine/platform/x11/inputs/keyboard.c
+`:engine/platform/x11/inputs/keyboard.c`
+
+```c
 // Include the GAME's handler (lives in game folder!)
 #include "../../../../games/handmade-hero/platform/x11_input.h"
 
@@ -721,7 +739,9 @@ void handleEventKeyRelease(XEvent *event, GameInput *new_game_input) {
 }
 ```
 
-```c:engine/platform/raylib/backend.c
+`:engine/platform/raylib/backend.c`
+
+```c
 #include "../../../games/handmade-hero/platform/raylib_input.h"
 
 int platform_main() {
@@ -747,7 +767,9 @@ int platform_main() {
 
 ## Build Script
 
-```bash:games/handmade-hero/build.sh
+`:games/handmade-hero/build.sh`
+
+```bash
 #!/bin/bash
 set -e
 

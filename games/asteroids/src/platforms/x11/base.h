@@ -8,11 +8,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* Temporary constants — replaced by platform.h macros in Lesson 05 */
-#define GAME_W 800
-#define GAME_H 600
-#define TITLE "Asteroids"
-
 typedef struct {
   Display *display;
   Window window;

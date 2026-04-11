@@ -177,8 +177,6 @@ de100_set_backend() {
         "$GAME_DIR/adapters/$backend/inputs/joystick.c"
     )
     
-    # clang main.c -D CUSTOMIZE_BUILD=1 -D SUPPORT_SCREEN_CAPTURE=0 -D SUPPORT_GIF_RECORDING=0 -lraylib -lglfw -lGL -lopenal -lm
-    
     # Set backend-specific library dependencies
     case "$backend" in
         x11)
@@ -186,9 +184,9 @@ de100_set_backend() {
         ;;
         raylib)
             case "$DE100_OS" in
-                windows) DE100_BACKEND_LIBS="-lraylib -DSUPPORT_SCREEN_CAPTURE=0 -DSUPPORT_GIF_RECORDING=0 -lpthread -ldl" ;;
-                macos)   DE100_BACKEND_LIBS="-lraylib -DSUPPORT_SCREEN_CAPTURE=0 -DSUPPORT_GIF_RECORDING=0 -lpthread -framework Cocoa -framework IOKit" ;;
-                *)       DE100_BACKEND_LIBS="-lraylib -DSUPPORT_SCREEN_CAPTURE=0 -DSUPPORT_GIF_RECORDING=0 -lpthread -ldl" ;;
+                windows) DE100_BACKEND_LIBS="-lraylib -lpthread -ldl" ;;
+                macos)   DE100_BACKEND_LIBS="-lraylib -lpthread -framework Cocoa -framework IOKit" ;;
+                *)       DE100_BACKEND_LIBS="-lraylib -lpthread -ldl" ;;
             esac
         ;;
         *)

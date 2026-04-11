@@ -27,7 +27,7 @@
  *   // In lesson 9 the students write this simpler version:
  *   snd_pcm_open(&pcm, "default", SND_PCM_STREAM_PLAYBACK, 0);
  *   snd_pcm_set_params(pcm,
- *       SND_PCM_FORMAT_S16_LE, SND_PCM_ACCESS_RW_INTERLEAVED,
+ *       SND_PCM_FORMAT_FLOAT_LE, SND_PCM_ACCESS_RW_INTERLEAVED,
  *       2, 44100, 1, 50000);   // 50 ms latency
  *   cfg->alsa_pcm = pcm;
  *
@@ -47,18 +47,34 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "../../platform.h" /* TARGET_FPS */
 #include "./audio.h"
-#include "../../platform.h"   /* TARGET_FPS */
 
 /* ─────────────────────────────────────────────────────────────────────────
  * Module-level ALSA latency state
  * (These don't belong in PlatformAudioConfig because they're ALSA-only.)
  * ─────────────────────────────────────────────────────────────────────────
  */
-static int g_samples_per_frame   = 0;   /* sample_rate / TARGET_FPS          */
-static int g_latency_samples     = 0;   /* samples_per_frame * 2 frames      */
-static int g_safety_samples      = 0;   /* samples_per_frame / 3             */
+static int g_samples_per_frame = 0; /* sample_rate / TARGET_FPS          */
+static int g_latency_samples = 0;   /* samples_per_frame * 2 frames      */
+static int g_safety_samples = 0;    /* samples_per_frame / 3             */
 static int64_t g_running_sample_index = 0; /* total frames written to ALSA   */
+
+static void platform_audio_prefill_silence(snd_pcm_t *pcm, int silence_frames) {
+  if (!pcm || silence_frames <= 0)
+    return;
+
+  {
+    float *silence =
+        (float *)alloca((size_t)silence_frames * 2 * sizeof(float));
+    memset(silence, 0, (size_t)silence_frames * 2 * sizeof(float));
+    snd_pcm_sframes_t written =
+        snd_pcm_writei(pcm, silence, (snd_pcm_uframes_t)silence_frames);
+    if (written < 0) {
+      snd_pcm_recover(pcm, (int)written, 0);
+    }
+  }
+}
 
 /* ─────────────────────────────────────────────────────────────────────────
  * platform_audio_init
@@ -82,18 +98,18 @@ int platform_audio_init(PlatformAudioConfig *cfg) {
    * Ring buffer = (latency + safety) × 4 so that two-frame hiccups can't
    * drain it.  The ×4 is a deliberate over-allocation; the driver will
    * round up to the nearest power-of-two anyway.                          */
-  g_samples_per_frame  = cfg->sample_rate / TARGET_FPS;
-  g_latency_samples    = g_samples_per_frame * 2;
-  g_safety_samples     = g_samples_per_frame / 3;
+  g_samples_per_frame = cfg->sample_rate / TARGET_FPS;
+  g_latency_samples = g_samples_per_frame * 2;
+  g_safety_samples = g_samples_per_frame / 3;
   g_running_sample_index = 0;
 
   printf("═══════════════════════════════════════════════════════════\n");
   printf("🔊 ALSA AUDIO INIT\n");
   printf("═══════════════════════════════════════════════════════════\n");
   printf("  Sample rate:    %d Hz\n", cfg->sample_rate);
-  printf("  Samples/frame:  %d\n",  g_samples_per_frame);
-  printf("  Target latency: %d samples (~%d ms)\n",
-         g_latency_samples, g_latency_samples * 1000 / cfg->sample_rate);
+  printf("  Samples/frame:  %d\n", g_samples_per_frame);
+  printf("  Target latency: %d samples (~%d ms)\n", g_latency_samples,
+         g_latency_samples * 1000 / cfg->sample_rate);
 
   err = snd_pcm_open(&pcm, "default", SND_PCM_STREAM_PLAYBACK, 0);
   if (err < 0) {
@@ -109,15 +125,16 @@ int platform_audio_init(PlatformAudioConfig *cfg) {
   snd_pcm_hw_params_alloca(&hw);
   snd_pcm_hw_params_any(pcm, hw);
   snd_pcm_hw_params_set_access(pcm, hw, SND_PCM_ACCESS_RW_INTERLEAVED);
-  snd_pcm_hw_params_set_format(pcm, hw, SND_PCM_FORMAT_S16_LE);
+  snd_pcm_hw_params_set_format(pcm, hw, SND_PCM_FORMAT_FLOAT_LE);
   snd_pcm_hw_params_set_channels(pcm, hw, (unsigned)cfg->channels);
 
   unsigned int rate = (unsigned)cfg->sample_rate;
   snd_pcm_hw_params_set_rate_near(pcm, hw, &rate, 0);
-  cfg->sample_rate = (int)rate;  /* ALSA may adjust rate to nearest supported. */
+  cfg->sample_rate = (int)rate; /* ALSA may adjust rate to nearest supported. */
 
   /* Ring buffer = (latency + safety) × 4. */
-  snd_pcm_uframes_t hw_buf = (snd_pcm_uframes_t)(g_latency_samples + g_safety_samples) * 4;
+  snd_pcm_uframes_t hw_buf =
+      (snd_pcm_uframes_t)(g_latency_samples + g_safety_samples) * 4;
   snd_pcm_hw_params_set_buffer_size_near(pcm, hw, &hw_buf);
 
   snd_pcm_uframes_t period = hw_buf / 4;
@@ -146,14 +163,10 @@ int platform_audio_init(PlatformAudioConfig *cfg) {
 
   /* Pre-fill one period of silence to avoid click on first write. */
   snd_pcm_prepare(pcm);
-  {
-    int silence_frames = (int)hw_buf;
-    int16_t *silence   = (int16_t *)alloca((size_t)silence_frames * 2 * sizeof(int16_t));
-    memset(silence, 0, (size_t)silence_frames * 2 * sizeof(int16_t));
-    snd_pcm_writei(pcm, silence, (snd_pcm_uframes_t)silence_frames);
-  }
+  platform_audio_prefill_silence(pcm, (int)hw_buf);
 
-  printf("✓ ALSA initialized (hw ring-buffer: %d frames)\n", cfg->alsa_buffer_size);
+  printf("✓ ALSA initialized (hw ring-buffer: %d frames)\n",
+         cfg->alsa_buffer_size);
   printf("═══════════════════════════════════════════════════════════\n\n");
   return 0;
 }
@@ -176,6 +189,42 @@ void platform_audio_shutdown_cfg(PlatformAudioConfig *cfg) {
   }
 }
 
+void platform_audio_pause_cfg(PlatformAudioConfig *cfg) {
+  int err;
+  snd_pcm_t *pcm;
+
+  if (!cfg || !cfg->alsa_pcm)
+    return;
+
+  pcm = (snd_pcm_t *)cfg->alsa_pcm;
+  err = snd_pcm_drop(pcm);
+  if (err < 0) {
+    fprintf(stderr, "⚠ ALSA: pause/drop failed: %s\n", snd_strerror(err));
+  }
+}
+
+void platform_audio_resume_cfg(PlatformAudioConfig *cfg) {
+  int err;
+  int silence_frames;
+  snd_pcm_t *pcm;
+
+  if (!cfg || !cfg->alsa_pcm)
+    return;
+
+  pcm = (snd_pcm_t *)cfg->alsa_pcm;
+  err = snd_pcm_prepare(pcm);
+  if (err < 0) {
+    fprintf(stderr, "⚠ ALSA: resume/prepare failed: %s\n", snd_strerror(err));
+    return;
+  }
+
+  silence_frames =
+      cfg->alsa_buffer_size > 0
+          ? cfg->alsa_buffer_size
+          : (g_samples_per_frame > 0 ? g_samples_per_frame : cfg->chunk_size);
+  platform_audio_prefill_silence(pcm, silence_frames);
+}
+
 /* ─────────────────────────────────────────────────────────────────────────
  * platform_audio_get_samples_to_write
  * ─────────────────────────────────────────────────────────────────────────
@@ -184,7 +233,8 @@ void platform_audio_shutdown_cfg(PlatformAudioConfig *cfg) {
  * samples_per_frame (avoid sending enormous chunks to the mixer) and at
  * max_sample_count (prevents OOB writes into AudioOutputBuffer).         */
 int platform_audio_get_samples_to_write(PlatformAudioConfig *cfg) {
-  if (!cfg || !cfg->alsa_pcm) return 0;
+  if (!cfg || !cfg->alsa_pcm)
+    return 0;
 
   snd_pcm_t *pcm = (snd_pcm_t *)cfg->alsa_pcm;
   snd_pcm_sframes_t avail = snd_pcm_avail_update(pcm);
@@ -192,18 +242,15 @@ int platform_audio_get_samples_to_write(PlatformAudioConfig *cfg) {
     /* Underrun or broken pipe — recover and return one frame's worth. */
     snd_pcm_recover(pcm, (int)avail, 0);
     /* Pre-fill silence after recovery to prevent click. */
-    if (g_samples_per_frame > 0) {
-      int16_t *silence = (int16_t *)alloca((size_t)g_samples_per_frame * 2 * sizeof(int16_t));
-      memset(silence, 0, (size_t)g_samples_per_frame * 2 * sizeof(int16_t));
-      snd_pcm_writei(pcm, silence, (snd_pcm_uframes_t)g_samples_per_frame);
-    }
+    platform_audio_prefill_silence(pcm, g_samples_per_frame);
     return g_samples_per_frame;
   }
 
   int samples = (int)avail;
   /* Cap: 4 frames max to avoid huge mixer chunks. */
   int cap4 = g_samples_per_frame * 4;
-  if (samples > cap4) samples = cap4;
+  if (samples > cap4)
+    samples = cap4;
   /* Safety cap: never exceed AudioOutputBuffer capacity. */
   if (cfg->chunk_size > 0 && samples > cfg->chunk_size)
     samples = cfg->chunk_size;
@@ -217,11 +264,12 @@ int platform_audio_get_samples_to_write(PlatformAudioConfig *cfg) {
  * snd_pcm_recover handles EPIPE (underrun) and ESTRPIPE (suspend).      */
 void platform_audio_write(AudioOutputBuffer *buf, int num_frames,
                           PlatformAudioConfig *cfg) {
-  if (!cfg || !cfg->alsa_pcm || !buf || !buf->samples || num_frames <= 0) return;
+  if (!cfg || !cfg->alsa_pcm || !buf || !buf->samples_buffer || num_frames <= 0)
+    return;
 
   snd_pcm_t *pcm = (snd_pcm_t *)cfg->alsa_pcm;
-  snd_pcm_sframes_t written = snd_pcm_writei(pcm, buf->samples,
-                                              (snd_pcm_uframes_t)num_frames);
+  snd_pcm_sframes_t written =
+      snd_pcm_writei(pcm, buf->samples_buffer, (snd_pcm_uframes_t)num_frames);
   if (written < 0) {
     written = snd_pcm_recover(pcm, (int)written, 0);
   }

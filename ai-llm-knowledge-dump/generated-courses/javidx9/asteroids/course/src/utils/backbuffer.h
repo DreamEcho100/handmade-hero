@@ -1,6 +1,9 @@
-/* =============================================================================
+#ifndef UTILS_BACKBUFFER_H
+#define UTILS_BACKBUFFER_H
+
+/* ═══════════════════════════════════════════════════════════════════════════
  * utils/backbuffer.h — Pixel Backbuffer (Software Framebuffer)
- * =============================================================================
+ * ═══════════════════════════════════════════════════════════════════════════
  *
  * WHAT IS A BACKBUFFER?
  * ─────────────────────
@@ -8,115 +11,83 @@
  * sending the image to the screen.  Drawing into an off-screen buffer first
  * means the player never sees a half-rendered frame (no tearing).
  *
- * JS equivalent of the overall concept:
- *   const backbuffer = document.createElement('canvas');
- *   const ctx = backbuffer.getContext('2d');
- *   const imageData = ctx.getImageData(0, 0, width, height);
- *   // imageData.data is a Uint8ClampedArray — our "pixels" array
+ * JS analogy: `new Uint32Array(imageData.data.buffer)` from a 2D canvas.
  *
- * C STRUCT vs JS OBJECT
- * ─────────────────────
- * In JS/TS:  interface Backbuffer { pixels: Uint32Array; width: number; height: number; pitch: number; }
- * In C:      struct AsteroidsBackbuffer { uint32_t *pixels; int width; int height; int pitch; };
+ * PIXEL FORMAT — in-memory [R][G][B][A] = 0xAARRGGBB as uint32_t
+ * ────────────────────────────────────────────────────────────────
+ * GAME_RGB/RGBA pack (r,g,b,a) into a uint32_t.  On a little-endian CPU the
+ * in-memory bytes are [R][G][B][A] (lowest address = R).
  *
- * The key difference: in C, the struct is just a description of memory layout.
- * The pixels array lives somewhere else in memory; the struct only holds a
- * POINTER to it (which is why platform code allocates the pixel data).
+ * The integer value is 0xAARRGGBB:
+ *   bits  0– 7 → R  (byte 0, lowest address)
+ *   bits  8–15 → G  (byte 1)
+ *   bits 16–23 → B  (byte 2)
+ *   bits 24–31 → A  (byte 3, highest address)
  *
- * WHAT IS pitch?
- * ──────────────
- * "Pitch" is the number of BYTES between the start of one row and the start
- * of the next row.  For a tightly-packed RGBA image: pitch = width * 4.
- * Keeping it explicit (rather than assuming width*4) makes the code safe
- * if the GPU aligns rows to 64-byte boundaries (which some drivers do).
+ * PLATFORM UPLOAD FORMAT
+ * ──────────────────────
+ * Both backends read our memory layout as [R][G][B][A] — no swap needed:
  *
- *   Row index formula:  pixel_ptr = pixels + row * (pitch / 4) + col
- *     ↑ dividing by 4 because pixels is uint32_t* (4 bytes per element),
- *       but pitch is measured in bytes.
- * =============================================================================
+ *   X11/GLX:  GL_RGBA in glTexImage2D / glTexSubImage2D.
+ *             GL_RGBA reads byte[0]=R, byte[1]=G, byte[2]=B, byte[3]=A.
+ *             Matches our layout exactly.  (GL_BGRA would swap R↔B → WRONG.)
+ *
+ *   Raylib:   PIXELFORMAT_UNCOMPRESSED_R8G8B8A8 in UpdateTexture.
+ *             Same byte interpretation as GL_RGBA — also correct.
+ *
+ * COLOR MODEL
+ * ───────────
+ * All drawing functions accept float colors in [0.0–1.0] per channel (r,g,b,a).
+ * Alpha blending is handled automatically — no separate "blend" function needed.
+ *   a >= 1.0  → opaque fast path (direct pixel write)
+ *   a <= 0.0  → fully transparent (skip entirely)
+ *   otherwise → per-pixel alpha composite: out = src*a + dst*(1-a)
+ * ═══════════════════════════════════════════════════════════════════════════
  */
 
-#ifndef ASTEROIDS_BACKBUFFER_H
-#define ASTEROIDS_BACKBUFFER_H
+#include <stdint.h>
 
-#include <stdint.h>  /* uint32_t — fixed-width type: always exactly 32 bits */
-
-/* ══════ Screen Dimensions ═════════════════════════════════════════════════
-   These match the original OneLoneCoder Asteroids demo (256×240).
-   Using #define (compile-time constant) rather than const int means the
-   values can be used in array sizes and switch statements.               */
-#define SCREEN_W 512
-#define SCREEN_H 480
-
-/* ══════ AsteroidsBackbuffer ════════════════════════════════════════════════
-
-   The software framebuffer passed between platform and game.
-   platform code allocates + owns the pixel array; game code only writes.  */
 typedef struct {
-    uint32_t *pixels;  /* flat array of width*height pixels, row-major     */
-    int       width;   /* pixels per row                                    */
-    int       height;  /* number of rows                                    */
-    int       pitch;   /* bytes per row (= width * 4 for this course)       */
-} AsteroidsBackbuffer;
+  uint32_t *pixels;    /* Flat pixel array; platform allocates via malloc.   */
+  int       width;     /* Canvas width in pixels (GAME_W).                   */
+  int       height;    /* Canvas height in pixels (GAME_H).                  */
+  int       pitch;     /* Bytes per row.  Usually width * bytes_per_pixel.   */
+                       /* Use pitch, not hardcoded width*4, for correctness. */
+  int       bytes_per_pixel; /* 4 for RGBA8888.                              */
+} Backbuffer;
 
-/* ══════ GAME_RGBA Colour Macro ══════════════════════════════════════════════
- *
- * VERY IMPORTANT — READ THIS CAREFULLY
- * ─────────────────────────────────────
- * Each pixel is stored as a 32-bit unsigned integer.  The byte layout is:
- *
- *   Memory (little-endian):  [ R ][ G ][ B ][ A ]
- *                              ↑ lowest address = lowest byte
- *
- *   As a uint32_t value:  0xAABBGGRR
- *     R occupies bits  0–7  (least-significant byte)
- *     G occupies bits  8–15
- *     B occupies bits 16–23
- *     A occupies bits 24–31 (most-significant byte)
- *
- * The macro packs four bytes into one uint32_t:
- *   GAME_RGBA(r, g, b, a) = (a << 24) | (b << 16) | (g << 8) | r
- *
- * CONSEQUENCE FOR OPENGL:
- *   X11/GLX backend:   glTexImage2D(..., GL_RGBA, GL_UNSIGNED_BYTE, pixels)
- *                       GL_RGBA tells OpenGL to read bytes in R,G,B,A order.
- *   *** DO NOT use GL_BGRA here — that would swap red and blue! ***
- *
- * CONSEQUENCE FOR RAYLIB:
- *   LoadImageFromMemory / UpdateTexture expects PIXELFORMAT_UNCOMPRESSED_R8G8B8A8,
- *   which matches our byte order exactly.
- *
- * WHY THIS LAYOUT?
- *   Most modern CPUs are little-endian.  Storing R in the low byte means
- *   the uint32_t value 0x000000FF is "opaque red" — easy to read in hex.
- *   Alpha-blending code can extract channels with simple shifts and masks.
- *
- * JS equivalent:
- *   // Uint8ClampedArray is always [R, G, B, A, R, G, B, A, ...]
- *   function rgba(r, g, b, a) {
- *     const buf = new ArrayBuffer(4);
- *     const view = new DataView(buf);
- *     view.setUint8(0, r); view.setUint8(1, g);
- *     view.setUint8(2, b); view.setUint8(3, a);
- *     return view.getUint32(0, true);  // true = little-endian
- *   }
- */
+/* GAME_RGBA — pack (r,g,b,a) as uint8 values into a uint32_t (0xAARRGGBB).
+ * In memory on little-endian: [R][G][B][A] at bytes [0][1][2][3].
+ * Used internally by the rasterizer; game code should use float colors. */
 #define GAME_RGBA(r, g, b, a) \
-    ((uint32_t)(a) << 24 | (uint32_t)(b) << 16 | (uint32_t)(g) << 8 | (uint32_t)(r))
+  ( ((uint32_t)(a) << 24) | ((uint32_t)(b) << 16) | \
+    ((uint32_t)(g) <<  8) |  (uint32_t)(r) )
 
-/* ══════ Predefined Colours ════════════════════════════════════════════════ */
-#define COLOR_BLACK       GAME_RGBA(0,   0,   0,   255)
-#define COLOR_WHITE       GAME_RGBA(255, 255, 255, 255)
-#define COLOR_RED         GAME_RGBA(255, 0,   0,   255)
-#define COLOR_GREEN       GAME_RGBA(0,   255, 0,   255)
-#define COLOR_BLUE        GAME_RGBA(0,   0,   255, 255)
-#define COLOR_YELLOW      GAME_RGBA(255, 255, 0,   255)
-#define COLOR_CYAN        GAME_RGBA(0,   255, 255, 255)
-#define COLOR_ORANGE      GAME_RGBA(255, 165, 0,   255)
-#define COLOR_DARK_GREY   GAME_RGBA(40,  40,  40,  255)
-#define COLOR_GREY        GAME_RGBA(128, 128, 128, 255)
+#define GAME_RGB(r, g, b) GAME_RGBA((r), (g), (b), 255)
 
-/* Semi-transparent overlays (for GAME OVER / HUD backgrounds) */
-#define COLOR_OVERLAY_DIM GAME_RGBA(0, 0, 0, 160)
+/* ── Float color constants ────────────────────────────────────────────────
+ * Each macro expands to four float arguments: r, g, b, a  (all [0.0–1.0]).
+ * Usage:  draw_rect(backbuffer, 0, 0, width, height, COLOR_RED);
+ *
+ * This "multi-arg macro" pattern keeps the API signature clean (separate
+ * float params) while giving named colors for readability.
+ * ──────────────────────────────────────────────────────────────────────── */
+#define COLOR_BLACK      0.0f,   0.0f,   0.0f,   1.0f
+#define COLOR_WHITE      1.0f,   1.0f,   1.0f,   1.0f
+#define COLOR_RED        0.863f, 0.196f, 0.196f, 1.0f
+#define COLOR_GREEN      0.196f, 0.804f, 0.196f, 1.0f
+#define COLOR_BLUE       0.196f, 0.196f, 0.863f, 1.0f
+#define COLOR_YELLOW     1.0f,   0.843f, 0.0f,   1.0f
+#define COLOR_CYAN       0.0f,   0.863f, 0.863f, 1.0f
+#define COLOR_MAGENTA    0.863f, 0.0f,   0.863f, 1.0f
+#define COLOR_ORANGE     1.0f,   0.549f, 0.0f,   1.0f
+#define COLOR_GRAY       0.502f, 0.502f, 0.502f, 1.0f
+#define COLOR_DARK_GRAY  0.251f, 0.251f, 0.251f, 1.0f
+#define COLOR_BG         0.0f,   0.0f,   0.0f,   1.0f
 
-#endif /* ASTEROIDS_BACKBUFFER_H */
+/* backbuffer_resize — reallocate pixel buffer for dynamic scaling.
+ * Returns 0 on success, -1 on allocation failure.
+ * Implementation in utils/backbuffer.c.                                    */
+int backbuffer_resize(Backbuffer *backbuffer, int new_width, int new_height);
+
+#endif /* UTILS_BACKBUFFER_H */

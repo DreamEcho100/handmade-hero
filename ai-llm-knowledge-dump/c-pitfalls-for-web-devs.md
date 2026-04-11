@@ -2117,7 +2117,9 @@ int* p = (int*)buffer;  // Now properly aligned
 
 ## Add new section at the end (before Summary):
 
-````markdown:ai/c-pitfalls-for-web-devs.md
+``:ai/c-pitfalls-for-web-devs.md`
+
+````markdown
 ---
 
 ## 21. Macro Definition Order Across Compilation Units
@@ -2142,6 +2144,7 @@ typedef struct {
   };
   // ... other fields ...
 } GameControllerInput;
+```
 ````
 
 ```c
@@ -2252,7 +2255,9 @@ CFLAGS="${CFLAGS} -include ${GAME_INPUT_HEADER}"
 #   2. input.h → #ifndef DE100_GAME_BUTTON_COUNT skipped!
 ```
 
-```bash:build-common.sh
+`:build-common.sh`
+
+```bash
 # Add to your build script where CFLAGS are set:
 if [ -n "${GAME_INPUT_HEADER:-}" ] && [ -f "${GAME_INPUT_HEADER}" ]; then
     echo "Using game input header: ${GAME_INPUT_HEADER}"
@@ -2260,7 +2265,9 @@ if [ -n "${GAME_INPUT_HEADER:-}" ] && [ -f "${GAME_INPUT_HEADER}" ]; then
 fi
 ```
 
-```bash:game/build-dev.sh
+`:game/build-dev.sh`
+
+```bash
 # Export before calling engine build:
 export GAME_INPUT_HEADER="${SCRIPT_DIR}/src/inputs.h"
 source "${ENGINE_DIR}/build-common.sh"

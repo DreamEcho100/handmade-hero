@@ -213,7 +213,9 @@ cp -r games/my-game /tmp/my-game
 cd /tmp/my-game
 
 # 2. Create repo (choose visibility)
-git init && git add . && git commit -m "Initial commit"
+git init
+git branch -M main
+git add . && git commit -m "Initial commit"
 gh repo create DreamEcho100/my-game --private --source=. --push
 # OR: --public for public repos
 

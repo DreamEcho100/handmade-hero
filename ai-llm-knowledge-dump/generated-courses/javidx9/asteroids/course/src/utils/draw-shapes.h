@@ -1,60 +1,60 @@
-/* =============================================================================
- * utils/draw-shapes.h — Primitive Drawing (Points, Lines, Rects)
- * =============================================================================
+#ifndef UTILS_DRAW_SHAPES_H
+#define UTILS_DRAW_SHAPES_H
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * utils/draw-shapes.h — Primitive Drawing (Rects + Lines)
+ * ═══════════════════════════════════════════════════════════════════════════
  *
- * Declarations for the five low-level drawing primitives used throughout
- * the Asteroids renderer.
+ * LESSON 03 — draw_rect: pure rasterizer with float positions and colors.
+ *             Pitch-based row pointer arithmetic, unified alpha blending.
  *
- * TOROIDAL vs CLIPPED:
- *   draw_pixel_w  — TOROIDAL: wraps across screen edges.  Used for all
- *                   wireframe geometry (ship, bullets, asteroids) so that
- *                   objects cross screen boundaries seamlessly.
- *   draw_pixel    — CLIPPED: does nothing if (x, y) is off-screen.
- *   draw_line     — calls draw_pixel_w internally → lines wrap.
- *   draw_rect     — CLIPPED: used for HUD / overlay boxes that must stay
- *                   on screen.
- *   draw_rect_blend — same as draw_rect but alpha-blends with the existing
- *                   pixel (used for the dim overlay behind GAME OVER text).
+ * LESSON 05 — draw_line: Bresenham integer line algorithm for wireframe
+ *             geometry (ship, asteroids, bullets).
  *
- * Why the split?  Toroidal wrap is correct for game objects (an asteroid that
- * exits the right edge should appear from the left).  But a "dim overlay"
- * rect covering the full screen should not wrap — it should just fill.
- * =============================================================================
+ * Both functions take pixel coordinates as floats and float RGBA colors.
+ * They know NOTHING about coordinate systems or game units — they just fill
+ * pixels.  Coordinate conversion (game units → pixels) happens at the
+ * CALL SITE via render_explicit.h:
+ *
+ *   draw_rect(bb,
+ *     world_rect_px_x(&ctx, wx, ww), world_rect_px_y(&ctx, wy, wh),
+ *     world_w(&ctx, ww), world_h(&ctx, wh),
+ *     COLOR_WHITE);
+ *
+ * Alpha blending is handled automatically:
+ *   a >= 1.0 → opaque (direct write, fast path)
+ *   a <= 0.0 → transparent (skip)
+ *   else     → per-pixel blend: out = src*a + dst*(1-a)
+ * ═══════════════════════════════════════════════════════════════════════════
  */
 
-#ifndef ASTEROIDS_DRAW_SHAPES_H
-#define ASTEROIDS_DRAW_SHAPES_H
+#include "./backbuffer.h"
 
-#include <stdint.h>
-#include "backbuffer.h"
+/* draw_rect — fill axis-aligned rectangle (pure rasterizer).
+ *
+ * x, y: top-left corner in pixel space (float for sub-pixel precision)
+ * w, h: size in pixels (float)
+ * r, g, b, a: color channels [0.0–1.0]
+ *
+ * Clips to backbuffer bounds automatically.
+ * pitch / bytes_per_pixel gives stride in uint32_t units.               */
+void draw_rect(Backbuffer *backbuffer,
+               float x, float y, float w, float h,
+               float r, float g, float b, float a);
 
-/* ── Toroidal pixel write ─────────────────────────────────────────────────
-   Wraps x and y into [0, width) and [0, height) using modular arithmetic.
-   This makes game objects seamlessly cross the screen edges.             */
-void draw_pixel_w(AsteroidsBackbuffer *bb, int x, int y, uint32_t color);
+/* draw_line — draw a straight line using Bresenham's algorithm.
+ *
+ * x0, y0: start point in pixel space (float, truncated to int internally)
+ * x1, y1: end   point in pixel space (float, truncated to int internally)
+ * r, g, b, a: color channels [0.0–1.0]
+ *
+ * Clips each pixel to backbuffer bounds (clipped, NOT toroidal).
+ * Used by draw_wireframe to render ship and asteroid outlines.
+ *
+ * LESSON 05 — Bresenham's algorithm rasterizes a line with no floating-
+ * point arithmetic in the inner loop — only integer additions.           */
+void draw_line(Backbuffer *backbuffer,
+               float x0, float y0, float x1, float y1,
+               float r, float g, float b, float a);
 
-/* ── Clipped pixel write ──────────────────────────────────────────────────
-   Writes the pixel only if (x, y) is within the backbuffer bounds.
-   Silent no-op for out-of-bounds coordinates.                            */
-void draw_pixel(AsteroidsBackbuffer *bb, int x, int y, uint32_t color);
-
-/* ── Bresenham line (toroidal) ────────────────────────────────────────────
-   Draws a straight line using Bresenham's algorithm.  Each pixel is written
-   via draw_pixel_w so long lines that cross the screen edge wrap around.  */
-void draw_line(AsteroidsBackbuffer *bb, int x0, int y0, int x1, int y1, uint32_t color);
-
-/* ── Clipped filled rectangle ─────────────────────────────────────────────
-   Draws a solid-colour rectangle clamped to the backbuffer bounds.
-   (x, y) is the top-left corner; w×h is width×height in pixels.         */
-void draw_rect(AsteroidsBackbuffer *bb, int x, int y, int w, int h, uint32_t color);
-
-/* ── Alpha-blended rectangle ──────────────────────────────────────────────
-   Like draw_rect but the colour's alpha channel (bits 24-31) controls
-   how much it covers the existing pixel:
-     alpha=255  → fully opaque (same as draw_rect)
-     alpha=128  → 50% blend
-     alpha=0    → no-op (destination unchanged)
-   Used for the translucent overlay behind GAME OVER text.               */
-void draw_rect_blend(AsteroidsBackbuffer *bb, int x, int y, int w, int h, uint32_t color);
-
-#endif /* ASTEROIDS_DRAW_SHAPES_H */
+#endif /* UTILS_DRAW_SHAPES_H */

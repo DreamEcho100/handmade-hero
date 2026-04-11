@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════════
- * utils/draw-text.c — Platform Foundation Course
+ * utils/draw-text.c — TinyRaytracer Course
  * ═══════════════════════════════════════════════════════════════════════════
  *
  * LESSON 06 — FONT_8X8 definition, draw_char, draw_text.
@@ -190,22 +190,27 @@ const uint8_t FONT_8X8[128][8] = {
  * ─────────────────────────────────────────────────────────────────────────
  * LESSON 06 — LSB-first mask: for each row byte, test each column bit
  * with `(1 << col)`.  col=0 tests bit0 (leftmost pixel).
- * When set, draw a `scale × scale` solid rectangle.
+ * When set, draw a `scale × scale` solid rectangle via draw_rect.
  *
  * NOTE: use (1 << col), NOT (0x80 >> col).  The font data is LSB-first.
  * (0x80 >> col) is BIT7-left and would mirror every glyph horizontally.   */
-void draw_char(Backbuffer *bb, int x, int y, int scale, char c, uint32_t color) {
-  if (!bb || !bb->pixels) return;
+void draw_char(Backbuffer *backbuffer, float x, float y, int scale, char c,
+               float r, float g, float b, float a) {
+  if (!backbuffer || !backbuffer->pixels) return;
   if (scale <= 0) return;
 
-  int idx = (unsigned char)c;
-  if (idx >= 128) idx = '?';
+  int char_index = (unsigned char)c;
+  if (char_index >= 128) char_index = '?';
 
   for (int row = 0; row < GLYPH_H; row++) {
-    uint8_t bits = FONT_8X8[idx][row];
+    uint8_t bits = FONT_8X8[char_index][row];
     for (int col = 0; col < GLYPH_W; col++) {
       if (bits & (1 << col)) {
-        draw_rect(bb, x + col * scale, y + row * scale, scale, scale, color);
+        draw_rect(backbuffer,
+                  x + (float)(col * scale),
+                  y + (float)(row * scale),
+                  (float)scale, (float)scale,
+                  r, g, b, a);
       }
     }
   }
@@ -217,16 +222,19 @@ void draw_char(Backbuffer *bb, int x, int y, int scale, char c, uint32_t color) 
  * LESSON 06 — Advance cursor by GLYPH_W * scale per character.
  * LESSON 08 — snprintf feeds arbitrary strings (FPS counter) into draw_text.
  */
-void draw_text(Backbuffer *bb, int x, int y, int scale, const char *text, uint32_t color) {
-  if (!text) return;
-  int cx = x, cy = y;
-  for (const char *p = text; *p; p++) {
-    if (*p == '\n') {
-      cx  = x;
-      cy += GLYPH_H * scale;
+void draw_text(Backbuffer *backbuffer, float x, float y, int scale,
+               const char *text, float r, float g, float b, float a) {
+  if (!text || !backbuffer || !backbuffer->pixels) return;
+  if (scale <= 0) return;
+
+  float cursor_x = x, cursor_y = y;
+  for (const char *ch = text; *ch; ch++) {
+    if (*ch == '\n') {
+      cursor_x  = x;
+      cursor_y += (float)(GLYPH_H * scale);
       continue;
     }
-    draw_char(bb, cx, cy, scale, *p, color);
-    cx += GLYPH_W * scale;
+    draw_char(backbuffer, cursor_x, cursor_y, scale, *ch, r, g, b, a);
+    cursor_x += (float)(GLYPH_W * scale);
   }
 }

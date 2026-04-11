@@ -29,11 +29,16 @@ void platform_audio_shutdown(void);
 /* Preferred form: pass cfg to close the handle stored inside it. */
 void platform_audio_shutdown_cfg(PlatformAudioConfig *cfg);
 
+/* Focus lifecycle helpers: stop audio immediately on focus loss and
+ * prepare a clean restart on focus gain. */
+void platform_audio_pause_cfg(PlatformAudioConfig *cfg);
+void platform_audio_resume_cfg(PlatformAudioConfig *cfg);
+
 /* Return how many sample-frames can be written without blocking.
  * Uses snd_pcm_avail_update(); capped at cfg->chunk_size. */
 int platform_audio_get_samples_to_write(PlatformAudioConfig *cfg);
 
-/* Write `num_frames` sample-frames from buf->samples to ALSA. */
+/* Write `num_frames` sample-frames from buf->samples_buffer to ALSA. */
 void platform_audio_write(AudioOutputBuffer *buf, int num_frames,
                           PlatformAudioConfig *cfg);
 

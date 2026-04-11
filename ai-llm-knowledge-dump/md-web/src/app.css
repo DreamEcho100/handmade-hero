@@ -1,0 +1,44 @@
+@import "tailwindcss";
+
+@plugin "@tailwindcss/typography";
+
+body {
+  font-family:
+    Gordita, Roboto, Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue",
+    sans-serif;
+}
+
+[data-content-scroll] {
+  scroll-behavior: smooth;
+}
+
+.prose :is(h1, h2, h3, h4, h5, h6) {
+  position: relative;
+  scroll-margin-top: 1rem;
+}
+
+.prose .heading-anchor {
+  margin-left: 0.35rem;
+  color: color-mix(in srgb, currentColor 55%, transparent);
+  text-decoration: none;
+  opacity: 0;
+  transition:
+    opacity 150ms ease,
+    color 150ms ease;
+}
+
+.prose :is(h1, h2, h3, h4, h5, h6):hover .heading-anchor,
+.prose :is(h1, h2, h3, h4, h5, h6):focus-within .heading-anchor,
+.prose :target .heading-anchor,
+.prose .heading-anchor:focus-visible {
+  opacity: 1;
+}
+
+.prose :target {
+  color: color-mix(in srgb, currentColor 88%, rgb(37 99 235));
+}
+
+.prose .heading-anchor:hover,
+.prose .heading-anchor:focus-visible {
+  color: inherit;
+}

@@ -16,10 +16,11 @@ A window opens showing a smooth color gradient: red increases top-to-bottom, gre
 
 | File                      | Change type | Summary                                                                                      |
 | ------------------------- | ----------- | -------------------------------------------------------------------------------------------- |
-| `build-dev.sh`            | Adapted     | Game sources, `-lm` for math, title "TinyRaytracer"                                          |
+| `build-dev.sh`            | Adapted     | Game sources, `-lm` for math, title "TinyRaytracer"; `--coord-mode=explicit` default (sets `-DRENDER_COORD_MODE=1`) |
 | `platform.h`              | Adapted     | `GAME_TITLE "TinyRaytracer"`, `GAME_W 800`, `GAME_H 600`                                     |
 | `game/base.h`             | Adapted     | `quit` button only (1 button); `play_tone` removed                                           |
-| `game/vec3.h`             | Created     | `Vec3` struct + `vec3_make`, `vec3_add`, `vec3_sub`, `vec3_scale`, `vec3_negate`, `vec3_mul` |
+| `utils/vec3.h`            | Inherited   | Vec3 struct + 12 ops from platform template utils; included via `platform.h`                 |
+| `game/vec3.h`             | Adapted     | Thin wrapper — contains only `#include "../utils/vec3.h"`; Vec3 is defined in the platform template |
 | `game/main.h`             | Created     | `RaytracerState` stub; `game_init`/`game_update`/`game_render` declarations                  |
 | `game/main.c`             | Created     | Stub implementations; gradient render loop                                                   |
 | `game/render.h`           | Created     | Minimal — `RtCamera` stub, `render_scene` declaration                                        |
@@ -94,45 +95,13 @@ for (int j = 0; j < bb->height; j++) {
 #ifndef GAME_VEC3_H
 #define GAME_VEC3_H
 
-#include <math.h>
-
-typedef struct {
-  float x, y, z;
-} Vec3;
-
-static inline Vec3 vec3_make(float x, float y, float z) {
-  return (Vec3){x, y, z};
-}
-
-static inline Vec3 vec3_add(Vec3 a, Vec3 b) {
-  return (Vec3){a.x + b.x, a.y + b.y, a.z + b.z};
-}
-
-static inline Vec3 vec3_sub(Vec3 a, Vec3 b) {
-  return (Vec3){a.x - b.x, a.y - b.y, a.z - b.z};
-}
-
-static inline Vec3 vec3_scale(Vec3 v, float s) {
-  return (Vec3){v.x * s, v.y * s, v.z * s};
-}
-
-static inline Vec3 vec3_negate(Vec3 v) {
-  return (Vec3){-v.x, -v.y, -v.z};
-}
-
-/* Component-wise multiply — used for color blending: material × light. */
-static inline Vec3 vec3_mul(Vec3 a, Vec3 b) {
-  return (Vec3){a.x * b.x, a.y * b.y, a.z * b.z};
-}
+/* Vec3 is now defined in platform utils — include from there. */
+#include "../utils/vec3.h"
 
 #endif /* GAME_VEC3_H */
 ```
 
-**Key lines:**
-
-- Line 7: `typedef struct { float x, y, z; } Vec3;` — the entire type is 12 bytes. No vtable, no methods, no hidden fields.
-- Line 10: `return (Vec3){x, y, z};` — compound literal. This is stack-allocated and returned by value (the compiler optimizes the copy away).
-- All functions take `Vec3` by value, not by pointer — for small structs (≤16 bytes) this is faster because the values stay in CPU registers.
+The full Vec3 implementation lives in `utils/vec3.h` (part of the platform template). `game/vec3.h` is a thin wrapper so existing includes in game code continue to work. All 12 operations — `vec3_make`, `vec3_add`, `vec3_dot`, `vec3_normalize`, `vec3_cross`, etc. — are available via this include chain.
 
 ### `game/main.c` — gradient rendering (stub)
 
@@ -219,7 +188,7 @@ game_render(&state, &bb);
 
 | JS / Web concept                            | C equivalent in this lesson                                   | Key difference                                    |
 | ------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------- |
-| `class Vec3 { constructor(x,y,z) { ... } }` | `typedef struct { float x, y, z; } Vec3` + `vec3_make(x,y,z)` | No constructors; compound literal `(Vec3){x,y,z}` |
+| `class Vec3 { constructor(x,y,z) { ... } }` | `typedef struct { float x, y, z; } Vec3` + `vec3_make(x,y,z)` in `utils/vec3.h (via game/vec3.h)` | No constructors; compound literal `(Vec3){x,y,z}` |
 | `vec.add(other)`                            | `vec3_add(a, b)`                                              | No operator overloading; explicit function calls  |
 | `canvas.getContext('2d').fillRect(...)`     | `bb->pixels[j * stride + i] = GAME_RGB(r,g,b)`                | Direct pixel write; no canvas API                 |
 | `requestAnimationFrame(render)`             | Platform loop calls `game_render()` each frame                | You don't own the loop; the platform calls you    |

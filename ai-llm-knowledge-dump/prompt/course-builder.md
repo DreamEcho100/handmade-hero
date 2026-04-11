@@ -56,27 +56,22 @@ Use this file with the Copilot CLI agent to convert a source file or project int
 >    it appears in exactly one lesson's "Files created" column in PLAN.md. If a file was added
 >    during Phase 1 iterations (e.g., performance optimization, feature toggle, third-party lib
 >    integration) but isn't assigned to any lesson, **assign it now**.
->
 > 2. **Signature evolution audit:** For every function that changed signature during Phase 1
 >    (e.g., gained parameters), document the **incremental signature at each lesson**. Example:
 >    - L04: `scene_intersect(ray, scene, hit)` — 3 args
 >    - L12: `scene_intersect(ray, scene, hit, voxel_color, settings)` — 5 args
->    The lesson that adds parameters must show the BEFORE and AFTER explicitly.
->
+>      The lesson that adds parameters must show the BEFORE and AFTER explicitly.
 > 3. **Namespace collision check:** If the project uses Raylib (or any library that defines
 >    common type names), verify no course-defined types collide. Common collisions:
 >    `Material`, `Camera`, `Ray`, `Color`, `Image`, `Texture`. Prefix with project abbreviation
 >    (e.g., `RtMaterial`, `RtCamera`, `RtRay`) and document this in PLAN.md.
->
 > 4. **Incremental button/input audit:** Count how many `GameInput` buttons exist at each
 >    lesson milestone. A student in L01 should not see 24 buttons that reference features
 >    from L16. Document the button list growth: L01 (1 button), L11 (7), L12 (22), etc.
->
 > 5. **Performance budget:** For CPU-intensive courses (raytracing, simulation), verify the
 >    final program runs at interactive frame rates (>15 fps) on a mid-range laptop. If not,
 >    add render scaling, multi-threading, or spatial acceleration BEFORE freezing the code.
 >    Document the performance characteristics in PLAN.md.
->
 > 6. **Update PLAN.md:** Reconcile the plan with the actual code. Every discrepancy found
 >    in steps 1-5 must be resolved. The plan is the contract — it must match the code exactly
 >    before any lesson is written.
@@ -101,10 +96,21 @@ Use this file with the Copilot CLI agent to convert a source file or project int
 > - **Use NULL-check patterns for optional parameters.** When a parameter (like `RenderSettings*`)
 >   is added later, earlier lessons can pass `NULL` and the function checks
 >   `if (!settings || settings->show_X)` to maintain backward compatibility.
-> - **Third-party library integration patterns:** Document whether a lib is header-only
->   (`#define FOO_IMPLEMENTATION` before include), compiled separately (add to SOURCES in
->   build-dev.sh), or already linked by a backend (Raylib bundles stb_image — use `extern`
->   declarations to avoid duplicate symbols).
+> - **Third-party library integration patterns:** Document which pattern each lib uses:
+>
+>   | Pattern | When to use | Example |
+>   |---------|-------------|---------|
+>   | Header-only, no conflict | Lib not bundled in any backend | `#define LIB_IMPLEMENTATION` before include (e.g., `stb_ds.h`) |
+>   | Header-only, **Raylib conflict** | Raylib bundles: stb_image, stb_vorbis, stb_truetype, stb_rect_pack | Define `STB_IMAGE_STATIC` before `STB_IMAGE_IMPLEMENTATION`; wrap in `#pragma GCC diagnostic ignored "-Wunused-function"`; add `-Wl,-z,muldefs` to Raylib BACKEND_LIBS in build-dev.sh (allows identical duplicate symbols from both copies) |
+>   | Compiled separately | Large lib or needs separate TU | Add `.c` to SOURCES in build-dev.sh |
+>   | Already linked by backend | Raylib provides the API | Use `extern` declarations — don't include the implementation |
+>
+>   **⚠ Raylib STB conflict warning:** Raylib internally compiles stb_image, stb_vorbis,
+>   stb_truetype, and stb_rect_pack. If your game course also `#include`s these with
+>   `_IMPLEMENTATION`, the linker produces "multiple definition" errors. The fix:
+>   - For stb_image.h: `#define STB_IMAGE_STATIC` makes all functions `static` (file-local).
+>   - For stb_vorbis.c: Add `-Wl,-z,muldefs` to Raylib linker flags (both copies are identical).
+>   - The X11 backend has no conflict since Raylib is not linked.
 >
 > Update `PLAN-TRACKER.md` as each lesson is completed.
 >
@@ -135,6 +141,27 @@ Attach this file + the source file(s) or directory you want to convert, then say
 > milestone and fix any errors before moving on.
 > Do not ask for lesson output until Phase 1 passes a clean build on both backends.
 
+### Required course parameters
+
+Specify these alongside the source path when invoking the course-builder:
+
+| Parameter    | Values                          | Required? | Description                                                                                                                                                                   |
+| ------------ | ------------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `coord_mode` | `explicit` \| `implicit` \| `hybrid` | **Yes**   | Coordinate abstraction level for the entire course. Controls which draw helpers appear in ALL lesson snippets, ALL build commands, and ALL API references. See "Coordinate system mode" section below. |
+
+> ⚠ **`coord_mode` is course-wide, not per-lesson.** Once declared, it must never change. All lesson code snippets, `build-dev.sh` flags, and API references in the course use exactly one mode.
+>
+> - `explicit` — use `world_rect_px_x/y()`, `world_x/y/w/h()` in all draw calls. Every pixel conversion is written out at the call site. Choose when teaching the coordinate transform is a goal of the course.
+> - `implicit` — use `draw_world_rect()`, `make_world_cursor()` in all draw calls. World→pixel conversion is hidden; draw calls read as game logic. Choose for most game courses where the coordinate math was already taught in the Platform Foundation Course.
+> - `hybrid` — both Level 1 and Level 2 helpers available simultaneously. Reserved for the Platform Foundation Course and courses that explicitly contrast both abstraction levels. **Do not use for a pure game course.**
+
+Record the choice in PLAN.md:
+```
+## Platform configuration
+- coord_mode: implicit
+- coord_mode_reason: game logic is heavy; pixel math covered in Platform Foundation Course
+```
+
 ---
 
 ## Companion References
@@ -160,36 +187,44 @@ All game courses in this series build on top of reusable platform/backend infras
 
 ### What the Platform Foundation Course provides
 
-| Infrastructure        | Files provided                                                                                                                                 |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| Build system          | `build-dev.sh` with `--backend=x11\|raylib`                                                                                                    |
-| Pixel buffer pipeline | `utils/backbuffer.h`, `GAME_RGB/RGBA`, pixel addressing                                                                                        |
-| Drawing utilities     | `utils/draw-shapes.c/.h`, `utils/draw-text.c/.h`, `utils/math.h`                                                                               |
-| Platform contract     | `platform.h` with `PlatformGameProps`, 4-function API                                                                                          |
-| X11/GLX backend       | `platforms/x11/main.c` (window, input, VSync, letterbox)                                                                                       |
-| ALSA audio            | `platforms/x11/audio.c` (hw_params, latency model, per-frame write)                                                                            |
-| Raylib backend        | `platforms/raylib/main.c` (window, input, audio stream, letterbox)                                                                             |
-| Input system          | `game/base.h` with `GameButtonState`, `GameInput` union, `UPDATE_BUTTON`, `prepare_input_frame`                                                |
-| Audio system          | `utils/audio.h` — `AudioOutputBuffer`, `SoundDef`, `SoundInstance`, `GameAudioState`, `ToneGenerator`, `MusicSequencer`, `PlatformAudioConfig` |
-| Debug tools           | `ASSERT`, `DEBUG_TRAP`, `ASSERT_MSG` in `game/base.h`                                                                                          |
+| Infrastructure           | Files provided                                                                                                                                                                                                                      |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Build system             | `build-dev.sh` with `--backend=x11\|raylib`, `--bench=N` (performance benchmark mode), `--stress=N` (culling benchmark); always compiles with `-DRENDER_COORD_MODE=1` (explicit mode only — no `--coord-mode` flag) |
+| Pixel buffer pipeline    | `utils/backbuffer.h` (`Backbuffer`, `GAME_RGB/RGBA`, pixel addressing); `utils/backbuffer.c` (`backbuffer_resize` — dynamic resize via `realloc`)                                                                                   |
+| Drawing utilities        | `utils/draw-shapes.c/.h`, `utils/draw-text.c/.h`, `utils/math.h`                                                                                                                                                                   |
+| Coordinate system config | `utils/base.h` — `WindowScaleMode` (3 modes), `CoordOrigin` (6 values, ZII=`COORD_ORIGIN_LEFT_BOTTOM`), `GameWorldConfig` (origin + custom axes + camera pan/zoom fields), `world_config_x_sign()` / `world_config_y_sign()` helpers (used in camera pan formulas to handle any coordinate origin direction); arena size constants `ARENA_PERM_SIZE` (1 MB) + `ARENA_SCRATCH_SIZE` (256 KB) |
+| Coordinate abstraction   | `utils/render.h` + `render_explicit.h` — `RenderContext` (12-field world→pixel coefficients), `TextCursor`, `make_render_context()`; explicit mode only (`render_implicit.h` and `render_hybrid.h` are **not** implemented in the platform course); movement helpers: `camera_pan(cam_x, cam_y, dx, dy, y_sign, dt)` (pan so content moves in screen direction), `screen_move(wx, wy, sdx, sdy, x_sign, y_sign, dt)` (move entity in screen-space direction — absorbs x_sign/y_sign bookkeeping) |
+| Arena allocator          | `utils/arena.h` — `Arena`, `ArenaBlock`, `TempMemory`, `arena_push`, `arena_alloc_mmap`/`arena_free_mmap`, per-frame scratch checkpoint pattern                                                                                     |
+| 3D rendering support     | `utils/render3d.h` — `GameCamera3D` config (ZII-safe fallbacks: fov=60°, cam_up=Y-up, near=0.001, far=1000.0); `RenderContext3D` (baked per-frame projection context); `make_render_context_3d()`, `project_3d_to_screen()` (returns 0 if behind near plane; outputs pixel x/y + depth), `unproject_screen_to_ray()` (mouse picking — outputs world origin + direction), `world_pos_3d_is_visible()` (sphere depth-cull) |
+| Platform contract        | `platform.h` — `PlatformGameProps` (includes perm/scratch arenas, world_config, scale_mode), `platform_compute_letterbox`, `platform_compute_aspect_size`, 4-function platform API; includes `utils/vec3.h` (3D vector math available to all game code) |
+| X11/GLX backend          | `platforms/x11/main.c` (window, input, VSync, letterbox)                                                                                                                                                                           |
+| ALSA audio               | `platforms/x11/audio.c` (hw_params, latency model, per-frame write)                                                                                                                                                                |
+| Raylib backend           | `platforms/raylib/main.c` (window, input, audio stream, letterbox)                                                                                                                                                                 |
+| Input system             | `game/base.h` with `GameButtonState`, `GameInput` union, `UPDATE_BUTTON`, `prepare_input_frame`                                                                                                                                     |
+| Audio system             | `utils/audio.h` — `AudioOutputBuffer`, `SoundDef`, `ToneGenerator`, `GameAudioState`, `MusicTone`, `MusicSequencer`, `PlatformAudioConfig`; float32 PCM (2 ch × 4 bytes = `AUDIO_BYTES_PER_FRAME = 8`); samples in [-1.0, +1.0]; `audio_write_sample(buf, frame_index, l, r)` writes float L/R directly (no int16 conversion) |
+| Debug tools              | `DEBUG_TRAP`, `DEBUG_ASSERT`, `ASSERT_MSG` in `game/base.h`                                                                                                                                                                         |
 
 ### What game courses do differently
 
 When building a game course, the platform code is **copied from the Platform Foundation Course** and **adapted** — not rebuilt from scratch. The following table shows what changes and what stays the same:
 
-| File                      | Platform course provides      | Game course adapts                                                                              |
-| ------------------------- | ----------------------------- | ----------------------------------------------------------------------------------------------- |
-| `build-dev.sh`            | Complete script               | Game name in binary output; optional title                                                      |
-| `platform.h`              | Full contract + `TITLE` macro | `TITLE` string; window dimensions (`GAME_W`, `GAME_H`)                                          |
-| `platforms/x11/main.c`    | Full backend                  | Key bindings in `platform_get_input` to match new `GameInput` button names                      |
-| `platforms/x11/audio.c`   | Full ALSA driver              | Usually copied as-is                                                                            |
-| `platforms/raylib/main.c` | Full backend                  | Same key binding adaptation as X11                                                              |
-| `utils/*.{c,h}`           | All drawing + audio types     | Usually copied as-is                                                                            |
-| `game/base.h`             | `GameInput` union template    | `BUTTON_COUNT`; rename button fields for this game (e.g., `turn_left` → `move_left` + `rotate`) |
-| `game/main.h`             | — (not provided)              | Fully new: `GameState`, `GAME_PHASE`, game-specific types                                       |
-| `game/main.c`             | — (not provided)              | Fully new: `game_init`, `game_update`, `game_render`                                            |
-| `game/audio.c`            | Demo only (removed)           | Fully new: `SOUND_DEFS`, `game_play_sound_at`, `game_get_audio_samples`, `game_audio_update`    |
-| `game/levels.c`           | — (not provided)              | Optional: level/wave data tables                                                                |
+| File                               | Platform course provides                                                                                                         | Game course adapts                                                                              |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `build-dev.sh`                     | Complete script                                                                                                                  | Game name in binary output; source paths updated for game files; always explicit coord mode    |
+| `platform.h`                       | Full contract + `TITLE` macro                                                                                                    | `TITLE` string; window dimensions (`GAME_W`, `GAME_H`)                                         |
+| `platforms/x11/main.c`             | Full backend                                                                                                                     | Key bindings in `platform_get_input` to match new `GameInput` button names                     |
+| `platforms/x11/audio.c`            | Full ALSA driver                                                                                                                 | Usually copied as-is                                                                            |
+| `platforms/raylib/main.c`          | Full backend                                                                                                                     | Same key binding adaptation as X11                                                              |
+| `utils/*.{c,h}`                    | All drawing + audio + arena + render types                                                                                       | Usually copied as-is                                                                            |
+| `game/base.h`                      | `GameInput` union template                                                                                                       | `BUTTON_COUNT`; rename button fields for this game (e.g., `turn_left` → `move_left` + `rotate`) |
+| `game/demo.h`                      | Platform course demo function declarations                                                                                       | Replaced by game's own function declarations (e.g., in `game/main.h`)                          |
+| `game/demo.c`                      | Historical artifact (NOT compiled). Pre-L15 monolithic demo using old `demo_render()` signature; kept as before/after reference. | Not used — replaced by `game/main.c`                                                            |
+| `game/demo_explicit.c`             | Active platform course demo using Level 1 explicit coord API; removed in L15                                                     | Not used — replaced by `game/main.c`                                                            |
+| `game/demo_implicit.c`             | Active platform course demo using Level 2 implicit coord API; removed in L15                                                     | Not used — replaced by `game/main.c`                                                            |
+| `game/main.h`                      | — (not provided)                                                                                                                 | Fully new: `GameState`, game-specific phase/type definitions                                    |
+| `game/main.c`                      | — (not provided)                                                                                                                 | Fully new: `game_init`, `game_update`, `game_render`                                            |
+| `game/audio.c`                     | `game/audio_demo.c` — platform demo only (removed in L15)                                                                       | Fully new: `SOUND_DEFS`, `game_play_sound_at`, `game_get_audio_samples`, `game_audio_update`    |
+| `game/levels.c`                    | — (not provided)                                                                                                                 | Optional: level/wave data tables                                                                |
 
 ### How game course lessons reference platform code
 
@@ -212,8 +247,251 @@ Students who completed the Platform Foundation Course will recognize the surroun
 - [ ] `GAME_W` and `GAME_H` set in both backends
 - [ ] `GameInput` button names updated for this game in `game/base.h`
 - [ ] Key bindings updated in both `platforms/x11/main.c` and `platforms/raylib/main.c`
-- [ ] `game/audio_demo.c` removed from build (it was for the platform course only)
+- [ ] `coord_mode` declared in PLAN.md under "Platform configuration" — platform course uses explicit mode only (`-DRENDER_COORD_MODE=1` is hardcoded in `build-dev.sh`; no `--coord-mode` flag)
+- [ ] First draw-call lesson contains the coordinate mode callout block (see "Coordinate system mode" section)
+- [ ] `game/demo.h`, `game/demo_explicit.c`, `game/demo_implicit.c`, `game/audio_demo.h`, and `game/audio_demo.c` removed from build (all are platform course demo files, not used in game courses)
+- [ ] `world_config.camera_zoom` initialized to `1.0f` in game init — zero-init (default `{0}`) produces a degenerate zero-scale render context
+- [ ] `arena_reset(&props.scratch)` called at the start of every frame — per-frame scratch is inherited from L16; perm arena is never reset
 - [ ] Clean build verified on both backends before writing any lesson
+
+---
+
+### Porting from other engines (Godot, Unity, Unreal, etc.)
+
+When the source game was built in another engine, the course builder must carefully analyze how that engine's physics/movement model maps to our raw C frame loop. **Misidentifying the physics model was the single most time-consuming bug in prior courses** (4 rounds of fixes in the Jetpack Joyride course).
+
+**Porting checklist (mandatory during Phase 0 analysis):**
+
+1. **Trace one position update end-to-end in the source engine.** Find exactly where `delta_time` is applied and how many times. Example:
+   - Godot 4 `CharacterBody2D`: `velocity` is in px/sec; `move_and_slide()` internally applies `position += velocity * delta`. If the script sets `velocity = speed * delta`, the net displacement is `speed * delta * delta` per frame.
+   - Unity: `transform.position += direction * speed * Time.deltaTime` — single delta application.
+   - Unreal: `AddMovementInput` handles delta internally; `GetWorld()->GetDeltaSeconds()` for manual integration.
+
+2. **Verify displacement per frame matches.** Calculate the expected per-frame displacement at 60fps for the source game's constants, then verify your C code produces the same value. Print it in debug output. Example: if source speed=2000 and the engine applies delta twice, displacement = 2000 × (1/60)² = 0.556 px/frame.
+
+3. **Document the model in PLAN.md.** Record the exact physics integration formula:
+   ```
+   ## Physics model
+   Source engine: Godot 4 CharacterBody2D
+   Source code: velocity.x = speed * delta; move_and_slide()
+   Net displacement: speed * delta * delta per frame
+   Our C code: player->x += player->speed * dt * dt;
+   Verification: at speed=2000, dt=1/60: displacement=0.556 px/frame ✓
+   ```
+
+4. **Distinguish position integration from velocity/acceleration updates.** Only position integration may need double-delta. Acceleration and velocity updates typically use single delta:
+   ```c
+   speed += accel * dt;              /* Single delta — velocity update */
+   virt_speed += virt_accel * dt;    /* Single delta — velocity update */
+   player->x += speed * dt * dt;    /* Double delta — position integration (Godot model) */
+   ```
+
+5. **Beware of different models within the same source.** Some entities may use `move_and_slide()` (double-delta) while others use `move_and_collide()` (single-delta for displacement). Document each entity type's model separately.
+
+### Coordinate system pragmatism
+
+When `GAME_UNITS_W == GAME_W` (1:1 pixel-to-unit ratio, common in pixel-art games), the coordinate helpers from `render_explicit.h` (`world_rect_px_x`, `world_x`, etc.) provide zero benefit — the conversion factor is 1.0. Using them adds complexity without value.
+
+**Decision table:**
+
+| Condition | Use render helpers? | Why |
+|-----------|-------------------|-----|
+| `GAME_UNITS != GAME_W` (e.g., 16 units = 800 pixels) | **Yes** | Scaling factor makes raw math error-prone |
+| Camera pan/zoom enabled | **Yes** | Camera offset math needs axis-sign awareness |
+| `GAME_UNITS == GAME_W` (1:1 pixel art), no camera | **No** | Raw pixel coords are simpler and equivalent |
+| `GAME_UNITS == GAME_W`, with camera follow | **Optional** | Camera offset is just `screen_x = world_x - camera_x` |
+
+For 1:1 pixel-art games, you MAY use raw pixel coordinates directly. `GAME_UNITS_W/H` must still be defined (set equal to `GAME_W/H`), but the helpers are optional. Document this choice in PLAN.md:
+```
+## Coordinate system
+- coord_mode: explicit
+- GAME_UNITS_W: 320.0f (== GAME_W, 1:1 ratio)
+- render helpers: NOT USED — raw pixel math with camera_x offset
+- reason: pixel-art game at native resolution; helpers add complexity without benefit
+```
+
+### Spritesheet analysis checklist (Phase 0/Phase 1)
+
+When the source game uses spritesheet assets, the course builder must determine the exact frame dimensions BEFORE writing any rendering code. **Assuming frame sizes from pixel dimensions alone produces incorrect rendering** (e.g., rendering a 310×68 image as a single frame when it contains 4 rows of 310×17 beam sprites).
+
+**For each sprite asset:**
+
+1. Get pixel dimensions: `file assets/sprites/Sigil.png` → 310 × 68
+2. Check source engine scene files for atlas regions / frame counts:
+   - Godot `.tscn`: Look for `AtlasTexture` sub-resources with `region = Rect2(x, y, w, h)`
+   - Unity: Check `.meta` files for `spriteSheet.sprites[].rect`
+   - Custom: Look for frame-count constants or animation definitions
+3. Determine layout: horizontal strip (all frames in one row), vertical strip (one column), or grid (rows × cols)
+4. Calculate frame size: total_width / cols × total_height / rows
+5. **Verify**: frame_count × frame_size == total_size. If not, the layout assumption is wrong.
+6. Document in PLAN.md:
+   ```
+   ## Sprite assets
+   | File | Dimensions | Layout | Frame size | Frames |
+   |------|-----------|--------|-----------|--------|
+   | Slime.png | 40×40 | 2×2 grid | 20×20 | 4 |
+   | Sigil.png | 310×68 | 4 vertical rows | 310×17 | 4 |
+   | MagicMissile.png | 75×19 | 3-frame horiz strip | 25×19 | 3 |
+   ```
+
+**Common pitfalls:**
+- Assuming square frames when sprites are rectangular (Sigil: 310×17, not 62×68)
+- Assuming horizontal strip when frames are stacked vertically
+- Using the full spritesheet dimensions as a single frame (renders enormous blobs)
+- Not checking the source engine's atlas definitions (the only authoritative source for frame boundaries)
+
+---
+
+### Platform systems: mandatory vs. recommended vs. optional
+
+A game course must declare in PLAN.md which platform systems it uses and why. This prevents over-engineering (camera pan in Tetris) and under-engineering (no arena in a game with 200 entities per frame).
+
+**Always implement (every game course, no exceptions):**
+
+| System | Files | Cannot skip because |
+|--------|-------|---------------------|
+| Backbuffer pipeline | `utils/backbuffer.h`, `utils/backbuffer.c` | Every game renders pixels; no backbuffer = no rendering |
+| Drawing primitives | `utils/draw-shapes.c/.h`, `utils/draw-text.c/.h` | Every game draws rects and text |
+| Platform contract | `platform.h`, `PlatformGameProps`, `platform_game_props_init` | The contract is the only thing that makes both backends work |
+| Double-buffered input | `game/base.h` — `GameInput`, `UPDATE_BUTTON`, `prepare_input_frame` | Without double-buffering, just-pressed edge detection is impossible |
+| Frame delta time | `FrameTiming` in `x11/main.c`; `GetFrameTime()` in raylib | Fixed-timestep or delta-time is required for frame-rate-independent logic |
+| Coordinate system | `utils/base.h` + `utils/render.h` — `RenderContext`, `GameWorldConfig` | Every game maps world positions to pixels; raw pixel arithmetic always breaks on window resize |
+| Basic audio | `utils/audio.h` — `AudioOutputBuffer`, phase accumulator, `audio_write_sample` | Most games need at least a tone; audio introduced early so students are not surprised |
+
+**Recommended for most games (skip only with a documented reason in PLAN.md):**
+
+| System | Files | When to skip |
+|--------|-------|--------------|
+| Arena allocator | `utils/arena.h` — `Arena`, `TempMemory`, scratch per-frame pattern | Games with fewer than ~50 allocations per frame and only static arrays; very simple demos |
+| Sound effects + voice pool | `game/audio.c` — `SoundDef`, `game_play_sound_at`, voice steal | Silent games (puzzle / minimalist) or courses where audio complexity is out of scope |
+| Window scaling modes | `utils/base.h` — `WindowScaleMode`, `backbuffer_resize` | Games with a fixed window that never resizes |
+
+**Optional (add when the game type requires it):**
+
+| System | Files | When to add |
+|--------|-------|-------------|
+| Camera pan/zoom | `GameWorldConfig.camera_x/y/zoom`, `world_config_x/y_sign` | Scrolling platformers, top-down exploration, any world larger than one screen |
+| Music sequencer | `utils/audio.h` — `MusicSequencer`, `MusicNote` | Games with background music; overkill for sound-effects-only games |
+| Off-screen culling | `world_rect_is_visible` in `render_explicit.h` | Games with large tile maps or many entities outside the viewport |
+| 3D projection | `utils/render3d.h` — `GameCamera3D`, `RenderContext3D` | 3D game courses; unnecessary for 2D games |
+| Multiple CoordOrigins | `CoordOrigin` enum beyond `COORD_ORIGIN_LEFT_BOTTOM`/`COORD_ORIGIN_LEFT_TOP` | RTL layouts, split-screen, or courses explicitly teaching coordinate systems |
+| Performance profiling | `utils/perf.h/c` — `PERF_BEGIN(tag)` / `PERF_BEGIN_NAMED(tag, name)` / `PERF_END(tag)` pairs; `perf_print_all()` prints summary table; zero-cost when `ENABLE_PERF` is not defined; enabled via `--bench=N` build flag | Games hitting frame-rate targets; not needed in early lessons |
+
+**Game-specific systems (build per-course as needed — not in the platform template):**
+
+These systems are NOT part of the platform template. Each game course builds the ones it needs during Phase 1. They are documented here as reference patterns so course builders don't reinvent them from scratch.
+
+| System | Files to create | When to add | Reference implementation |
+|--------|----------------|-------------|--------------------------|
+| **Sprite loading + animation** | `utils/sprite.h/c`, `vendor/stb_image.h` | Any game with characters, objects, or tile graphics — i.e. most games | Jetpack Joyride course: `sprite_load` (stb_image RGBA decode + GAME_RGBA swizzle), `sprite_blit` (alpha test ≥128), `sprite_blit_alpha` (per-pixel blend), `sprite_blit_rotated` (inverse-rotation lookup), `SpriteSheet` (grid-based frame extraction), `SpriteAnimation` (fps-driven frame sequencer with loop/play-once modes). **⚠ stb_image conflicts with Raylib — see third-party library patterns above.** |
+| **Loaded audio (WAV/OGG)** | `utils/loaded-audio.h/c`, `vendor/stb_vorbis.c` | Games with pre-recorded SFX or music files (most games beyond simple beeps) | Jetpack Joyride course: hand-rolled RIFF/WAV parser (int16→float32 conversion, mono→stereo upmix), `stb_vorbis_decode_filename` for OGG, `AudioVoice` pool (16 voices + dedicated music voice, steal-oldest eviction), `loaded_audio_mix` with pitch scaling via linear interpolation. **⚠ stb_vorbis conflicts with Raylib — see third-party library patterns above.** |
+| **Collision detection** | `utils/collision.h` (header-only) | Any game with physics, hit detection, or proximity checks | Jetpack Joyride course: `AABB` struct (x,y,w,h top-left), `aabb_overlap` (4-condition separating-axis test), `aabb_contains_point`, `aabb_from_center`, `aabb_near_miss` (expand-then-exclude for proximity bonus detection). Extend with circle collision, ray-AABB, or swept AABB as needed. |
+| **Random number generation** | `utils/rng.h` (header-only) | Games with procedural content, obstacle variety, audio pitch variation | Jetpack Joyride course: `RNG` struct with xorshift32 state, `rng_seed`, `rng_next`, `rng_range(min,max)`, `rng_float()` [0,1), `rng_float_range(min,max)`. **Use separate RNG instances** for gameplay vs. visual effects to preserve determinism (entropy isolation). |
+| **Particle effects** | `utils/particles.h/c` | Games with explosions, exhaust, sparkle, or other visual feedback | Jetpack Joyride course: `Particle` (pos, vel, life, color, size), ring-buffer pool (`MAX_PARTICLES`), `ParticleConfig` for burst patterns (speed/angle/life ranges), gravity integration, alpha fade based on remaining life. |
+| **Background threading** | Uses `<pthread.h>` in `game/main.c` | Games with large asset sets where synchronous loading causes a visible freeze | Jetpack Joyride course: `pthread_create` + `pthread_detach` for fire-and-forget audio loading. Thread-safe `initialized` flag. Game outputs silence until thread finishes, then auto-starts music. Add `-lpthread` to X11 BACKEND_LIBS (Raylib already links it). |
+
+**Entity pool pattern (for games with dynamic objects):**
+
+Most action games need to manage pools of dynamic entities (bullets, obstacles, particles, collectibles). The recommended pattern:
+
+```c
+typedef struct {
+    float x, y;
+    int active;         /* 0 = slot free, 1 = in use */
+    /* ... entity-specific fields */
+} Bullet;
+
+#define MAX_BULLETS 64
+Bullet bullets[MAX_BULLETS];
+
+/* Spawn: linear scan for first inactive slot */
+/* Update: skip inactive entries; deactivate when off-screen or expired */
+/* Render: skip inactive entries */
+/* Cleanup: no free() needed — pool is statically allocated */
+```
+
+This is O(N) per frame but cache-friendly and allocation-free. For >1000 entities, consider free-list or generation-counter pools. Document the pool size in PLAN.md with justification (e.g., "MAX_PELLETS=64 because at most 21 pellets per block × 3 visible blocks").
+
+**How each system can be iterated on:**
+
+| System | Base implementation | Common enhancements |
+|--------|---------------------|---------------------|
+| Arena | Fixed mmap block + overflow malloc; reset per frame | Multiple pools (entity pool, asset pool, frame pool); custom allocators; size introspection |
+| Rendering | CPU software rasterizer; `RenderContext` world→pixel once per frame | Sprite batching, render layers, z-ordering, GPU upload optimisation |
+| Coordinate system | Single world→screen transform; no nested viewports | Camera smoothing (lerp), parallax layers, UI overlay context (separate `RenderContext` per layer) |
+| Audio | PCM synthesis + simple voice pool | Sample playback (`.wav` load), compression, spatial audio (panning), MIDI-style sequencer |
+| Input | Double-buffered digital buttons | Analog axes, gamepad, touch, gesture recognisers |
+| Memory | Single perm + scratch arena | Hot/cold separation, asset streaming, save-state snapshots via arena checkpoint |
+
+**Benefits vs. risks:**
+
+| System | Benefit | Risk / challenge |
+|--------|---------|------------------|
+| Arena | Zero fragmentation, O(1) alloc, trivial reset | Overflow panics silently if scratch size is too small; size arenas conservatively |
+| RenderContext | All draw calls branch-free after one setup call per frame | Mixing world-space and pixel-space coordinates produces hard-to-debug visual glitches |
+| Camera | Large worlds fit in a fixed backbuffer | Forgetting `y_sign` in pan formulas inverts the camera; always use `world_config_y_sign()`. `world_config.camera_zoom` must be initialized to `1.0f` — zero-init makes `make_render_context()` scale everything to zero |
+| Voice pool | Bounded memory, no allocation per sound | Steal-oldest policy can cut off important sounds; tune `MAX_SOUNDS` per game |
+| Double-buffered input | Edge detection (`just_pressed`) is reliable | Forgetting `prepare_input_frame` at frame start causes a persistent "just_pressed" state |
+
+**Record the system choices in PLAN.md:**
+```
+## Platform systems selected
+- coord_mode: implicit  (reason: game draws many rects; world→pixel plumbing distracts from game logic)
+- arena: yes            (reason: entity pool has ~150 bullets; arena guarantees O(1) alloc per frame)
+- camera: yes           (reason: scrolling platformer; world is 4× screen width)
+- music: no             (reason: sound-effects only game; sequencer complexity is out of scope)
+- culling: no           (reason: all entities are always on screen; fixed-screen game)
+```
+
+---
+
+### Coordinate system mode — specify before you start
+
+`coord_mode` is a **required course parameter** (see "Required course parameters" above). The value you specify when invoking the course-builder controls every draw call, build flag, and API reference in every lesson. It cannot change mid-course.
+
+**What the course-builder does with `coord_mode`:**
+
+1. Every `build-dev.sh` command in every lesson includes `--coord-mode=<value>`.
+2. Every draw-call snippet uses only the APIs for the chosen mode:
+   - `explicit` → `world_rect_px_x/y()`, `world_x/y/w/h()`; pixel math is visible at every call site
+   - `implicit` → `draw_world_rect()`, `draw_world_rect_if_visible()`, `make_world_cursor()`; pixel math is hidden; use `_if_visible` variant for culled draws (L17+)
+   - `hybrid`   → both (Platform Foundation Course only)
+3. The first draw-call lesson includes a callout:
+
+```markdown
+> **Coordinate mode: implicit.**
+> All world-space drawing in this course uses `draw_world_rect()` and `draw_world_cursor()`.
+> World→pixel conversion is handled by `make_render_context()` once per frame; it is not
+> repeated at every draw call. To see how world coordinates map to pixels, refer to
+> Platform Foundation Course Lesson 09 or read `render_explicit.h`.
+```
+
+**Quick decision table:**
+
+| Game / course type | Recommended mode | Reason |
+|--------------------|-----------------|--------|
+| Simple demo, ≤ 2 screens | `explicit` | Pixel math visible; teaches the transform |
+| Shooter, action, puzzle | `implicit` | Game logic dominates; pixel math is noise |
+| Scrolling game, world > 1 screen | `implicit` | Many draw calls; `draw_world_rect_if_visible` for culling |
+| Course comparing both APIs | `hybrid` | Platform Foundation Course only |
+| Any pure game course | NOT `hybrid` | `hybrid` is reserved for the platform course |
+
+**Choosing a mode — questions to answer in PLAN.md:**
+
+```
+1. Is understanding the world→pixel transform a GOAL of this course?
+   YES → explicit. Pixel math is visible at every draw call; students learn by repetition.
+   NO  → implicit. The transform was taught in the Platform Course; hide it so game logic
+         is the focus.
+
+2. Will any lesson show both approaches side by side?
+   YES → hybrid (Platform Course only; not for pure game courses).
+   NO  → explicit or implicit.
+
+3. Is the game logic complex enough that extra boilerplate per draw call hurts readability?
+   YES (many entities, deep render functions) → implicit.
+   NO  (simple game, short render function)   → explicit is fine.
+```
 
 ---
 
@@ -340,7 +618,9 @@ The plan is a contract. If reality diverges from it while you are writing lesson
 
 The layout is described in two stages. Start with Stage A; migrate to Stage B when the trigger conditions are met. Document any deviation in `PLAN.md`.
 
-**Stage A — Starter layout** (single backend or small game)
+> **Note for platform-template users:** If you copied the **Platform Foundation Course template**, your project already uses the **Stage B layout** (backends live in `src/platforms/x11/` and `src/platforms/raylib/`). Skip Stage A entirely — begin at Stage B.
+
+**Stage A — Starter layout** (single backend or small game; only applies when starting from scratch, NOT from the platform template)
 
 ```
 game-name/
@@ -352,7 +632,7 @@ game-name/
 │   │   ├── draw-shapes.h
 │   │   ├── draw-text.c       # Bitmap font rendering
 │   │   ├── draw-text.h
-│   │   ├── audio.h           # AudioOutputBuffer; SoundInstance; ToneGenerator
+│   │   ├── audio.h           # AudioOutputBuffer; ToneGenerator; MusicSequencer
 │   │   ├── math.h            # MIN, MAX, CLAMP macros
 │   │   └── ...               # any other reusable systems, components, or helpers (e.g., particle system, physics, etc)
 │   ├── game/
@@ -416,9 +696,9 @@ game-name/
 >
 > | Function signature                                                         | Where it belongs | Reason                                                                                                               |
 > | -------------------------------------------------------------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------- |
-> | `draw_rect(Backbuffer*, int x, int y, int w, int h, uint32_t c)`           | `utils/` ✅      | All generic parameters; usable in any game                                                                           |
-> | `draw_text(Backbuffer*, int x, int y, const char*, uint32_t c, int scale)` | `utils/` ✅      | All generic parameters                                                                                               |
-> | `draw_grid(Backbuffer*, int cols, int rows, int cell_size, uint32_t c)`    | `utils/` ✅      | All generic — usable in Tetris, Snake, or any tile game                                                              |
+> | `draw_rect(Backbuffer*, float x, float y, float w, float h, float r, float g, float b, float a)` | `utils/` ✅      | All generic parameters; usable in any game                                                                           |
+> | `draw_text(Backbuffer*, float x, float y, int scale, const char*, float r, float g, float b, float a)` | `utils/` ✅      | All generic parameters                                                                                               |
+> | `draw_grid(Backbuffer*, int cols, int rows, int cell_size, float r, float g, float b, float a)` | `utils/` ✅      | All generic — usable in Tetris, Snake, or any tile game                                                              |
 > | `draw_tetromino(Backbuffer*, const Tetromino*, int cx, int cy)`            | `game/` ✅       | Takes `Tetromino*` — knows this game's types                                                                         |
 > | `draw_snake_segment(Backbuffer*, const SnakeSegment*)`                     | `game/` ✅       | Takes `SnakeSegment*`                                                                                                |
 > | `draw_health_bar(Backbuffer*, const Player*, int x, int y)`                | `game/` ✅       | Takes `Player*` — even though it only calls `draw_rect`                                                              |
@@ -428,14 +708,15 @@ game-name/
 >
 > ```c
 > /* utils/draw-shapes.c — generic, reusable in any game */
-> void draw_rect(Backbuffer *bb, int x, int y, int w, int h, uint32_t color);
+> void draw_rect(Backbuffer *backbuffer, float x, float y, float w, float h,
+>                float r, float g, float b, float a);
 >
 > /* game/render.c — game-specific; calls utils primitives */
-> static void draw_piece(Backbuffer *bb, const Tetromino *piece) {
+> static void draw_piece(Backbuffer *backbuffer, const Tetromino *piece) {
 >     for (int i = 0; i < 4; i++) {
->         int cx = (piece->x + piece->cells[i].dx) * CELL_SIZE;
->         int cy = (piece->y + piece->cells[i].dy) * CELL_SIZE;
->         draw_rect(bb, cx, cy, CELL_SIZE - 1, CELL_SIZE - 1, piece->color);
+>         float cx = (float)((piece->x + piece->cells[i].dx) * CELL_SIZE);
+>         float cy = (float)((piece->y + piece->cells[i].dy) * CELL_SIZE);
+>         draw_rect(backbuffer, cx, cy, (float)(CELL_SIZE - 1), (float)(CELL_SIZE - 1), piece->color);
 >     }
 > }
 > ```
@@ -452,8 +733,12 @@ typedef struct {
   Display    *display;
   Window      window;
   GLXContext  gl_context;
-  int         is_running;
-  X11Audio    audio;          /* ALSA handle + config */
+  int         screen;
+  int         window_w;
+  int         window_h;
+  Atom        wm_delete_window;
+  bool        vsync_enabled;
+  GLuint      texture_id;
   /* ... */
 } X11State;
 
@@ -466,6 +751,8 @@ X11State g_x11 = {0};        /* zero-initialised; owns all x11-layer state */
 ```
 
 The Raylib backend follows the same pattern with `RaylibState g_raylib`. Neither struct is ever visible to `game/` or `utils/`.
+
+> **Note:** Audio state is **not** embedded in `X11State`. It lives in `platforms/x11/audio.c` as a file-scope static, keeping audio and windowing concerns separate.
 
 > **Why?** The alternative is passing a `void *platform_context` pointer through every function call, which adds noise with no benefit when there is exactly one instance. A file-scope global is idiomatic C for this pattern and clearly scoped by the compilation unit.
 
@@ -580,11 +867,19 @@ List **every** file the student must touch or be aware of. A file omitted here t
 
 Explain the new concepts at the level of _why_, not just _what_. Anchor each concept to the nearest JavaScript/web equivalent the student already knows, then explain what C or this architecture does differently and why that trade-off was made.
 
-Suggested structure:
+**This section must be thorough.** A paragraph or two per concept is the absolute minimum — most concepts deserve 3–6 paragraphs of explanation. The student is a JS developer encountering these ideas for the first time; hand-wave nothing. If a concept involves math, bit manipulation, memory layout, or an algorithm, explain it at the level where the student could re-derive it from scratch on a whiteboard. Brevity is not a virtue here — clarity and completeness are.
+
+Suggested structure (repeat for each new concept):
 
 - **JS analogy:** _"In JS you'd use `setInterval(drop, 1000)` — the browser calls your function for you. In C you own the loop, so you track elapsed time yourself each frame."_
 - **How it works in C:** describe the data structure, algorithm, or pattern being introduced — with a small focused example if the concept isn't already in the code walkthrough.
 - **Why this design:** explain the architectural reason for the choice (e.g., why `fall_timer` lives in `GameState` and not in `GameInput`; why the accumulator subtracts the interval rather than resetting to zero).
+- **Math / bit-level derivation (when applicable):** If the concept involves any formula, bit operation, coordinate transform, or numerical technique, provide a **step-by-step derivation from first principles**. Do not present a formula and say "this works" — show _why_ it works. Walk through the algebra, draw out the bit layout, or trace through example values. For instance:
+  - For `GAME_RGBA(r,g,b,a)`: show the 32-bit layout byte-by-byte, trace what `(uint32_t)(a) << 24` produces for `a=255`, show how each shift positions the channel, and show the final OR combining them. Contrast with the wrong byte order.
+  - For alpha blending: derive `out = src * alpha + dst * (1 - alpha)` from the intuition of "percentage mixing", show why we divide by 255 (not 256), and trace through a concrete example (e.g., 50% transparent red over white).
+  - For `pitch / 4`: explain that `pitch` is in bytes, each pixel is 4 bytes (`uint32_t`), so dividing by 4 converts byte-offset to pixel-offset. Walk through a concrete 3×2 backbuffer to show row addressing.
+  - For timer accumulators: show numerically why `timer -= interval` preserves remainders (e.g., timer=0.83, interval=0.80 → remainder=0.03 carries forward) while `timer = 0` loses 0.03s of accumulated time.
+  - For trigonometric direction vectors: derive from the 2×2 rotation matrix, show the matrix multiplication, and trace through `θ=0` and `θ=π/2` to verify the result.
 
 Keep this section focused on the 1–3 new concepts. Do not re-explain concepts from earlier lessons beyond a one-line reminder with a lesson reference.
 
@@ -602,6 +897,31 @@ Present the complete, final state of every changed code block. For each block:
    - _"Line 23: the `if` guard prevents movement while `game_phase != PHASE_PLAYING` — add phase checks early; retrofitting them later breaks many call sites."_
 
 If a file is copied unchanged from the platform template, say so in one line and do not reproduce its content. If only 1–2 lines changed in a large file, show only the surrounding function with the changed lines clearly marked.
+
+> **Compilability rule — no undefined references in lesson code.** Every function call, type, and macro that appears in a lesson's code blocks must be one of:
+>
+> 1. **Defined in this lesson** — the full implementation is shown in a code block within this lesson.
+> 2. **Defined in a previous lesson** — referenced by lesson number (e.g., "`draw_rect()` from Lesson 04").
+> 3. **Provided by the platform template** — referenced as "copied from the Platform Foundation Course".
+> 4. **Part of the C standard library or a linked library** — e.g., `memset`, `sinf`, `printf`.
+>
+> If a lesson's code calls `draw_rect()` but `draw_rect()` has never been shown, defined, or attributed to a prior lesson, the lesson is **broken** — the student cannot compile it. The same applies to types (`Backbuffer`, `GameState`), macros (`GAME_RGB`, `COLOR_BG`), and any identifier the compiler would need to resolve.
+>
+> **Audit after writing each lesson:** List every function called, every type referenced, and every macro used in the lesson's code blocks. For each one, verify it falls into one of the four categories above. If any identifier is unaccounted for, either:
+>
+> - Add its implementation to this lesson (if it naturally belongs here), or
+> - Add a note citing the lesson where it was introduced, or
+> - Move this lesson later in the sequence (if it depends on a concept not yet taught).
+>
+> **Common violations to watch for:**
+>
+> | Violation                                             | Example                                                        | Fix                                                                                        |
+> | ----------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+> | Calling a function not yet defined                    | `demo_render(&backbuffer, ...)` before `demo_render` is shown          | Show the complete `demo_render` implementation in this lesson                              |
+> | Using a utility function without showing it           | `draw_rect(backbuffer, ...)` when `draw_rect` hasn't been introduced   | Either include the `draw_rect` implementation or defer this lesson until after it's taught |
+> | Referencing a type not yet declared                   | Using `Backbuffer *backbuffer` before the `Backbuffer` struct is shown | Include the struct definition or reference the lesson that introduced it                   |
+> | Using macros without definition                       | `COLOR_BG`, `GAME_RGB` used but not shown or cited             | Show the macro definition or cite the lesson that introduced it                            |
+> | Calling `game_update`/`game_render` before they exist | Platform loop calls `game_render()` but no body is provided    | Provide at minimum a stub implementation the student can type                              |
 
 **Platform changes** — whenever a platform file (`platforms/*/main.c`, `platforms/*/audio.c`, `game/base.h`) is modified, always begin that block with:
 
@@ -695,10 +1015,15 @@ Use a build script with backend selection and run flags.
 **Usage pattern:**
 
 ```bash
-./build-dev.sh                      # Build with default backend (raylib)
-./build-dev.sh --backend=x11        # Build with X11
-./build-dev.sh --backend=raylib -r  # Build and run
+./build-dev.sh                                          # Build with default backend (raylib)
+./build-dev.sh --backend=x11                            # Build with X11
+./build-dev.sh --backend=raylib -r                      # Build and run
+./build-dev.sh --backend=x11    --coord-mode=explicit   # game course: explicit coord mode
+./build-dev.sh --backend=x11    --coord-mode=implicit   # game course: implicit coord mode
+./build-dev.sh --backend=raylib --coord-mode=implicit   # raylib + implicit
 ```
+
+> **Coordinate mode in game courses:** choose `--coord-mode=explicit` or `--coord-mode=implicit` based on the course's declared `coord_mode` (see "Coordinate system mode" section). Use `--coord-mode=hybrid` only for the Platform Foundation Course or courses that explicitly contrast both abstraction levels. The chosen flag must appear in every lesson build command — never mixed within a course.
 
 > ⚠ **`build-dev.sh` mandatory conventions (deviating from these causes confusing bugs):**
 >
@@ -833,12 +1158,12 @@ typedef struct {
   Display    *display;
   Window      window;
   GLXContext  gl_context;
+  int         screen;
+  int         window_w;
+  int         window_h;
   Atom        wm_delete_window;
-  int         width, height;
   bool        vsync_enabled;
   GLuint      texture_id;
-  int         is_running;
-  X11Audio    audio;         /* owns ALSA handle + config */
 } X11State;
 
 extern X11State g_x11;      /* definition lives in base.c */
@@ -851,6 +1176,8 @@ X11State g_x11 = {0};       /* zero-init; C guarantees all fields start at 0/NUL
 ```
 
 The Raylib backend mirrors this pattern with its own `RaylibState g_raylib`. Neither struct is ever visible to `game/` or `utils/`.
+
+> **Note:** Audio state lives in `platforms/x11/audio.c` as a file-scope static — it is **not** embedded in `X11State`.
 
 **Why a named global rather than a pointer parameter?** With exactly one platform instance, passing `PlatformState *ctx` through every function adds noise without benefit. A file-scope global is idiomatic for this pattern in C and makes the ownership clear: the struct lives in the backend's translation unit, no one else can touch it.
 
@@ -877,7 +1204,7 @@ The Raylib backend mirrors this pattern with its own `RaylibState g_raylib`. Nei
 ┌──────────────────────────────────────────┐
 │  game.c                                  │
 │  game_render writes ARGB pixels          │
-│  draw_rect / draw_rect_blend             │
+│  draw_rect (handles alpha automatically) │
 │  draw_text / draw_char (bitmap font)     │
 └──────────────────────────────────────────┘
 ```
@@ -898,10 +1225,10 @@ Define `pitch = width * sizeof(uint32_t)` in your backbuffer and write pixel loo
 
 ```c
 /* Correct — works whether or not pitch == width*4 */
-bb->pixels[py * (bb->pitch / 4) + px] = color;
+backbuffer->pixels[py * (backbuffer->pitch / backbuffer->bytes_per_pixel) + px] = color;
 
 /* Fragile — breaks if pitch ever differs from width*4 */
-bb->pixels[py * bb->width + px] = color;
+backbuffer->pixels[py * backbuffer->width + px] = color;
 ```
 
 In our simple games `pitch = width * 4` always, but teaching the formula now means the student will never introduce a stride bug when they encounter a real API.
@@ -1547,6 +1874,8 @@ ASSERT_MSG(buffer != NULL, "Buffer was not allocated");
 
 ## Coordinate and unit systems
 
+> **Game-unit coordinate system:** The draw API (`draw_rect`, `draw_text`, etc.) accepts float coordinates in game units. Define `GAME_UNITS_W` / `GAME_UNITS_H` as the logical canvas dimensions and use `units_to_pixels()` conversion at the call site when converting from game-world coordinates to draw coordinates. This keeps all game logic in a consistent unit space and makes resolution independence trivial.
+
 ### When to use which system
 
 | Game Type                                          | Coordinate System          | Unit System                                        | Default?    |
@@ -1574,7 +1903,7 @@ entity.vel_y -= 9.8f * dt;          /* gravity pulls down (negative Y) */
 entity.pos_y += entity.vel_y * dt;  /* positive velocity = upward motion */
 
 /* game_render() ONLY — Y-up to screen (Y-down) conversion */
-int screen_y = (bb->height - 1) - (int)(entity.pos_y * PIXELS_PER_METER);
+int screen_y = (backbuffer->height - 1) - (int)(entity.pos_y * PIXELS_PER_METER);
 ```
 
 **Y-down pattern (grid games only):**
@@ -1629,11 +1958,11 @@ entity.vel_y -= 9.8f * dt;           /* gravity: −9.8 m/s² */
 entity.pos_y += entity.vel_y * dt;   /* Euler integration */
 
 /* game_render() ONLY — convert to pixels at the last moment */
-int px = (int)(entity.x      * PIXELS_PER_METER);
-int py = (int)(entity.y      * PIXELS_PER_METER); /* + Y-flip for Y-up games */
-int pw = (int)(entity.width  * PIXELS_PER_METER);
-int ph = (int)(entity.height * PIXELS_PER_METER);
-draw_rect(bb, px, py, pw, ph, color);
+float px = entity.x      * PIXELS_PER_METER;
+float py = entity.y      * PIXELS_PER_METER; /* + Y-flip for Y-up games */
+float pw = entity.width  * PIXELS_PER_METER;
+float ph = entity.height * PIXELS_PER_METER;
+draw_rect(backbuffer, px, py, pw, ph, COLOR_RED);  /* COLOR_RED expands to r,g,b,a floats */
 ```
 
 **Benefits:**
@@ -1654,68 +1983,72 @@ draw_rect(bb, px, py, pw, ph, color);
 
 **Reference:** `@ai-llm-knowledge-dump/generated-courses/platform-backend/course/src/` — `utils/draw-shapes.c` there contains the canonical rectangle drawing implementation; analyze the full source and follow from it.
 
-**Solid rectangle:**
+**Unified rectangle (handles alpha blending automatically):**
 
 ```c
-void draw_rect(Backbuffer *bb, int x, int y, int w, int h, uint32_t color) {
+void draw_rect(Backbuffer *backbuffer, float x, float y, float w, float h,
+               float r, float g, float b, float a) {
+  /* Convert float coords to integer pixel bounds */
+  int ix = (int)x, iy = (int)y, iw = (int)w, ih = (int)h;
+
   /* Clip to backbuffer bounds */
-  int x0 = (x < 0) ? 0 : x;
-  int y0 = (y < 0) ? 0 : y;
-  int x1 = (x + w > bb->width) ? bb->width : x + w;
-  int y1 = (y + h > bb->height) ? bb->height : y + h;
+  int x0 = (ix < 0) ? 0 : ix;
+  int y0 = (iy < 0) ? 0 : iy;
+  int x1 = (ix + iw > backbuffer->width)  ? backbuffer->width  : ix + iw;
+  int y1 = (iy + ih > backbuffer->height) ? backbuffer->height : iy + ih;
 
-  /* Use pitch/4, NOT width — pitch is bytes-per-row, which may differ from
-   * width*4 if the platform adds row padding (common on OpenGL/DirectX).   */
-  for (int py = y0; py < y1; py++) {
-    uint32_t *row = bb->pixels + py * (bb->pitch / 4);
-    for (int px = x0; px < x1; px++) {
-      row[px] = color;
+  /* Convert float color [0.0-1.0] to uint8 [0-255] */
+  uint32_t src_a = (uint32_t)(a * 255.0f);
+  uint32_t src_r = (uint32_t)(r * 255.0f);
+  uint32_t src_g = (uint32_t)(g * 255.0f);
+  uint32_t src_b = (uint32_t)(b * 255.0f);
+
+  /* Use pitch/bytes_per_pixel, NOT width — pitch is bytes-per-row, which may
+   * differ from width*4 if the platform adds row padding.                     */
+  int stride = backbuffer->pitch / backbuffer->bytes_per_pixel;
+
+  if (src_a >= 255) {
+    /* Fully opaque — fast path, no blending needed */
+    uint32_t packed = 0xFF000000 | (src_r << 16) | (src_g << 8) | src_b;
+    for (int py = y0; py < y1; py++) {
+      uint32_t *row = backbuffer->pixels + py * stride;
+      for (int px = x0; px < x1; px++) {
+        row[px] = packed;
+      }
+    }
+  } else {
+    /* Alpha < 1.0 — blend with existing pixel */
+    uint32_t inv_a = 255 - src_a;
+    for (int py = y0; py < y1; py++) {
+      uint32_t *row = backbuffer->pixels + py * stride;
+      for (int px = x0; px < x1; px++) {
+        uint32_t dst   = row[px];
+        uint32_t dst_r = (dst >> 16) & 0xFF;
+        uint32_t dst_g = (dst >> 8)  & 0xFF;
+        uint32_t dst_b = dst & 0xFF;
+
+        uint32_t out_r = (src_r * src_a + dst_r * inv_a) / 255;
+        uint32_t out_g = (src_g * src_a + dst_g * inv_a) / 255;
+        uint32_t out_b = (src_b * src_a + dst_b * inv_a) / 255;
+
+        row[px] = 0xFF000000 | (out_r << 16) | (out_g << 8) | out_b;
+      }
     }
   }
 }
 ```
 
-**Blended rectangle (for overlays):**
-
-```c
-void draw_rect_blend(Backbuffer *bb, int x, int y, int w, int h, uint32_t color) {
-  int x0 = (x < 0) ? 0 : x;
-  int y0 = (y < 0) ? 0 : y;
-  int x1 = (x + w > bb->width) ? bb->width : x + w;
-  int y1 = (y + h > bb->height) ? bb->height : y + h;
-
-  uint32_t src_a = (color >> 24) & 0xFF;
-  uint32_t src_r = (color >> 16) & 0xFF;
-  uint32_t src_g = (color >> 8) & 0xFF;
-  uint32_t src_b = color & 0xFF;
-  uint32_t inv_a = 255 - src_a;
-
-  for (int py = y0; py < y1; py++) {
-    uint32_t *row = bb->pixels + py * (bb->pitch / 4);  /* pitch/4, NOT width */
-    for (int px = x0; px < x1; px++) {
-      uint32_t dst = row[px];
-      uint32_t dst_r = (dst >> 16) & 0xFF;
-      uint32_t dst_g = (dst >> 8) & 0xFF;
-      uint32_t dst_b = dst & 0xFF;
-
-      uint32_t out_r = (src_r * src_a + dst_r * inv_a) / 255;
-      uint32_t out_g = (src_g * src_a + dst_g * inv_a) / 255;
-      uint32_t out_b = (src_b * src_a + dst_b * inv_a) / 255;
-
-      row[px] = 0xFF000000 | (out_r << 16) | (out_g << 8) | out_b;
-    }
-  }
-}
-```
+> **Note:** There is no separate `draw_rect_blend` function. The single `draw_rect` handles both solid fills (a = 1.0) and alpha-blended overlays (a < 1.0) automatically. Color parameters are float [0.0-1.0]; named color macros like `COLOR_RED` expand to multi-arg floats (e.g., `0.863f, 0.196f, 0.196f, 1.0f`).
 
 **Usage:**
 
 ```c
-/* Solid red rectangle */
-draw_rect(bb, 10, 10, 100, 50, COLOR_RED);
+/* Solid red rectangle — COLOR_RED expands to r, g, b, a float args */
+draw_rect(backbuffer, 10.0f, 10.0f, 100.0f, 50.0f, COLOR_RED);
 
 /* Semi-transparent black overlay for game over screen */
-draw_rect_blend(bb, 0, 0, bb->width, bb->height, GAME_RGBA(0, 0, 0, 128));
+draw_rect(backbuffer, 0, 0, (float)backbuffer->width, (float)backbuffer->height,
+          0.0f, 0.0f, 0.0f, 0.5f);
 ```
 
 ### Bitmap font rendering
@@ -1743,9 +2076,17 @@ static const uint8_t FONT_8X8[128][8] = {
   /* ... etc ... */
 };
 
-void draw_char(Backbuffer *bb, int x, int y, char c, uint32_t color, int scale) {
+void draw_char(Backbuffer *backbuffer, float x, float y, int scale, char c,
+               float r, float g, float b, float a) {
   if (c < 0 || c > 127) return;
   const uint8_t *glyph = FONT_8X8[(int)c];
+
+  /* Convert float color to uint32_t for direct pixel writes */
+  uint32_t packed = (((uint32_t)(a * 255.0f)) << 24) |
+                    (((uint32_t)(r * 255.0f)) << 16) |
+                    (((uint32_t)(g * 255.0f)) << 8)  |
+                     ((uint32_t)(b * 255.0f));
+  int ix = (int)x, iy = (int)y;
 
   for (int row = 0; row < 8; row++) {
     uint8_t bits = glyph[row];
@@ -1754,10 +2095,10 @@ void draw_char(Backbuffer *bb, int x, int y, char c, uint32_t color, int scale) 
         /* Draw scaled pixel */
         for (int sy = 0; sy < scale; sy++) {
           for (int sx = 0; sx < scale; sx++) {
-            int px = x + col * scale + sx;
-            int py = y + row * scale + sy;
-            if (px >= 0 && px < bb->width && py >= 0 && py < bb->height) {
-              bb->pixels[py * (bb->pitch / 4) + px] = color;  /* pitch/4, NOT width */
+            int px = ix + col * scale + sx;
+            int py = iy + row * scale + sy;
+            if (px >= 0 && px < backbuffer->width && py >= 0 && py < backbuffer->height) {
+              backbuffer->pixels[py * (backbuffer->pitch / backbuffer->bytes_per_pixel) + px] = packed;
             }
           }
         }
@@ -1766,11 +2107,12 @@ void draw_char(Backbuffer *bb, int x, int y, char c, uint32_t color, int scale) 
   }
 }
 
-void draw_text(Backbuffer *bb, int x, int y, const char *text, uint32_t color, int scale) {
-  int cursor_x = x;
+void draw_text(Backbuffer *backbuffer, float x, float y, int scale, const char *text,
+               float r, float g, float b, float a) {
+  float cursor_x = x;
   while (*text) {
-    draw_char(bb, cursor_x, y, *text, color, scale);
-    cursor_x += 8 * scale;  /* 8 pixels per char, scaled */
+    draw_char(backbuffer, cursor_x, y, scale, *text, r, g, b, a);
+    cursor_x += 8.0f * scale;  /* 8 pixels per char, scaled */
     text++;
   }
 }
@@ -1779,8 +2121,8 @@ void draw_text(Backbuffer *bb, int x, int y, const char *text, uint32_t color, i
 **Usage:**
 
 ```c
-draw_text(bb, 10, 10, "SCORE", COLOR_WHITE, 2);  /* 2x scale */
-draw_text(bb, 10, 30, "12345", COLOR_YELLOW, 2);
+draw_text(backbuffer, 10.0f, 10.0f, 2, "SCORE", COLOR_WHITE);  /* 2x scale */
+draw_text(backbuffer, 10.0f, 30.0f, 2, "12345", COLOR_YELLOW);
 ```
 
 **Rendering integers as text — use `snprintf` (never `itoa`):**
@@ -1788,7 +2130,7 @@ draw_text(bb, 10, 30, "12345", COLOR_YELLOW, 2);
 ```c
 char score_buf[32];
 snprintf(score_buf, sizeof(score_buf), "%d", state->score);
-draw_text(bb, 10, 30, score_buf, COLOR_YELLOW, 2);
+draw_text(backbuffer, 10.0f, 30.0f, 2, score_buf, COLOR_YELLOW);
 /* JS equivalent: String(state.score) */
 ```
 
@@ -1800,9 +2142,9 @@ draw_text(bb, 10, 30, score_buf, COLOR_YELLOW, 2);
 
 ## Audio system
 
-**Reference:** `@ai-llm-knowledge-dump/generated-courses/platform-backend/course/src/` — `utils/audio.h` there defines the canonical audio types (`AudioOutputBuffer`, `SoundDef`, `SoundInstance`, `GameAudioState`, `ToneGenerator`, `MusicSequencer`); `game/audio_demo.c` shows a complete game-layer audio example. Analyze the full source and follow from it. Game-specific audio functions (`game_play_sound_at`, `game_audio_update`, `game_get_audio_samples`) are game-layer code you write for this course.
+**Reference:** `@ai-llm-knowledge-dump/generated-courses/platform-backend/course/src/` — `utils/audio.h` there defines the canonical audio types (`AudioOutputBuffer`, `SoundDef`, `ToneGenerator`, `GameAudioState`, `MusicSequencer`); `game/audio_demo.c` shows a complete game-layer audio example. Analyze the full source and follow from it. Game-specific audio functions (`game_play_sound_at`, `game_audio_update`, `game_get_audio_samples`) are game-layer code you write for this course.
 
-> **Planning note:** For games with non-trivial audio, this section expands into **at minimum two lessons**, and often more: (1) `AudioOutputBuffer` + `SoundInstance` pool + `game_play_sound_at()` + the per-sample loop; (2) `MusicSequencer` + `ToneGenerator` + `game_audio_update()` + MIDI-to-Hz; (3) if the game has sustained/looping sounds: `game_sustain_sound_update()` + `WAVE_TRIANGLE` + `ENVELOPE_TRAPEZOID`; (4) if multiple music tracks: `MusicCrossfade` + `audio_ramp_music_volume()`. Each of these is a separate lesson candidate in the topic inventory — none may be merged into a single lesson if doing so would introduce more than 3 new concepts. Treat the patterns below as the minimum; expect to add 150–200 lines of explanation per audio lesson. Do not mark audio as "optional" in the lesson plan — it is a core feature of most games and is consistently underestimated.
+> **Planning note:** For games with non-trivial audio, this section expands into **at minimum two lessons**, and often more: (1) `AudioOutputBuffer` + `ToneGenerator` voice pool + `game_play_sound_at()` + the per-sample loop; (2) `MusicSequencer` + music `ToneGenerator` + `game_audio_update()` + MIDI-to-Hz; (3) if the game has sustained/looping sounds: `game_sustain_sound_update()` + `WAVE_TRIANGLE` + `ENVELOPE_TRAPEZOID`; (4) if multiple music tracks: `MusicCrossfade` + `audio_ramp_music_volume()`. Each of these is a separate lesson candidate in the topic inventory — none may be merged into a single lesson if doing so would introduce more than 3 new concepts. Treat the patterns below as the minimum; expect to add 150–200 lines of explanation per audio lesson. Do not mark audio as "optional" in the lesson plan — it is a core feature of most games and is consistently underestimated.
 
 ### Audio abstraction tier
 
@@ -1890,7 +2232,7 @@ static const SoundDef SOUND_DEFS[SOUND_COUNT] = {
 > ⚠ **Use `WAVE_TRIANGLE` for any continuously looping sound.** Square waves sound “retro/digital” — fine for short SFX (duration < ~0.3 s), but always perceived as harsh/buzzy when looped. Triangle formula:
 >
 > ```c
-> float wave = 1.0f - fabsf(4.0f * inst->phase - 2.0f);
+> float wave = 1.0f - fabsf(4.0f * gen->phase_acc - 2.0f);
 > ```
 >
 > Produces continuous linear ramps — no abrupt polarity flips. **Rule:** `WAVE_SQUARE` for short event sounds; `WAVE_TRIANGLE` for anything held or looping. Minimum looping tone frequency: **100 Hz** — below ~80 Hz most laptop/small speakers produce vibration, not audible tone.
@@ -1905,17 +2247,17 @@ static const SoundDef SOUND_DEFS[SOUND_COUNT] = {
 >
 > `game_sustain_sound` should: (1) play the sound if not already playing → attack ramp ("spool up"); (2) pin `samples_remaining ≥ total/4` while called → keeps volume at full; (3) when calls stop, remaining samples drain through the decay zone → natural fade. Use `ENVELOPE_TRAPEZOID` (10% attack + 80% sustain + 10% decay) for all looping/held sounds.
 
-**Reference:** `@ai-llm-knowledge-dump/generated-courses/platform-backend/course/src/` — `utils/audio.h` there defines the canonical `SoundInstance`, `ToneGenerator`, `MusicSequencer`, and `MAX_SIMULTANEOUS_SOUNDS`; analyze the full source. Do not strip fields — they are all used:
+**Reference:** `@ai-llm-knowledge-dump/generated-courses/platform-backend/course/src/` — `utils/audio.h` there defines the canonical `ToneGenerator`, `MusicSequencer`, and `MAX_SOUNDS`; analyze the full source. Do not strip fields — they are all used:
 
 ```c
 /* Size from your game's BUSIEST moment: count every looping sound as always-active.
    Add at least 4 slots of headroom. Default: 16 (each slot ≈32 bytes — negligible).
    Add ASSERT at insertion time — silent overflow masks audio bugs for too long.     */
-#define MAX_SIMULTANEOUS_SOUNDS 16
+#define MAX_SOUNDS 16
 
 typedef struct {
   SOUND_ID sound_id;
-  float phase;           /* 0.0–1.0 oscillator phase; do NOT reset between frames */
+  float phase_acc;       /* 0.0–1.0 oscillator phase accumulator; do NOT reset between frames */
   int samples_remaining; /* Counts down to zero — sound is done when 0            */
   float volume;          /* 0.0 to 1.0                                            */
   float frequency;       /* Current frequency in Hz (mutates during freq slide)   */
@@ -1923,14 +2265,14 @@ typedef struct {
   int total_samples;     /* Total duration in samples; used for envelope ratio     */
   int fade_in_samples;   /* Ramp-up samples (~10 ms) to prevent click on attack   */
   float pan_position;    /* -1.0 = full left, 0.0 = center, 1.0 = full right     */
-} SoundInstance;
+} ToneGenerator;
 ```
 
 `GameAudioState` owns the pool and volume controls:
 
 ```c
 typedef struct {
-  SoundInstance active_sounds[MAX_SIMULTANEOUS_SOUNDS];
+  ToneGenerator voices[MAX_SOUNDS];
   MusicSequencer music;
   int samples_per_second;
   float master_volume;  /* 0.0–1.0 global scale */
@@ -1949,7 +2291,7 @@ typedef struct {
 > | ---------------------------------------- | -------------------------------------------------------- |
 > | `SetAudioStreamVolume(stream, 0.5f)`     | multiply samples by `audio->master_volume` in mixer loop |
 > | ALSA SW plugin volume / dmix             | `mixed_left *= audio->master_volume` per sample          |
-> | `SetAudioStreamPitch(stream, 1.5f)`      | slide `inst->frequency` in `game_get_audio_samples()`    |
+> | `SetAudioStreamPitch(stream, 1.5f)`      | slide `gen->frequency` in `game_get_audio_samples()`     |
 > | Any Raylib `PlaySound()` / `LoadSound()` | `game_play_sound()` → PCM mixer → `samples_buffer`       |
 
 ### Playing sounds
@@ -1962,40 +2304,40 @@ The primary API is `game_play_sound_at()` which accepts a pan position from the 
 void game_play_sound_at(GameAudioState *audio, SOUND_ID sound, float pan) {
   if (sound == SOUND_NONE || sound >= SOUND_COUNT) return;
 
-  /* Find a free slot (O(N), N is small — MAX_SIMULTANEOUS_SOUNDS = 16) */
+  /* Find a free slot (O(N), N is small — MAX_SOUNDS = 16) */
   int slot = -1;
-  for (int i = 0; i < MAX_SIMULTANEOUS_SOUNDS; i++) {
-    if (audio->active_sounds[i].samples_remaining <= 0) {
+  for (int i = 0; i < MAX_SOUNDS; i++) {
+    if (audio->voices[i].samples_remaining <= 0) {
       slot = i;
       break;
     }
   }
   /* No free slot: steal oldest — better to drop a sound than to stall */
   if (slot < 0) {
-    ASSERT(0 && "Sound pool full — increase MAX_SIMULTANEOUS_SOUNDS");
+    ASSERT(0 && "Sound pool full — increase MAX_SOUNDS");
     slot = 0;  /* steal oldest as fallback in release builds */
   }
 
   const SoundDef *def   = &SOUND_DEFS[sound];
-  SoundInstance  *inst  = &audio->active_sounds[slot];
+  ToneGenerator  *gen   = &audio->voices[slot];
 
   int duration_samples =
       (int)(def->duration_ms * (float)audio->samples_per_second / 1000.0f);
 
-  inst->sound_id        = sound;
-  inst->phase           = 0.0f;
-  inst->frequency       = def->frequency;
-  inst->volume          = def->volume;
-  inst->total_samples   = duration_samples;
-  inst->samples_remaining = duration_samples;
-  inst->fade_in_samples = audio->samples_per_second / 100; /* ~10 ms */
-  inst->pan_position    = pan;
+  gen->sound_id        = sound;
+  gen->phase_acc       = 0.0f;
+  gen->frequency       = def->frequency;
+  gen->volume          = def->volume;
+  gen->total_samples   = duration_samples;
+  gen->samples_remaining = duration_samples;
+  gen->fade_in_samples = audio->samples_per_second / 100; /* ~10 ms */
+  gen->pan_position    = pan;
 
   if (def->frequency_end > 0.0f && duration_samples > 0) {
-    inst->frequency_slide =
+    gen->frequency_slide =
         (def->frequency_end - def->frequency) / (float)duration_samples;
   } else {
-    inst->frequency_slide = 0.0f;
+    gen->frequency_slide = 0.0f;
   }
 }
 
@@ -2048,14 +2390,14 @@ For any sound tied to a held state, use a sustain model — not re-triggering a 
 ```c
 /* Call every frame while the source is active (key held, engine on, etc.) */
 void game_sustain_sound_update(GameAudioState *audio, SOUND_ID id, int should_play) {  /* int, not bool — avoids stdbool.h dependency */
-  for (int i = 0; i < MAX_SIMULTANEOUS_SOUNDS; i++) {
-    SoundInstance *inst = &audio->active_sounds[i];
-    if (inst->sound_id != id || inst->samples_remaining <= 0) continue;
+  for (int i = 0; i < MAX_SOUNDS; i++) {
+    ToneGenerator *gen = &audio->voices[i];
+    if (gen->sound_id != id || gen->samples_remaining <= 0) continue;
     if (should_play) {
       /* Pin samples_remaining above the decay threshold */
-      int min_remaining = inst->total_samples / 4;
-      if (inst->samples_remaining < min_remaining)
-        inst->samples_remaining = min_remaining;
+      int min_remaining = gen->total_samples / 4;
+      if (gen->samples_remaining < min_remaining)
+        gen->samples_remaining = min_remaining;
     }
     return;  /* found; handled */
   }
@@ -2157,28 +2499,28 @@ void game_get_audio_samples(GameState *state, AudioOutputBuffer *buffer) {
     float right = 0.0f;
 
     /* ── Sound effects ───────────────────────────────────────── */
-    for (int i = 0; i < MAX_SIMULTANEOUS_SOUNDS; i++) {
-      SoundInstance *inst = &audio->active_sounds[i];
-      if (inst->samples_remaining <= 0) continue;
+    for (int i = 0; i < MAX_SOUNDS; i++) {
+      ToneGenerator *gen = &audio->voices[i];
+      if (gen->samples_remaining <= 0) continue;
 
       /* Square wave oscillator — do NOT reset phase on slot reuse */
-      float wave = (inst->phase < 0.5f) ? 1.0f : -1.0f;
+      float wave = (gen->phase_acc < 0.5f) ? 1.0f : -1.0f;
 
       /* ── Click prevention: fade-in / fade-out ────────────── */
-      int   elapsed  = inst->total_samples - inst->samples_remaining;
+      int   elapsed  = gen->total_samples - gen->samples_remaining;
       float fade_in  = 1.0f;
-      if (inst->fade_in_samples > 0 && elapsed < inst->fade_in_samples) {
-        fade_in = (float)elapsed / (float)inst->fade_in_samples;
+      if (gen->fade_in_samples > 0 && elapsed < gen->fade_in_samples) {
+        fade_in = (float)elapsed / (float)gen->fade_in_samples;
       }
       float fade_out = 1.0f;
-      if (fade_out_samples > 0 && inst->samples_remaining < fade_out_samples) {
-        fade_out = (float)inst->samples_remaining / (float)fade_out_samples;
+      if (fade_out_samples > 0 && gen->samples_remaining < fade_out_samples) {
+        fade_out = (float)gen->samples_remaining / (float)fade_out_samples;
       }
-      float env = fade_in * fade_out * inst->volume * audio->sfx_volume;
+      float env = fade_in * fade_out * gen->volume * audio->sfx_volume;
 
       /* ── Stereo panning (linear law) ─────────────────────── */
       /* pan -1.0 = full left, 0.0 = center, 1.0 = full right   */
-      float pan      = inst->pan_position;
+      float pan      = gen->pan_position;
       float vol_left  = (pan <= 0.0f) ? 1.0f : 1.0f - pan;
       float vol_right = (pan >= 0.0f) ? 1.0f : 1.0f + pan;
 
@@ -2186,10 +2528,10 @@ void game_get_audio_samples(GameState *state, AudioOutputBuffer *buffer) {
       right += wave * env * vol_right;
 
       /* ── Advance oscillator state ─────────────────────────── */
-      inst->phase += inst->frequency * inv_sr;
-      if (inst->phase >= 1.0f) inst->phase -= 1.0f;  /* wrap, don't reset */
-      inst->frequency += inst->frequency_slide;
-      inst->samples_remaining--;
+      gen->phase_acc += gen->frequency * inv_sr;
+      if (gen->phase_acc >= 1.0f) gen->phase_acc -= 1.0f;  /* wrap, don't reset */
+      gen->frequency += gen->frequency_slide;
+      gen->samples_remaining--;
     }
 
     /* ── Music tone (ToneGenerator) ──────────────────────────── */
@@ -2209,11 +2551,11 @@ void game_get_audio_samples(GameState *state, AudioOutputBuffer *buffer) {
 
 **Why float mixing — never int16 directly:** Two simultaneous sounds each at `INT16_MAX` (32767) added as `int16_t` overflow to –2 (two's complement wrap). Even away from extremes, every `int16_t` multiply drops the low bits, building up quantisation noise over N voices. Mixing in `float32` keeps full precision across all additions; _one_ clamped integer conversion at the final `*out++ = ...` is the only precision loss. Rule: accumulate in `float left / right`, scale by `master_volume * 16000.0f`, clamp and cast once.
 
-**Click prevention** is handled by `fade_in` / `fade_out` computed from `inst->fade_in_samples` and `inst->total_samples`. Set these when initializing a slot (see `game_play_sound_at()` above).
+**Click prevention** is handled by `fade_in` / `fade_out` computed from `gen->fade_in_samples` and `gen->total_samples`. Set these when initializing a slot (see `game_play_sound_at()` above).
 
 **Stereo panning** uses linear-law: the attenuated channel is scaled by `1 - |pan|`. This matches `calculate_piece_pan()` in `audio.c`.
 
-**DO NOT** reset `inst->phase` to 0 between frames or on buffer boundaries — that creates a click. `phase` is owned by `SoundInstance` and ticks continuously until the sound expires.
+**DO NOT** reset `gen->phase_acc` to 0 between frames or on buffer boundaries — that creates a click. `phase_acc` is owned by `ToneGenerator` and ticks continuously until the sound expires.
 
 ### Platform audio integration
 
@@ -2306,7 +2648,7 @@ if (to_write > 0) {
 > **Fix:** retrigger the initial phase's music explicitly after `platform_audio_init` returns:
 >
 > ```c
-> game_init(&state, &bb);               /* sets initial phase; triggers music internally */
+> game_init(&state, &backbuffer);        /* sets initial phase; triggers music internally */
 > platform_audio_init(&state, RATE);    /* game_audio_init runs here — memset wipes seq state */
 > game_music_play_title(&state.audio);  /* retrigger initial phase music AFTER audio init */
 > ```
@@ -2415,8 +2757,8 @@ A phase accumulator is the simplest correct oscillator implementation. `phase` a
 
 ```c
 /* Advance phase — do NOT reset this to 0 between frames or on slot reuse */
-inst->phase += inst->frequency * inv_sr;
-if (inst->phase >= 1.0f) inst->phase -= 1.0f;  /* wrap, never reset */
+gen->phase_acc += gen->frequency * inv_sr;
+if (gen->phase_acc >= 1.0f) gen->phase_acc -= 1.0f;  /* wrap, never reset */
 ```
 
 Why wrap instead of reset? A hard reset to 0 restarts the wave at a fixed point, creating a discontinuity (click) that is clearly audible.
@@ -2731,8 +3073,10 @@ void game_update(GameState *state, GameInput *input, float delta_time) {
 
 ```c
 if (state->phase == GAME_PHASE_GAME_OVER) {
-  draw_rect_blend(bb, 0, 0, bb->width, bb->height, GAME_RGBA(0, 0, 0, 160));
-  draw_text(bb, bb->width / 2 - 40, bb->height / 2, "GAME OVER", COLOR_RED, 2);
+  draw_rect(backbuffer, 0, 0, (float)backbuffer->width, (float)backbuffer->height,
+            0.0f, 0.0f, 0.0f, 0.63f);
+  draw_text(backbuffer, (float)(backbuffer->width / 2 - 40), (float)(backbuffer->height / 2),
+            2, "GAME OVER", COLOR_RED);
 }
 ```
 
@@ -2804,31 +3148,29 @@ void game_update(GameState *state, GameInput *input, float delta_time) {
 **Reference (game-specific):** `game_render()` is game-layer code you write for this course. Analyze `@ai-llm-knowledge-dump/generated-courses/platform-backend/course/src/game/demo.c` for how game rendering is structured, then build your game's equivalent.
 
 ```c
-void game_render(Backbuffer *bb, GameState *state) {
-  /* 1. Clear background */
-  for (int i = 0; i < bb->width * bb->height; i++) {
-    bb->pixels[i] = COLOR_BLACK;
-  }
+void game_render(Backbuffer *backbuffer, GameState *state) {
+  /* 1. Clear background — use draw_rect for full-screen fill */
+  draw_rect(backbuffer, 0, 0, (float)backbuffer->width, (float)backbuffer->height, COLOR_BLACK);
 
   /* 2. Draw static elements (field, walls) */
   for (int y = 0; y < FIELD_HEIGHT; y++) {
     for (int x = 0; x < FIELD_WIDTH; x++) {
       unsigned char cell = state->field[y * FIELD_WIDTH + x];
       if (cell != TETRIS_FIELD_EMPTY) {
-        draw_cell(bb, x, y, get_cell_color(cell));
+        draw_cell(backbuffer, x, y, get_cell_color(cell));
       }
     }
   }
 
   /* 3. Draw dynamic elements (current piece) */
-  draw_piece(bb, &state->current_piece);
+  draw_piece(backbuffer, &state->current_piece);
 
   /* 4. Draw UI (score, level, next piece) */
-  draw_ui(bb, state);
+  draw_ui(backbuffer, state);
 
   /* 5. Draw overlays (game over screen) */
   if (state->is_game_over) {
-    draw_game_over_overlay(bb);
+    draw_game_over_overlay(backbuffer);
   }
 }
 ```
@@ -3182,14 +3524,14 @@ void camera_follow(Camera *cam, float target_x, float target_y, float dt) {
 }
 
 /* Convert a world position to a screen pixel (Y-up world, Y-down screen) */
-void world_to_screen(Camera *cam, Backbuffer *bb,
+void world_to_screen(Camera *cam, Backbuffer *backbuffer,
                      float wx, float wy, int *sx, int *sy) {
   /* Offset relative to camera centre */
   float rel_x = wx - cam->x;
   float rel_y = wy - cam->y;
   /* Convert to pixels, centred on screen */
-  *sx = (bb->width  / 2) + (int)(rel_x * PIXELS_PER_METER);
-  *sy = (bb->height / 2) - (int)(rel_y * PIXELS_PER_METER); /* Y-flip */
+  *sx = (backbuffer->width  / 2) + (int)(rel_x * PIXELS_PER_METER);
+  *sy = (backbuffer->height / 2) - (int)(rel_y * PIXELS_PER_METER); /* Y-flip */
 }
 ```
 
@@ -3204,7 +3546,7 @@ if (cam->y - half_h < 0)           cam->y = half_h;
 if (cam->y + half_h > WORLD_HEIGHT) cam->y = WORLD_HEIGHT - half_h;
 ```
 
-Replace every `entity.x * PIXELS_PER_METER` in `game_render()` with `world_to_screen(&camera, bb, entity.x, entity.y, &sx, &sy)` the moment you add a camera.
+Replace every `entity.x * PIXELS_PER_METER` in `game_render()` with `world_to_screen(&camera, backbuffer, entity.x, entity.y, &sx, &sy)` the moment you add a camera.
 
 ---
 
@@ -3267,7 +3609,7 @@ typedef struct {
   float vel_x, vel_y;
   float lifetime;       /* seconds remaining */
   float max_lifetime;   /* total duration — used for alpha fade ratio */
-  uint32_t color;       /* base color */
+  float color_r, color_g, color_b;  /* base color (float 0.0-1.0) */
   float size;           /* radius or half-width in pixels */
   int   active;
 } Particle;
@@ -3275,10 +3617,10 @@ typedef struct {
 static Particle particles[MAX_PARTICLES];
 
 void spawn_particle(float x, float y, float vx, float vy,
-                    float lifetime, uint32_t color, float size) {
+                    float lifetime, float color_r, float color_g, float color_b, float size) {
   for (int i = 0; i < MAX_PARTICLES; i++) {
     if (!particles[i].active) {
-      particles[i] = (Particle){x, y, vx, vy, lifetime, lifetime, color, size, 1};
+      particles[i] = (Particle){x, y, vx, vy, lifetime, lifetime, color_r, color_g, color_b, size, 1};
       return;
     }
   }
@@ -3296,16 +3638,15 @@ void update_particles(float dt) {
   }
 }
 
-void render_particles(Backbuffer *bb, float alpha /*unused here*/) {
+void render_particles(Backbuffer *backbuffer, float alpha /*unused here*/) {
   for (int i = 0; i < MAX_PARTICLES; i++) {
     if (!particles[i].active) continue;
     /* Fade alpha based on remaining lifetime */
-    float t   = particles[i].lifetime / particles[i].max_lifetime;
-    uint32_t a = (uint32_t)(t * 255.0f);
-    uint32_t c = (particles[i].color & 0x00FFFFFF) | (a << 24);
-    int size  = (int)particles[i].size;
-    draw_rect_blend(bb, (int)particles[i].x - size/2,
-                        (int)particles[i].y - size/2, size, size, c);
+    float t    = particles[i].lifetime / particles[i].max_lifetime;
+    float size = particles[i].size;
+    draw_rect(backbuffer, particles[i].x - size / 2.0f,
+              particles[i].y - size / 2.0f, size, size,
+              particles[i].color_r, particles[i].color_g, particles[i].color_b, t);
   }
 }
 ```
@@ -3313,12 +3654,12 @@ void render_particles(Backbuffer *bb, float alpha /*unused here*/) {
 **Spawn helpers for common effects:**
 
 ```c
-void spawn_explosion(float x, float y, uint32_t color, int count) {
+void spawn_explosion(float x, float y, float r, float g, float b, int count) {
   for (int i = 0; i < count; i++) {
     float angle = ((float)rand() / RAND_MAX) * 6.2832f;
     float speed = 30.0f + ((float)rand() / RAND_MAX) * 80.0f;
     spawn_particle(x, y, cosf(angle)*speed, sinf(angle)*speed,
-                   0.4f + ((float)rand()/RAND_MAX)*0.4f, color, 3.0f);
+                   0.4f + ((float)rand()/RAND_MAX)*0.4f, r, g, b, 3.0f);
   }
 }
 ```
@@ -3332,32 +3673,38 @@ Inline debug rendering makes physics, collision, and AI bugs instantly visible w
 ```c
 #ifdef DEBUG
 /* Draw all entity AABBs as coloured outlines */
-void debug_draw_hitboxes(Backbuffer *bb, Entity *entities, int count) {
+void debug_draw_hitboxes(Backbuffer *backbuffer, Entity *entities, int count) {
   for (int i = 0; i < count; i++) {
     if (!entities[i].active) continue;
-    int x = (int)(entities[i].x * PIXELS_PER_METER);
-    int y = (int)(entities[i].y * PIXELS_PER_METER);
-    int w = (int)(entities[i].width  * PIXELS_PER_METER);
-    int h = (int)(entities[i].height * PIXELS_PER_METER);
-    uint32_t col = (entities[i].type == ENTITY_PLAYER) ? COLOR_GREEN : COLOR_RED;
-    /* Draw four 1-pixel-thick edges */
-    draw_rect(bb, x,       y,       w, 1, col);
-    draw_rect(bb, x,       y+h-1,   w, 1, col);
-    draw_rect(bb, x,       y,       1, h, col);
-    draw_rect(bb, x+w-1,   y,       1, h, col);
+    float x = entities[i].x * PIXELS_PER_METER;
+    float y = entities[i].y * PIXELS_PER_METER;
+    float w = entities[i].width  * PIXELS_PER_METER;
+    float h = entities[i].height * PIXELS_PER_METER;
+    /* Draw four 1-pixel-thick edges — COLOR_GREEN/COLOR_RED expand to r,g,b,a floats */
+    if (entities[i].type == ENTITY_PLAYER) {
+      draw_rect(backbuffer, x,       y,       w, 1, COLOR_GREEN);
+      draw_rect(backbuffer, x,       y+h-1,   w, 1, COLOR_GREEN);
+      draw_rect(backbuffer, x,       y,       1, h, COLOR_GREEN);
+      draw_rect(backbuffer, x+w-1,   y,       1, h, COLOR_GREEN);
+    } else {
+      draw_rect(backbuffer, x,       y,       w, 1, COLOR_RED);
+      draw_rect(backbuffer, x,       y+h-1,   w, 1, COLOR_RED);
+      draw_rect(backbuffer, x,       y,       1, h, COLOR_RED);
+      draw_rect(backbuffer, x+w-1,   y,       1, h, COLOR_RED);
+    }
   }
 }
 
 /* Draw velocity vectors */
-void debug_draw_velocities(Backbuffer *bb, Entity *entities, int count) {
+void debug_draw_velocities(Backbuffer *backbuffer, Entity *entities, int count) {
   for (int i = 0; i < count; i++) {
     if (!entities[i].active) continue;
-    int cx = (int)(entities[i].x * PIXELS_PER_METER);
-    int cy = (int)(entities[i].y * PIXELS_PER_METER);
-    int vx = cx + (int)(entities[i].vel_x * 4.0f);  /* scale for visibility */
-    int vy = cy - (int)(entities[i].vel_y * 4.0f);  /* Y-flip */
+    float cx = entities[i].x * PIXELS_PER_METER;
+    float cy = entities[i].y * PIXELS_PER_METER;
+    float vx = cx + entities[i].vel_x * 4.0f;  /* scale for visibility */
+    float vy = cy - entities[i].vel_y * 4.0f;  /* Y-flip */
     /* Draw a simple line using draw_rect for each pixel (or a proper line fn) */
-    draw_rect(bb, cx, cy, vx - cx, 1, COLOR_YELLOW);
+    draw_rect(backbuffer, cx, cy, vx - cx, 1, COLOR_YELLOW);
   }
 }
 #endif
@@ -3431,10 +3778,10 @@ if (input->debug_dump) {
   printf("phase=%d score=%d level=%d drop_t=%.3f\n",
          state->phase, state->score, state->level,
          state->drop_timer.timer);
-  for (int i = 0; i < MAX_SIMULTANEOUS_SOUNDS; i++) {
+  for (int i = 0; i < MAX_SOUNDS; i++) {
     printf("  sound[%d] id=%d rem=%d\n", i,
-           state->audio.active_sounds[i].sound_id,
-           state->audio.active_sounds[i].samples_remaining);
+           state->audio.voices[i].sound_id,
+           state->audio.voices[i].samples_remaining);
   }
 }
 #endif
@@ -3566,7 +3913,7 @@ List the new concepts explicitly in the "What you'll learn" section. For each co
 If a lesson necessarily introduces a stub, make its behavior explicit:
 
 - _"The window will be all-black — that is correct. We will add drawing in the next lesson."_
-- Or add a visible placeholder: a single `draw_rect(bb, 0, 0, bb->width, bb->height, COLOR_DARK_GRAY)` so _something_ appears.
+- Or add a visible placeholder: a single `draw_rect(backbuffer, 0, 0, (float)backbuffer->width, (float)backbuffer->height, COLOR_DARK_GRAY)` so _something_ appears.
 
 ---
 
@@ -3682,7 +4029,49 @@ We now have a moving rectangle — but its speed is tied to the frame rate. In L
 
 ---
 
-### Recommended lesson-writing order
+### Rule 12 — Lesson content depth
+
+Lessons must be **substantial teaching documents**, not summaries or cheat sheets. Each lesson should read like a chapter of a textbook, not a README section. The target student is a JS developer encountering C, memory layout, bit manipulation, and low-level rendering for the first time — everything that seems "obvious" to an experienced C programmer needs explicit explanation.
+
+**Minimum depth requirements:**
+
+- **Background section:** At least 3 paragraphs per new concept (JS analogy, how it works in C, why this design). Most concepts need 5–8 paragraphs when math or memory layout is involved. If the Background section for a whole lesson fits in under 15 lines of prose, it is too shallow.
+
+- **Math and formula explanations:** Every formula, bit operation, or numerical technique must include:
+  1. The **intuition** — what problem are we solving and why does this approach work?
+  2. The **step-by-step derivation** — show the math, show the bit layout, show the algebra. Do not present a formula and say "this gives us X." Walk the student through each step.
+  3. A **concrete numeric example** — substitute real values and trace through the computation. For bit operations, show the binary representation. For coordinate transforms, show a specific point being transformed.
+  4. A **what-if** — show what happens if you get it wrong (e.g., "If you use `GL_BGRA` instead of `GL_RGBA`, channels swap and red appears as blue").
+
+- **Code walkthrough:** After every code block, the call-out explanations should total at least 4–6 bullet points per function. Each bullet should explain _why_, not _what_. "Line 14 adds `delta_time`" is valueless — "Line 14: we accumulate real elapsed time rather than counting frames because frame duration varies between 4ms (240fps) and 33ms (30fps)" teaches something.
+
+- **Functions used must be traceable.** If a lesson's code calls any function — whether it's `draw_rect()`, `demo_render()`, `game_update()`, or anything else — the student must be able to find its complete implementation either in this lesson's code blocks, in a clearly cited earlier lesson, in the platform template copy, or in the C standard library. A lesson that calls `demo_render()` without showing its body, or calls `draw_rect()` before the lesson that implements it, leaves the student with code that does not compile. **This is a hard failure** — it is not a cosmetic issue. Every lesson must be self-contained enough to compile and run.
+
+**Anti-patterns (common in generated lessons):**
+
+| Anti-pattern               | What it looks like                                                             | What it should look like                                                                                |
+| -------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| Explanation-by-table-only  | A table with "Concept → One-sentence description" replacing prose              | Full prose paragraphs per concept, with tables used only for reference/comparison                       |
+| Formula-dropping           | "`out_r = (src_r * src_a + dst_r * inv_a) / 255` — this blends the two colors" | Derive from "percentage mixing" intuition, show algebra, trace example values, explain `/255` vs `/256` |
+| Stub-only code             | `demo_render` calls `draw_rect` but `draw_rect` is never shown or cited        | Either include `draw_rect` implementation or cite "see Lesson NN where `draw_rect` was implemented"     |
+| Comment-placeholder code   | `/* LESSON 04 — rectangles added here */` in a code listing                    | Show the complete code as it exists at THIS lesson; future additions are unknown to the student         |
+| Underpopulated walkthrough | 2 bullet points for a 30-line function                                         | 4–8 bullet points covering the key decisions, non-obvious lines, and connections to prior concepts      |
+
+---
+
+### Rule 13 — Complete code at every lesson boundary
+
+Every code listing in a lesson must represent the **complete, compilable state of that file at this point in the course**. The student types exactly what they see and runs `./build-dev.sh` — it must succeed with zero errors.
+
+This means:
+
+- **No forward-reference placeholders.** Never write `/* LESSON 06 — text label added here */` or `/* TODO: implement later */` in code the student types. The student's file at this lesson does not know about future lessons. Show only what exists now.
+- **No calls to undefined functions.** If the code calls `demo_render()`, the lesson must show the complete `demo_render()` function body — or cite the earlier lesson where it was fully defined.
+- **No use of undeclared types.** If the code references `Backbuffer *backbuffer`, the `Backbuffer` struct must be defined in a header the student has already created (cited by lesson number) or created in this lesson.
+- **No missing includes.** If the code calls `memset`, `#include <string.h>` must be present. If it uses `uint32_t`, `#include <stdint.h>` must be present. List every include.
+- **Stub functions are acceptable — but must be complete stubs.** If `game_render` doesn't do anything yet, show `void game_render(Backbuffer *backbuffer, GameState *state) { (void)backbuffer; (void)state; }` — a function the student can type that compiles and links.
+
+**Verification step:** After writing all code blocks for a lesson, mentally (or actually) concatenate every file the student has at this point. Does it compile? Does it link? Does it run? If any answer is "no", the lesson has a gap.
 
 When generating a lesson, follow this sequence to avoid going back and rewriting:
 
@@ -3718,6 +4107,10 @@ Before writing a lesson into the course output, verify every item:
 - [ ] "What's next" previews the next lesson's opening concept
 - [ ] Prior-lesson vocabulary recap paragraph present
 - [ ] No step is skippable without breaking a later step — progression is linear and explicit
+- [ ] **Background section has ≥ 3 paragraphs per new concept; math/formula concepts have step-by-step derivation with concrete numeric examples**
+- [ ] **Every function called in code blocks is either defined in this lesson, cited from a prior lesson, provided by the platform template, or from the C standard library — no undefined references**
+- [ ] **No forward-reference placeholder comments in code (no `/* LESSON NN — added here */`)**
+- [ ] **Code walkthrough has ≥ 4 call-out bullets per function, explaining _why_ not _what_**
 
 ---
 
@@ -3911,7 +4304,7 @@ The first four lessons form a universal foundation for any game. Everything afte
 
 If a cluster would introduce more than 3 new concepts, split at the first natural seam:
 
-- **Audio:** split into (1) PCM mixer + `SoundInstance` + `game_play_sound` and (2) `MusicSequencer` + `ToneGenerator` + `game_audio_update`
+- **Audio:** split into (1) PCM mixer + `ToneGenerator` (voice pool) + `game_play_sound` and (2) `MusicSequencer` + music `ToneGenerator` + `game_audio_update`
 - **Input:** split into (1) `GameButtonState` + `UPDATE_BUTTON` + `prepare_input_frame` and (2) `RepeatInterval` + `handle_action_with_repeat` + DAS/ARR timing
 - **State machine:** split into (1) `GAME_PHASE` enum + `switch` dispatch and (2) `change_phase` + audio transitions + per-phase entry logic
 - **Collision:** split into (1) AABB overlap + resolve and (2) swept AABB for fast movers
@@ -3961,15 +4354,15 @@ For any lesson that touches these areas, check both backends are covered:
 | Polling input (Raylib)                    | Call `UPDATE_BUTTON` every frame with current state                                                  |
 | Type-safe constants                       | `typedef enum { ... } NAME;`                                                                         |
 | Debug assertions                          | `ASSERT()` macro with `DEBUG_TRAP()`                                                                 |
-| Sound effects                             | `SoundDef` table + `game_play_sound_at(audio, id, pan)`                                              |
+| Sound effects                             | `SoundDef` table + `game_play_sound_at(audio, id, pan)` — voices stored in `ToneGenerator` pool      |
 | Centered sound (no pan)                   | `game_play_sound(audio, id)` — wrapper with `pan = 0.0`                                              |
-| Spatial panning                           | `calculate_piece_pan(x)` → `pan_position` on `SoundInstance`                                         |
+| Spatial panning                           | `calculate_piece_pan(x)` → `pan_position` on `ToneGenerator`                                         |
 | Click-free audio                          | `fade_in_samples = sps/100`; loop ramps both ends                                                    |
 | Background music                          | `MusicSequencer` with pattern data + `ToneGenerator`                                                 |
 | Audio latency budget                      | `PlatformAudioConfig`: `latency_samples = (sps/hz)*frames`                                           |
 | Multiple exclusive game states            | `GAME_PHASE` enum + `switch` dispatch in `game_update()`                                             |
 | Many short-lived objects                  | Fixed free-list pool (no `malloc`)                                                                   |
-| Semi-transparent overlay                  | `draw_rect_blend()` with alpha                                                                       |
+| Semi-transparent overlay                  | `draw_rect()` with alpha < 1.0 (handles blending automatically)                                      |
 | Text rendering                            | 8x8 bitmap font + `draw_text()`                                                                      |
 | Resolution independence                   | World units + `PIXELS_PER_METER` conversion                                                          |
 | VSync with fallback                       | Detect extension, manual sleep if unavailable                                                        |
@@ -3978,29 +4371,29 @@ For any lesson that touches these areas, check both backends are covered:
 | X11 window close button                   | `XInternAtom` `WM_DELETE_WINDOW` + handle `ClientMessage` in event loop                              |
 | ALSA silent startup (~0.5 s)              | `snd_pcm_sw_params_set_start_threshold(..., 1)` — always; call `current()` first                     |
 | Audio silent after restart                | Save `samples_per_second` before `memset(state)`; restore after                                      |
-| Phase accumulator oscillator              | `phase += freq * inv_sr; if (phase >= 1.0f) phase -= 1.0f;`                                          |
+| Phase accumulator oscillator              | `phase_acc += freq * inv_sr; if (phase_acc >= 1.0f) phase_acc -= 1.0f;`                               |
 | Square wave from phase                    | `(phase < 0.5f) ? 1.0f : -1.0f`                                                                      |
 | Volume ramping (no click)                 | `ToneGenerator.current_volume` → `target_volume` per sample                                          |
 | Two-loop audio (seq + PCM)                | `game_audio_update` (game time) + `game_get_audio_samples` (audio time)                              |
 | MIDI note → Hz                            | `440.0f * powf(2.0f, (note - 69) / 12.0f)`                                                           |
 | preview (example: Ghost piece algorithm)  | Re-apply fall until collision, render at final pos w/ alpha                                          |
 | Exponential line-clear scoring            | `(1 << lines_cleared) * BASE_SCORE` — doubles per extra line                                         |
-| Sustained/held-key sound (engine, thrust) | `game_sustain_sound` — pin `samples_remaining ≥ total/4` while key held                              |
+| Sustained/held-key sound (engine, thrust) | `game_sustain_sound_update` — pin `samples_remaining ≥ total/4` while key held                       |
 | Looping background sound (no buzz)        | `WAVE_TRIANGLE` + `ENVELOPE_TRAPEZOID`; `volume ≥ 0.50`                                              |
-| Sound pool overflow (silent drops)        | `ASSERT(slot >= 0)` at insertion; `MAX_SIMULTANEOUS_SOUNDS ≥ 16`                                     |
+| Sound pool overflow (silent drops)        | `ASSERT(slot >= 0)` at insertion; `MAX_SOUNDS ≥ 16`                                                  |
 | Window resize without art breaking        | Letterbox (`glViewport` / `DrawTexturePro`) from lesson 1                                            |
 | Directional vector from rotation angle    | Derive from 2×2 rotation matrix; document convention; test at `a=0`                                  |
 | Safe pool mutation during iteration       | `compact_pool` (swap-with-tail) — mark during loops, compact after                                   |
-| Y-up to screen conversion                 | `screen_y = (bb->height - 1) - (int)(world_y * PIXELS_PER_METER)`                                    |
+| Y-up to screen conversion                 | `screen_y = (backbuffer->height - 1) - (int)(world_y * PIXELS_PER_METER)`                             |
 | World units → pixels                      | `px = (int)(x * PIXELS_PER_METER)`; only in `game_render()`                                          |
-| Camera world-to-screen                    | `sx = bb->width/2 + (wx - cam.x)*PPM`; `sy = bb->height/2 - (wy - cam.y)*PPM`                        |
+| Camera world-to-screen                    | `sx = backbuffer->width/2 + (wx - cam.x)*PPM`; `sy = backbuffer->height/2 - (wy - cam.y)*PPM`         |
 | Camera follow (smooth lerp)               | `cam.x += (target_x - cam.x) * lerp_speed * dt`                                                      |
 | AABB overlap test                         | `a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y`                                   |
 | AABB resolve (minimum overlap axis)       | Push along the axis with the smallest overlap distance                                               |
 | Fast mover tunnelling                     | Swept AABB collision; returns `t` in `[0,1]` and contact normal                                      |
 | Fixed timestep accumulator                | `accumulator += dt; while (acc >= PHYS_DT) { tick(PHYS_DT); acc -= PHYS_DT; }`                       |
 | Spawn particles                           | Fixed pool `particles[MAX]`; find inactive slot; set lifetime and velocity                           |
-| Particle alpha fade                       | `alpha = (uint32_t)(lifetime / max_lifetime * 255.0f); color = (base & 0x00FFFFFF) \| (alpha << 24)` |
+| Particle alpha fade                       | `alpha = lifetime / max_lifetime`; pass as the `a` parameter to `draw_rect()`                        |
 | Multiple entity types                     | `EntityType` enum + `union` for type-specific data; `switch` dispatch in update                      |
 | Sustained sound (engine, thrust)          | `game_sustain_sound_update()` — pin `samples_remaining` while active                                 |
 | Music volume fade/duck                    | `audio_ramp_music_volume(audio, target, rate, dt)` per frame                                         |
@@ -4025,9 +4418,9 @@ For any lesson that touches these areas, check both backends are covered:
 | ALSA audio silent for first ~100 ms              | Default `start_threshold = 1` starts playback too early                  | Set `start_threshold = hw_buffer_size`; pre-fill buffer with silence before start     |
 | Raylib audio repeats or skips every ~1 s         | `sample_count` passed to fill callback doesn't match stream registration | Store `buffer_size_frames` at init; use it for every `game_get_audio_samples` call    |
 | Audio permanently silent after restart           | `memset(state, 0)` in `game_init` zeroes `samples_per_second`            | Save audio config before memset; restore `samples_per_second` + `master_volume` after |
-| Audio clicks/pops at sound start                 | `phase` reset to 0 on slot reuse                                         | Never reset `phase`; it ticks continuously per `SoundInstance`                        |
+| Audio clicks/pops at sound start                 | `phase_acc` reset to 0 on slot reuse                                     | Never reset `phase_acc`; it ticks continuously per `ToneGenerator`                    |
 | Audio clicks/pops at sound end                   | Abrupt cutoff — no fade-out                                              | Set `fade_in_samples`; loop uses `samples_remaining` fade-out                         |
-| Audio clicks/pops on buffer boundary             | Wave sample discontinuity between fills                                  | `phase` persists across fills — never reset it                                        |
+| Audio clicks/pops on buffer boundary             | Wave sample discontinuity between fills                                  | `phase_acc` persists across fills — never reset it                                    |
 | Audio plays mono instead of stereo               | Both channels written with same mono sample                              | Use separate `left`/`right` accumulators; apply `pan_position`                        |
 | Sound pos not panning                            | `game_play_sound()` used instead of `game_play_sound_at()`               | Call `game_play_sound_at()` with spatial pan value                                    |
 | Game freezes during line clear                   | Animation timer not decrementing                                         | Ensure `delta_time` subtraction in animation state                                    |
@@ -4062,6 +4455,15 @@ For any lesson that touches these areas, check both backends are covered:
 - [ ] Every lesson is self-contained: it compiles and runs to a visible result
 - [ ] Both X11 and Raylib versions are present for every platform-specific section in every lesson
 
+### Lesson content depth (applies to every lesson)
+
+- [ ] **Background section has ≥ 3 paragraphs per new concept** — not a single paragraph or a table row; prose that explains the JS analogy, the C mechanism, and the architectural rationale
+- [ ] **Every formula, bit operation, and coordinate transform has a step-by-step derivation** — show the math, not just the result; include a concrete numeric example with real values traced through each step
+- [ ] **Code walkthrough has ≥ 4 call-out bullets per function** — each bullet explains _why_ a line or decision matters, not just _what_ the line does
+- [ ] **Every function called in lesson code is fully accounted for** — defined in this lesson, cited from a prior lesson by number, provided by the platform template, or from the C standard library; no undefined references that would cause a compile or link error
+- [ ] **No forward-reference placeholder comments** — no `/* LESSON NN — feature added here */` in code the student types; code blocks show exactly the state of the file at this lesson and nothing more
+- [ ] **No explanation-by-table-only** — tables are used for reference and comparison, not as a substitute for explanatory prose; every concept gets full written explanation before or alongside any summary table
+
 ### PLAN.md and structure
 
 - [ ] PLAN.md exists and matches the final lesson structure (lesson count, titles, outcomes)
@@ -4089,7 +4491,7 @@ For any lesson that touches these areas, check both backends are covered:
 - [ ] **`GAME_PHASE` enum introduced in the lesson that adds `GameState`, for any game with 2+ mutually exclusive states; no scattered boolean flags**
 - [ ] **`change_phase()` wires all audio transitions (music start/stop/duck)**
 - [ ] Audio (if included) works on both platforms
-- [ ] `src/utils/audio.h` created with `GameAudioState`, `SoundInstance`, `ToneGenerator`, `MusicSequencer`, `AudioOutputBuffer`
+- [ ] `src/utils/audio.h` created with `GameAudioState`, `ToneGenerator`, `MusicSequencer`, `AudioOutputBuffer`
 - [ ] `src/audio.c` created with `game_get_audio_samples()` sample loop and `game_audio_update()`
 - [ ] `GameAudioState audio` embedded directly in `GameState` (NOT a global or separate allocation)
 - [ ] `platform.h` contract has `platform_audio_init`, `platform_audio_update`, `platform_audio_shutdown` — NOT `platform_play_sound`
@@ -4108,7 +4510,7 @@ For any lesson that touches these areas, check both backends are covered:
 - [ ] Letterbox centering implemented on both backends from lesson 1
 - [ ] Every lesson section has code examples for both X11 and Raylib (or explicit “identical on both backends” note)
 - [ ] All looping/sustained sounds use `WAVE_TRIANGLE` + `volume ≥ 0.50`
-- [ ] `MAX_SIMULTANEOUS_SOUNDS ≥ 16`; sized from busiest-moment inventory + 4 headroom
+- [ ] `MAX_SOUNDS ≥ 16`; sized from busiest-moment inventory + 4 headroom
 - [ ] All directional vectors derived from rotation matrix, not guessed; sanity-tested at `a=0`
 - [ ] `compact_pool` (or equivalent) used for all pools that remove elements during update
 - [ ] `memset(state, 0)` in `game_init` saves/restores persistent fields (audio config, hi-score)
@@ -4139,7 +4541,7 @@ For any lesson that touches these areas, check both backends are covered:
 ### Audio testing
 
 - [ ] Sound effects play when triggered
-- [ ] Multiple sounds play simultaneously without cutoff (up to `MAX_SIMULTANEOUS_SOUNDS`)
+- [ ] Multiple sounds play simultaneously without cutoff (up to `MAX_SOUNDS`)
 - [ ] No click/pop at sound **start** — `fade_in_samples` ramps volume up
 - [ ] No click/pop at sound **end** — `samples_remaining` ramps volume down
 - [ ] No click/pop at **buffer boundary** — `phase` is never reset between fills
@@ -4365,10 +4767,10 @@ Document deviations clearly and explain the reasoning.
 
 ### Completed courses (reference implementations)
 
-| Course | Location | Lessons | Key patterns |
-|--------|----------|---------|--------------|
-| Platform Foundation | `generated-courses/platform-backend/` | 14 | Backend infrastructure template |
-| TinyRaytracer (ssloy) | `generated-courses/ssloy/tinyraytracer.wiki/` | 19 | CPU raytracing; multi-threading; stereo; voxels; envmap; meshes |
+| Course                | Location                                      | Lessons | Key patterns                                                    |
+| --------------------- | --------------------------------------------- | ------- | --------------------------------------------------------------- |
+| Platform Foundation   | `generated-courses/platform-backend/`         | 14      | Backend infrastructure template                                 |
+| TinyRaytracer (ssloy) | `generated-courses/ssloy/tinyraytracer.wiki/` | 19      | CPU raytracing; multi-threading; stereo; voxels; envmap; meshes |
 
 ### Pitfalls and how to avoid them
 
@@ -4385,6 +4787,7 @@ they follow L04 (they haven't created the types for params 4 and 5 yet).
 
 **Solution:** Use the **NULL-check pattern**. Design functions to accept optional parameters
 as pointers that can be `NULL` in early lessons:
+
 ```c
 /* L04 version: student passes NULL for settings (doesn't exist yet) */
 int scene_intersect(RtRay ray, const Scene *scene, HitRecord *hit,
@@ -4400,14 +4803,16 @@ a 2-3 letter abbreviation: `RtMaterial`, `RtCamera`, `RtRay`.
 
 **4. CPU-intensive courses need a performance strategy from day one.**
 Raytracing, simulation, and pathfinding are inherently expensive. Plan for:
+
 - **Render scaling** (half or quarter resolution with upscale)
 - **Multi-threading** (pthreads row-parallel for embarrassingly parallel workloads)
 - **Spatial acceleration** (AABB bounding boxes at minimum; BVH for large scenes)
 - **Adaptive quality** (reduce work while camera/input is active; refine when still)
 - **Hoisting per-frame constants** out of per-pixel loops (camera basis, FOV, etc.)
-Don't wait for the user to complain about performance — build these in during Phase 1.
+  Don't wait for the user to complain about performance — build these in during Phase 1.
 
 **5. Third-party single-header libraries need specific integration patterns.**
+
 - **stb_image:** If Raylib is a backend, it already links stb_image internally. Use `extern`
   declarations in your code and compile `stb_image.c` only for the X11 backend.
 - **fast_obj (or any IMPLEMENTATION-define lib):** Put `#define FAST_OBJ_IMPLEMENTATION`
@@ -4423,11 +4828,12 @@ the smooth edges when examining a still frame.
 
 **7. Mouse controls are expected for 3D courses.**
 Any course with a 3D scene should implement Three.js-style OrbitControls:
+
 - Left-drag → orbit (rotate around target)
 - Right/middle-drag → pan (translate target)
 - Scroll → zoom (adjust orbit radius)
 - WASD → keyboard equivalent
-This requires `MouseState` in `GameInput` with `x, y, dx, dy, scroll, left/right/middle_down`.
+  This requires `MouseState` in `GameInput` with `x, y, dx, dy, scroll, left/right/middle_down`.
 
 ### Approach for building ssloy-style courses
 

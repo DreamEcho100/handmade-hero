@@ -2,9 +2,9 @@
 
 > **Course-builder principles:** `ai-llm-knowledge-dump/prompt/course-builder.md`
 > **Platform template source:** `ai-llm-knowledge-dump/generated-courses/platform-backend/course/src/`
-> **Reference algorithms:** `ai-llm-knowledge-dump/generated-courses/ssloy/tinyraytracer.wiki/Part-1:-understandable-raytracing.md` (ssloy's 10-step tutorial)
-> **Stereo rendering reference:** `ai-llm-knowledge-dump/generated-courses/ssloy/tinyraytracer.wiki/Part-2:-low-budget-stereo-rendering.md` (anaglyph, stereoscope, autostereogram)
-> **GPU raytracing reference:** `ai-llm-knowledge-dump/generated-courses/ssloy/tinyraytracer.wiki/Part-3:-shadertoy.md` (ray-box intersection, voxel rendering)
+> **Reference algorithms:** `ai-llm-knowledge-dump/generated-courses/ssloy/tinyraytracer.wiki/sources/Part-1:-understandable-raytracing.md` (ssloy's 10-step tutorial)
+> **Stereo rendering reference:** `ai-llm-knowledge-dump/generated-courses/ssloy/tinyraytracer.wiki/sources/Part-2:-low-budget-stereo-rendering.md` (anaglyph, stereoscope, autostereogram)
+> **GPU raytracing reference:** `ai-llm-knowledge-dump/generated-courses/ssloy/tinyraytracer.wiki/sources/Part-3:-shadertoy.md` (ray-box intersection, voxel rendering)
 > **C code standards:** `ai-llm-knowledge-dump/modern-c-programming-safe,-performant,-and-practical-practices.md`
 > **Purpose:** Teach CPU raytracing fundamentals by porting ssloy's "Understandable Raytracing in 256 lines of bare C++" to modern C, rendered in real time via the platform backbuffer. Extended with ray-box intersection (Part 3), anaglyph stereo, and autostereogram generation (Part 2).
 

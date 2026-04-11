@@ -2,6 +2,7 @@
 #define GAME_MAIN_H
 
 #include "../utils/backbuffer.h"
+#include "../utils/base.h"
 #include "base.h"
 #include "scene.h"
 #include "render.h"
@@ -38,6 +39,6 @@ typedef struct {
 
 void game_init(RaytracerState *state);
 void game_update(RaytracerState *state, GameInput *input, float delta_time);
-void game_render(RaytracerState *state, Backbuffer *bb);
+void game_render(RaytracerState *state, Backbuffer *bb, GameWorldConfig world_config);
 
 #endif /* GAME_MAIN_H */

@@ -44,6 +44,7 @@
  * clang may not find the declaration and emits an error.                   */
 #include <alloca.h>
 #include <alsa/asoundlib.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -213,14 +214,27 @@ int platform_audio_get_samples_to_write(PlatformAudioConfig *cfg) {
 /* ─────────────────────────────────────────────────────────────────────────
  * platform_audio_write
  * ─────────────────────────────────────────────────────────────────────────
- * LESSON 12 — snd_pcm_writei writes interleaved samples.
+ * LESSON 12 — snd_pcm_writei writes interleaved S16_LE samples.
+ * AudioOutputBuffer now holds float samples; we convert float→int16_t
+ * at this write boundary before sending to ALSA (which uses S16_LE).
  * snd_pcm_recover handles EPIPE (underrun) and ESTRPIPE (suspend).      */
 void platform_audio_write(AudioOutputBuffer *buf, int num_frames,
                           PlatformAudioConfig *cfg) {
   if (!cfg || !cfg->alsa_pcm || !buf || !buf->samples || num_frames <= 0) return;
 
+  /* Convert float [-1, +1] → int16_t on the stack.
+   * num_frames * AUDIO_CHANNELS int16_t values.
+   * Stack-allocate: max chunk is AUDIO_CHUNK_SIZE=4096 frames × 2 ch = 8192
+   * int16_t = 16 KB — safe for stack.                                    */
+  int total_samples = num_frames * AUDIO_CHANNELS;
+  int16_t *pcm_buf = (int16_t *)alloca((size_t)total_samples * sizeof(int16_t));
+  for (int i = 0; i < total_samples; i++) {
+    float s = fmaxf(-1.0f, fminf(1.0f, buf->samples[i]));
+    pcm_buf[i] = (int16_t)(s * 32767.0f);
+  }
+
   snd_pcm_t *pcm = (snd_pcm_t *)cfg->alsa_pcm;
-  snd_pcm_sframes_t written = snd_pcm_writei(pcm, buf->samples,
+  snd_pcm_sframes_t written = snd_pcm_writei(pcm, pcm_buf,
                                               (snd_pcm_uframes_t)num_frames);
   if (written < 0) {
     written = snd_pcm_recover(pcm, (int)written, 0);

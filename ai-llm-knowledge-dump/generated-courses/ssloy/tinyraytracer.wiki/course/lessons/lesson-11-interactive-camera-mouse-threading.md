@@ -23,7 +23,7 @@ Dragging the mouse (left button) orbits the camera around the scene. Right-click
 | `game/main.c`             | Modified    | Call `camera_update` with input; pass camera to `render_scene`                                                                                 |
 | `platforms/x11/main.c`    | Modified    | Mouse button/motion/scroll event handling; WASD key bindings                                                                                   |
 | `platforms/raylib/main.c` | Modified    | Same mouse/key additions                                                                                                                       |
-| `build-dev.sh`            | Modified    | Add `-lpthread` to linker flags for X11 backend                                                                                                |
+| `build-dev.sh`            | Modified    | Add `-lpthread` to linker flags for X11 backend; `--coord-mode=explicit` already set from L01 (no change needed here)                         |
 
 ## Background — why this works
 

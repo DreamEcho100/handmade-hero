@@ -29,17 +29,18 @@
  * ─────────────────────────────────────────────────────────────────────────
  */
 typedef struct {
-  Display    *display;          /* X11 server connection (XOpenDisplay).    */
-  Window      window;           /* The application window (XCreateWindow).  */
-  GLXContext  gl_context;       /* OpenGL rendering context (GLXCreateContext). */
-  int         screen;           /* Default screen number.                   */
+  Display *display;      /* X11 server connection (XOpenDisplay).    */
+  Window window;         /* The application window (XCreateWindow).  */
+  GLXContext gl_context; /* OpenGL rendering context (GLXCreateContext). */
+  int screen;            /* Default screen number.                   */
 
-  int         window_w;         /* Current window width  (updated on ConfigureNotify). */
-  int         window_h;         /* Current window height (updated on ConfigureNotify). */
+  int window_w; /* Current window width  (updated on ConfigureNotify). */
+  int window_h; /* Current window height (updated on ConfigureNotify). */
 
-  Atom        wm_delete_window; /* WM_DELETE_WINDOW atom (close-button event). */
-  bool        vsync_enabled;    /* true if GLX_EXT/MESA swap control succeeded. */
-  GLuint      texture_id;       /* GPU texture for the backbuffer upload.   */
+  Atom wm_delete_window; /* WM_DELETE_WINDOW atom (close-button event). */
+  bool vsync_enabled;    /* true if GLX_EXT/MESA swap control succeeded. */
+  bool window_focused;   /* true while the window owns input focus.      */
+  GLuint texture_id;     /* GPU texture for the backbuffer upload.   */
 } X11State;
 
 extern X11State g_x11;
